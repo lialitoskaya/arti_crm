@@ -140,15 +140,18 @@ function notificationTypeLabel(type) {
 }
 
 function updateNotificationsBadge() {
-  const badge = $('notificationsBadge');
-  if (!badge) return;
-  if (notificationsUnreadCount > 0) {
-    badge.textContent = notificationsUnreadCount > 99 ? '99+' : String(notificationsUnreadCount);
-    badge.classList.remove('hidden');
-  } else {
-    badge.textContent = '0';
-    badge.classList.add('hidden');
-  }
+  const text = notificationsUnreadCount > 99 ? '99+' : String(notificationsUnreadCount || 0);
+  ['notificationsBadge', 'mobileMoreBadge', 'mobileMoreNotificationsBadge'].forEach((id) => {
+    const badge = $(id);
+    if (!badge) return;
+    if (notificationsUnreadCount > 0) {
+      badge.textContent = text;
+      badge.classList.remove('hidden');
+    } else {
+      badge.textContent = '0';
+      badge.classList.add('hidden');
+    }
+  });
 }
 
 function currentUnreadNotifications() {
@@ -2378,6 +2381,47 @@ function renderAnalyticsMarketplaceBreakdown(rows) {
 }
 
 
+
+function isMobileSecondaryView(view) {
+  return ['questions', 'knowledge', 'users', 'techSettings', 'profile'].includes(String(view || ''));
+}
+
+function setMobileMoreActiveState(view = activeView) {
+  const btn = $('mobileMoreBtn');
+  if (!btn) return;
+  const isActive = isMobileSecondaryView(view);
+  btn.classList.toggle('active', isActive);
+  btn.setAttribute('aria-current', isActive ? 'page' : 'false');
+}
+
+function toggleMobileMoreSheet(force) {
+  const backdrop = $('mobileNavBackdrop');
+  const sheet = $('mobileMoreSheet');
+  if (!backdrop || !sheet) return;
+  const shouldOpen = typeof force === 'boolean' ? force : sheet.classList.contains('hidden');
+  sheet.classList.toggle('hidden', !shouldOpen);
+  backdrop.classList.toggle('hidden', !shouldOpen);
+  sheet.setAttribute('aria-hidden', shouldOpen ? 'false' : 'true');
+  document.body.classList.toggle('mobile-more-open', shouldOpen);
+}
+
+function handleMobileMoreAction(action, view) {
+  if (action === 'logout') {
+    toggleMobileMoreSheet(false);
+    $('mobileLogoutBtn')?.click();
+    return;
+  }
+  if (action === 'notifications') {
+    toggleMobileMoreSheet(false);
+    toggleNotificationsPanel(true);
+    return;
+  }
+  if (view) {
+    toggleMobileMoreSheet(false);
+    showView(view);
+  }
+}
+
 function showView(view) {
   const normalizedView = ['chats', 'analytics', 'tasks', 'reviews', 'questions', 'knowledge', 'users', 'techSettings', 'profile'].includes(view) ? view : 'chats';
   activeView = normalizedView;
@@ -2426,6 +2470,11 @@ function showView(view) {
     element.classList.toggle('active', isActive);
     element.setAttribute('aria-current', isActive ? 'page' : 'false');
   });
+
+  setMobileMoreActiveState(normalizedView);
+  if (normalizedView !== 'profile' && normalizedView !== 'techSettings' && normalizedView !== 'users') {
+    toggleMobileMoreSheet(false);
+  }
 
   if (normalizedView === 'analytics') loadAnalytics().catch(err => notify('Ошибка загрузки аналитики', String(err.message || err)));
   if (normalizedView === 'tasks') loadAllTasks().catch(err => notify('Ошибка загрузки задач', String(err.message || err)));
@@ -2695,9 +2744,19 @@ function init() {
   bind('navTechSettings', 'click', () => showView('techSettings'));
   bind('navProfile', 'click', () => showView('profile'));
   bind('notificationsBtn', 'click', () => toggleNotificationsPanel());
-  document.querySelector('.main-nav')?.addEventListener('click', (event) => {
-    const button = event.target.closest('#navChats, #navAnalytics, #navTasks, #navReviews, #navQuestions, #navKnowledge, #navUsers, #navTechSettings, #navProfile');
+  bind('mobileMoreBtn', 'click', () => toggleMobileMoreSheet());
+  bind('mobileMoreClose', 'click', () => toggleMobileMoreSheet(false));
+  bind('mobileNavBackdrop', 'click', () => toggleMobileMoreSheet(false));
+  $('mobileMoreSheet')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-mobile-action], [data-mobile-view]');
     if (!button) return;
+    event.preventDefault();
+    handleMobileMoreAction(button.dataset.mobileAction || '', button.dataset.mobileView || '');
+  });
+  document.querySelector('.main-nav')?.addEventListener('click', (event) => {
+    const button = event.target.closest('#navChats, #navAnalytics, #navTasks, #navReviews, #navQuestions, #navKnowledge, #navUsers, #navTechSettings, #navProfile, #mobileMoreBtn');
+    if (!button) return;
+    if (button.id === 'mobileMoreBtn') return;
     event.preventDefault();
     const targetView = button.id === 'navAnalytics' ? 'analytics' : button.id === 'navTasks' ? 'tasks' : button.id === 'navReviews' ? 'reviews' : button.id === 'navQuestions' ? 'questions' : button.id === 'navKnowledge' ? 'knowledge' : button.id === 'navUsers' ? 'users' : button.id === 'navTechSettings' ? 'techSettings' : button.id === 'navProfile' ? 'profile' : 'chats';
     showView(targetView);
@@ -3019,4 +3078,11 @@ function autosizeComposerTextarea(textarea) {
 
 document.addEventListener('click', (event) => {
   if (!event.target.closest?.('.message-actions-menu-wrap')) closeMessageActionsMenus();
+});
+
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    toggleMobileMoreSheet(false);
+  }
 });

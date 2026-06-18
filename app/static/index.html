@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Arti CRM</title>
-  <link rel="stylesheet" href="/static/styles.css?v=103p2" />
+  <link rel="stylesheet" href="/static/styles.css?v=103p3" />
   <style id="arti-crm-inline-style">
 /* Inline fallback v43: responsive CSS is embedded so narrow screens never open unstyled. */
 :root {
@@ -1919,13 +1919,14 @@ html, body { max-width: 100%; }
       </div>
 
       <nav class="main-nav">
-        <button id="navChats" class="nav-btn active" type="button" aria-label="Чаты"><span class="btn-icon" aria-hidden="true">◌</span><span class="btn-label">Чаты</span></button>
-        <button id="navAnalytics" class="nav-btn" type="button" aria-label="Аналитика"><span class="btn-icon" aria-hidden="true">⌁</span><span class="btn-label">Аналитика</span></button>
-        <button id="navReviews" class="nav-btn" type="button" aria-label="Отзывы"><span class="btn-icon" aria-hidden="true">✦</span><span class="btn-label">Отзывы</span></button>
-        <button id="navQuestions" class="nav-btn" type="button" aria-label="Вопросы Ozon"><span class="btn-icon" aria-hidden="true">?</span><span class="btn-label">Вопросы</span></button>
-        <button id="navTasks" class="nav-btn" type="button" aria-label="Задачи"><span class="btn-icon" aria-hidden="true">⌄</span><span class="btn-label">Задачи</span></button>
-        <button id="navKnowledge" class="nav-btn" type="button" aria-label="База знаний"><span class="btn-icon" aria-hidden="true">≡</span><span class="btn-label">База знаний</span></button>
-        <button id="mobileLogoutBtn" class="nav-btn mobile-logout-btn" type="button" aria-label="Выйти"><span class="btn-icon" aria-hidden="true">⎋</span><span class="btn-label">Выйти</span></button>
+        <button id="navChats" class="nav-btn active" type="button" aria-label="Чаты"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 10h10"/><path d="M7 14h6"/><path d="M6 19l-2.5 2V6a3 3 0 0 1 3-3h11a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H6z"/></svg></span><span class="btn-label">Чаты</span></button>
+        <button id="navAnalytics" class="nav-btn" type="button" aria-label="Аналитика"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 20h16"/><path d="M7 16V9"/><path d="M12 16V5"/><path d="M17 16v-4"/></svg></span><span class="btn-label">Аналитика</span></button>
+        <button id="navReviews" class="nav-btn" type="button" aria-label="Отзывы"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l2.4 4.9 5.4.8-3.9 3.8.9 5.4L12 15.3 7.2 18l.9-5.4-3.9-3.8 5.4-.8L12 3z"/></svg></span><span class="btn-label">Отзывы</span></button>
+        <button id="navQuestions" class="nav-btn" type="button" aria-label="Вопросы Ozon"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9.1 9a3 3 0 1 1 5.2 2c-.9 1-1.8 1.6-1.8 3"/><path d="M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg></span><span class="btn-label">Вопросы</span></button>
+        <button id="navTasks" class="nav-btn" type="button" aria-label="Задачи"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 6h11"/><path d="M9 12h11"/><path d="M9 18h11"/><path d="M4 6l1.5 1.5L7.8 5"/><path d="M4 12l1.5 1.5L7.8 11"/><path d="M4 18l1.5 1.5L7.8 17"/></svg></span><span class="btn-label">Задачи</span></button>
+        <button id="navKnowledge" class="nav-btn" type="button" aria-label="База знаний"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15.5A2.5 2.5 0 0 0 17.5 16H6.5A2.5 2.5 0 0 0 4 18.5z"/><path d="M8 7h8"/><path d="M8 11h8"/><path d="M4 18.5A2.5 2.5 0 0 0 6.5 21H20"/></svg></span><span class="btn-label">База знаний</span></button>
+        <button id="mobileMoreBtn" class="nav-btn mobile-more-btn" type="button" aria-label="Ещё"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="5" cy="5" r="1.5" fill="currentColor"/><circle cx="12" cy="5" r="1.5" fill="currentColor"/><circle cx="19" cy="5" r="1.5" fill="currentColor"/><circle cx="5" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="19" cy="12" r="1.5" fill="currentColor"/><circle cx="5" cy="19" r="1.5" fill="currentColor"/><circle cx="12" cy="19" r="1.5" fill="currentColor"/><circle cx="19" cy="19" r="1.5" fill="currentColor"/></svg></span><span class="btn-label">Ещё</span><span id="mobileMoreBadge" class="notification-badge hidden">0</span></button>
+        <button id="mobileLogoutBtn" class="nav-btn mobile-logout-btn" type="button" aria-label="Выйти"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg></span><span class="btn-label">Выйти</span></button>
       </nav>
 
       <div class="nav-spacer"></div>
@@ -1934,24 +1935,47 @@ html, body { max-width: 100%; }
         <span id="currentUserLabel" class="sync-status">—</span>
       </div>
       <div class="notifications-widget">
-        <button id="notificationsBtn" class="nav-btn notification-toggle" type="button" aria-label="Уведомления">
-          <span class="btn-icon" aria-hidden="true">🔔</span>
+        <button id="notificationsBtn" class="nav-btn notification-toggle" type="button" aria-label="Уведомления"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M15 18a3 3 0 0 1-6 0"/><path d="M18 16H6l1.2-1.6A4 4 0 0 0 8 12V9a4 4 0 1 1 8 0v3c0 .9.3 1.8.8 2.4L18 16z"/></svg></span>
           <span class="btn-label">Уведомления</span>
           <span id="notificationsBadge" class="notification-badge hidden">0</span>
         </button>
       </div>
       <div class="account-nav">
-        <button id="navUsers" class="nav-btn account-nav-btn admin-only hidden" type="button" aria-label="Сотрудники"><span class="btn-icon" aria-hidden="true">◫</span><span class="btn-label">Сотрудники</span></button>
-        <button id="navTechSettings" class="nav-btn account-nav-btn admin-only hidden" type="button" aria-label="Тех. настройки"><span class="btn-icon" aria-hidden="true">⚙</span><span class="btn-label">Тех. настройки</span></button>
-        <button id="navProfile" class="nav-btn account-nav-btn" type="button" aria-label="Профиль"><span class="btn-icon" aria-hidden="true">◯</span><span class="btn-label">Профиль</span></button>
+        <button id="navUsers" class="nav-btn account-nav-btn admin-only hidden" type="button" aria-label="Сотрудники"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M15 19v-1a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v1"/><circle cx="9.5" cy="8" r="3"/><path d="M20 19v-1a3 3 0 0 0-2-2.8"/><path d="M15 5.2a3 3 0 0 1 0 5.6"/></svg></span><span class="btn-label">Сотрудники</span></button>
+        <button id="navTechSettings" class="nav-btn account-nav-btn admin-only hidden" type="button" aria-label="Тех. настройки"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-4"/><path d="M12 10V3"/><path d="M20 21v-9"/><path d="M20 8V3"/><path d="M2 10h4"/><path d="M10 17h4"/><path d="M18 8h4"/></svg></span><span class="btn-label">Тех. настройки</span></button>
+        <button id="navProfile" class="nav-btn account-nav-btn" type="button" aria-label="Профиль"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M5 20a7 7 0 0 1 14 0"/></svg></span><span class="btn-label">Профиль</span></button>
       </div>
       <div class="sync-card">
         <span class="sync-dot"></span>
         <span id="syncStatus" class="sync-status">Фоновое обновление активно</span>
       </div>
-      <button id="refreshBtn" class="secondary refresh-btn" type="button" aria-label="Обновить"><span class="btn-icon" aria-hidden="true">↻</span><span class="btn-label">Обновить</span></button>
-      <button id="logoutBtn" class="secondary refresh-btn" type="button" aria-label="Выйти"><span class="btn-icon" aria-hidden="true">⎋</span><span class="btn-label">Выйти</span></button>
+      <button id="refreshBtn" class="secondary refresh-btn" type="button" aria-label="Обновить"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0 2 5.3"/><path d="M20 4v7h-7"/></svg></span><span class="btn-label">Обновить</span></button>
+      <button id="logoutBtn" class="secondary refresh-btn" type="button" aria-label="Выйти"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg></span><span class="btn-label">Выйти</span></button>
     </aside>
+
+
+    <div id="mobileNavBackdrop" class="mobile-nav-backdrop hidden"></div>
+    <div id="mobileMoreSheet" class="mobile-more-sheet hidden" aria-hidden="true">
+      <div class="mobile-more-card panel-card">
+        <div class="mobile-more-handle" aria-hidden="true"></div>
+        <div class="mobile-more-head">
+          <div>
+            <strong>Ещё</strong>
+            <p>Дополнительные разделы и действия</p>
+          </div>
+          <button id="mobileMoreClose" class="icon-btn mobile-more-close" type="button" aria-label="Закрыть">×</button>
+        </div>
+        <div class="mobile-more-list">
+          <button class="mobile-more-item" type="button" data-mobile-view="questions"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9.1 9a3 3 0 1 1 5.2 2c-.9 1-1.8 1.6-1.8 3"/><path d="M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg></span><span class="mobile-more-copy"><strong>Вопросы</strong><small>Вопросы клиентов Ozon</small></span><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></button>
+          <button class="mobile-more-item" type="button" data-mobile-view="knowledge"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15.5A2.5 2.5 0 0 0 17.5 16H6.5A2.5 2.5 0 0 0 4 18.5z"/><path d="M8 7h8"/><path d="M8 11h8"/><path d="M4 18.5A2.5 2.5 0 0 0 6.5 21H20"/></svg></span><span class="mobile-more-copy"><strong>База знаний</strong><small>Инструкции и шаблоны ответов</small></span><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></button>
+          <button class="mobile-more-item" type="button" data-mobile-action="notifications"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M15 18a3 3 0 0 1-6 0"/><path d="M18 16H6l1.2-1.6A4 4 0 0 0 8 12V9a4 4 0 1 1 8 0v3c0 .9.3 1.8.8 2.4L18 16z"/></svg></span><span class="mobile-more-copy"><strong>Уведомления</strong><small>Новые сообщения, задачи и события</small></span><span id="mobileMoreNotificationsBadge" class="notification-badge hidden">0</span></button>
+          <button class="mobile-more-item admin-only hidden" type="button" data-mobile-view="users"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M15 19v-1a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v1"/><circle cx="9.5" cy="8" r="3"/><path d="M20 19v-1a3 3 0 0 0-2-2.8"/><path d="M15 5.2a3 3 0 0 1 0 5.6"/></svg></span><span class="mobile-more-copy"><strong>Сотрудники</strong><small>Команда и роли</small></span><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></button>
+          <button class="mobile-more-item admin-only hidden" type="button" data-mobile-view="techSettings"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-4"/><path d="M12 10V3"/><path d="M20 21v-9"/><path d="M20 8V3"/><path d="M2 10h4"/><path d="M10 17h4"/><path d="M18 8h4"/></svg></span><span class="mobile-more-copy"><strong>Настройки</strong><small>Статусы, системные параметры</small></span><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></button>
+          <button class="mobile-more-item" type="button" data-mobile-view="profile"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M5 20a7 7 0 0 1 14 0"/></svg></span><span class="mobile-more-copy"><strong>Профиль</strong><small>Личные данные и аккаунт</small></span><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></button>
+          <button class="mobile-more-item mobile-more-item-danger" type="button" data-mobile-action="logout"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg></span><span class="mobile-more-copy"><strong>Выйти из аккаунта</strong><small>Завершить текущую сессию</small></span></button>
+        </div>
+      </div>
+    </div>
 
     <div class="workspace">
       <main id="chatsView" class="layout view active-view">
@@ -2518,6 +2542,6 @@ html, body { max-width: 100%; }
 
   <div id="notificationToasts" class="notification-toast-stack" aria-live="polite"></div>
 
-  <script src="/static/app.js?v=103p2"></script>
+  <script src="/static/app.js?v=103p3"></script>
 </body>
 </html>
