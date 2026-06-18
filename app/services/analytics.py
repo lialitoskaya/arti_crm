@@ -7,10 +7,10 @@ from typing import Any
 from app.db import get_connection
 
 
-# Analytics v87
+# Analytics v99
 # -----------------------------------------------------------------------------
-# Business definition for "обращение": first inbound client message per chat per
-# local day. If a client writes again on the same day, it is not counted as a new
+# Business definition for "обращение": first real client inbound message per chat per
+# local day. Marketplace bot/support/system messages are excluded. If a client writes again on the same day, it is not counted as a new
 # request. If the same client writes on the next day, it is counted once for that
 # next day. Raw inbound message count is still returned as a separate load metric.
 # -----------------------------------------------------------------------------
@@ -79,6 +79,83 @@ def _marketplace_filter_sql(alias: str, marketplace: str | None, params: list[An
     return f" AND {alias}.marketplace = ?"
 
 
+def _analytics_client_message_sql(alias: str = "m") -> str:
+    """SQL predicate for real customer inbound messages.
+
+    Marketplace APIs can put bot/support/system messages into the same local
+    `messages` table. They should remain visible in chat history, but they must
+    not distort analytics: requests, peak hours, outside-hours counts and average
+    response time.
+
+    The filter is intentionally conservative:
+    - direction='inbound' is still required by callers;
+    - obvious seller/manager authors are excluded;
+    - raw marketplace payloads with system/support/bot/notification user markers
+      are excluded;
+    - ordinary customer messages remain counted.
+    """
+    author = f"LOWER(COALESCE({alias}.author, ''))"
+    raw = f"LOWER(COALESCE({alias}.raw_json, ''))"
+    return f"""
+        (
+            {author} NOT IN (
+                'seller', 'manager', 'operator', 'admin', 'support', 'system',
+                'marketplace', 'bot', 'robot', 'notificationuser',
+                'продавец', 'менеджер', 'оператор', 'поддержка', 'система', 'бот'
+            )
+            AND {author} NOT LIKE '%support%'
+            AND {author} NOT LIKE '%system%'
+            AND {author} NOT LIKE '%bot%'
+            AND {author} NOT LIKE '%robot%'
+            AND {author} NOT LIKE '%notificationuser%'
+            AND {author} NOT LIKE '%notification_user%'
+            AND {author} NOT LIKE '%поддерж%'
+            AND {author} NOT LIKE '%систем%'
+            AND {author} NOT LIKE '%бот%'
+            AND {raw} NOT LIKE '%"user_type": "support"%'
+            AND {raw} NOT LIKE '%"user_type":"support"%'
+            AND {raw} NOT LIKE '%"user_type": "system"%'
+            AND {raw} NOT LIKE '%"user_type":"system"%'
+            AND {raw} NOT LIKE '%"user_type": "bot"%'
+            AND {raw} NOT LIKE '%"user_type":"bot"%'
+            AND {raw} NOT LIKE '%"author_type": "support"%'
+            AND {raw} NOT LIKE '%"author_type":"support"%'
+            AND {raw} NOT LIKE '%"author_type": "system"%'
+            AND {raw} NOT LIKE '%"author_type":"system"%'
+            AND {raw} NOT LIKE '%"author_type": "bot"%'
+            AND {raw} NOT LIKE '%"author_type":"bot"%'
+            AND {raw} NOT LIKE '%"sender_type": "support"%'
+            AND {raw} NOT LIKE '%"sender_type":"support"%'
+            AND {raw} NOT LIKE '%"sender_type": "system"%'
+            AND {raw} NOT LIKE '%"sender_type":"system"%'
+            AND {raw} NOT LIKE '%"sender_type": "bot"%'
+            AND {raw} NOT LIKE '%"sender_type":"bot"%'
+            AND {raw} NOT LIKE '%"sendertype": "support"%'
+            AND {raw} NOT LIKE '%"sendertype":"support"%'
+            AND {raw} NOT LIKE '%"sendertype": "system"%'
+            AND {raw} NOT LIKE '%"sendertype":"system"%'
+            AND {raw} NOT LIKE '%"sendertype": "bot"%'
+            AND {raw} NOT LIKE '%"sendertype":"bot"%'
+            AND {raw} NOT LIKE '%"type": "support"%'
+            AND {raw} NOT LIKE '%"type":"support"%'
+            AND {raw} NOT LIKE '%"type": "system"%'
+            AND {raw} NOT LIKE '%"type":"system"%'
+            AND {raw} NOT LIKE '%"type": "bot"%'
+            AND {raw} NOT LIKE '%"type":"bot"%'
+            AND {raw} NOT LIKE '%"type": "notificationuser"%'
+            AND {raw} NOT LIKE '%"type":"notificationuser"%'
+            AND {raw} NOT LIKE '%"notificationuser"%'
+            AND {raw} NOT LIKE '%"notification_user"%'
+            AND {raw} NOT LIKE '%"systemuser"%'
+            AND {raw} NOT LIKE '%"system_user"%'
+            AND {raw} NOT LIKE '%"_crm_source": "marketplace_bot"%'
+            AND {raw} NOT LIKE '%"_crm_source":"marketplace_bot"%'
+            AND {raw} NOT LIKE '%"_crm_excluded_as_system": true%'
+            AND {raw} NOT LIKE '%"_crm_excluded_as_system":true%'
+        )
+    """
+
+
 def _hour_filter_sql(column: str, hour_from: int | None, hour_to: int | None, params: list[Any]) -> str:
     if hour_from is None and hour_to is None:
         return ""
@@ -138,6 +215,7 @@ def _daily_requests_cte_sql(
             FROM messages m
             JOIN chats c ON c.id = m.chat_id
             WHERE m.direction='inbound'
+              AND {_analytics_client_message_sql('m')}
               AND date(datetime(m.created_at, ?)) BETWEEN ? AND ?
               {marketplace_sql}
         ),
@@ -160,7 +238,7 @@ def _raw_inbound_where_sql(
     hour_to: int | None,
 ) -> tuple[str, list[Any]]:
     params: list[Any] = [modifier, start, end]
-    sql = "m.direction='inbound' AND date(datetime(m.created_at, ?)) BETWEEN ? AND ?"
+    sql = f"m.direction='inbound' AND {_analytics_client_message_sql('m')} AND date(datetime(m.created_at, ?)) BETWEEN ? AND ?"
     sql += _marketplace_filter_sql("c", marketplace, params)
     if hour_from is not None or hour_to is not None:
         params.append(modifier)
@@ -180,6 +258,39 @@ def _fetch_raw_inbound_count(conn: Any, where_sql: str, params: list[Any]) -> in
         params,
     ).fetchone()
     return int((_row_dict(row).get("inbound_messages") or 0))
+
+
+def _fetch_excluded_service_message_count(
+    conn: Any,
+    *,
+    modifier: str,
+    start: str,
+    end: str,
+    marketplace: str | None,
+    hour_from: int | None,
+    hour_to: int | None,
+) -> int:
+    """Count inbound-looking messages excluded from analytics as service/bot/system."""
+    params: list[Any] = [modifier, start, end]
+    marketplace_sql = _marketplace_filter_sql("c", marketplace, params)
+    hour_sql = ""
+    if hour_from is not None or hour_to is not None:
+        params.append(modifier)
+        hour_sql = _hour_filter_sql("CAST(strftime('%H', datetime(m.created_at, ?)) AS INTEGER)", hour_from, hour_to, params)
+    row = conn.execute(
+        f"""
+        SELECT COUNT(*) AS excluded_messages
+        FROM messages m
+        JOIN chats c ON c.id = m.chat_id
+        WHERE m.direction='inbound'
+          AND NOT {_analytics_client_message_sql('m')}
+          AND date(datetime(m.created_at, ?)) BETWEEN ? AND ?
+          {marketplace_sql}
+          {hour_sql}
+        """,
+        params,
+    ).fetchone()
+    return int((_row_dict(row).get("excluded_messages") or 0))
 
 
 def _fetch_summary(conn: Any, cte_sql: str, params: list[Any]) -> dict[str, Any]:
@@ -368,6 +479,7 @@ def _response_blocks_cte_sql(
             FROM messages m
             JOIN chats c ON c.id = m.chat_id
             WHERE m.direction IN ('inbound', 'outbound')
+              AND (m.direction != 'inbound' OR {_analytics_client_message_sql('m')})
         ),
         inbound_blocks_all AS (
             SELECT
@@ -547,6 +659,15 @@ def build_chat_analytics(
     with get_connection() as conn:
         summary = _fetch_summary(conn, request_cte, request_params)
         raw_inbound_messages = _fetch_raw_inbound_count(conn, raw_where, raw_params)
+        excluded_service_messages = _fetch_excluded_service_message_count(
+            conn,
+            modifier=modifier,
+            start=start,
+            end=end,
+            marketplace=market,
+            hour_from=h_from,
+            hour_to=h_to,
+        )
         response = _fetch_response_stats(conn, response_cte, response_params)
         closed_chats = _fetch_closed_count(conn, closed_where, closed_params)
         outside = _fetch_outside_hours(conn, outside_cte, outside_params)
@@ -574,8 +695,8 @@ def build_chat_analytics(
             "tz_offset_minutes": offset,
         },
         "definitions": {
-            "request": "Первое входящее сообщение клиента в конкретном чате за локальный день",
-            "raw_inbound_message": "Любое входящее сообщение клиента; используется как показатель нагрузки, но не как количество обращений",
+            "request": "Первое реальное входящее сообщение клиента в конкретном чате за локальный день; сообщения ботов/поддержки/системы маркетплейсов исключаются",
+            "raw_inbound_message": "Любое реальное входящее сообщение клиента; сообщения ботов/поддержки/системы маркетплейсов исключаются",
             "average_response": "Время от первого входящего сообщения в очередном диалоговом блоке до ближайшего следующего исходящего ответа менеджера",
             "response_block": "Цепочка входящих сообщений клиента после предыдущего ответа менеджера; закрывается первым следующим исходящим ответом",
             "unanswered_response_block": "Ожидающий ответа блок считается без ответа только если чат не находится в статусе closed",
@@ -588,6 +709,7 @@ def build_chat_analytics(
             "daily_first_requests": requests_count,
             "inbound_messages": raw_inbound_messages,
             "raw_inbound_messages": raw_inbound_messages,
+            "excluded_service_messages": excluded_service_messages,
             "unique_chats": int(summary.get("unique_chats") or 0),
             "unique_clients": int(summary.get("unique_clients") or 0),
             "closed_chats": closed_chats,
