@@ -102,6 +102,13 @@ class YandexMarketConnector(MarketplaceConnector):
                 name = customer.get("name") or item.get("customerName") or item.get("buyerName")
                 public_id = customer.get("publicId") or customer.get("public_id")
                 order_id = item.get("orderId") or context.get("orderId") or context.get("returnId") or ""
+                raw_status = str(item.get("status") or "").upper()
+                metadata = dict(item)
+                metadata["_sync_hint"] = {
+                    "yandex_chat_status": raw_status,
+                    "chat_status": raw_status,
+                    "yandex_needs_partner_reply": raw_status in {"NEW", "WAITING_FOR_PARTNER"},
+                }
                 chats.append(
                     UnifiedChat(
                         marketplace=self.marketplace,
@@ -110,7 +117,7 @@ class YandexMarketConnector(MarketplaceConnector):
                         customer_public_id=str(public_id) if public_id else None,
                         order_id=str(order_id) if order_id else None,
                         status=self._status_to_crm(item.get("status")),
-                        metadata=item,
+                        metadata=metadata,
                     )
                 )
                 if len(chats) >= self.max_chats:

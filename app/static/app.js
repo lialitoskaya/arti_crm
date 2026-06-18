@@ -30,6 +30,9 @@ let notifications = [];
 let notificationsUnreadCount = 0;
 let notificationsTimer = null;
 let notificationsPanelOpen = false;
+let notificationToastIds = [];
+let notificationSeenUnreadIds = new Set();
+let notificationsBootstrapDone = false;
 let lastBrowserNotificationAt = 0;
 // Mobile navigation: when an operator taps 'back to chat list', keep the selected
 // chat in memory but do not auto-open it again during background refresh.
@@ -148,32 +151,84 @@ function updateNotificationsBadge() {
   }
 }
 
+function currentUnreadNotifications() {
+  return (notifications || []).filter((item) => !item.is_read);
+}
+
+function rememberUnreadNotificationIds(items) {
+  notificationSeenUnreadIds = new Set((items || []).map((item) => Number(item.id)).filter(Boolean));
+}
+
+function enqueueNotificationToasts(items, { replace = false } = {}) {
+  const incomingIds = (items || []).map((item) => Number(item.id)).filter(Boolean);
+  if (replace) notificationToastIds = [];
+  for (const id of incomingIds) {
+    if (!notificationToastIds.includes(id)) notificationToastIds.unshift(id);
+  }
+  if (notificationToastIds.length > 3) {
+    notificationToastIds = notificationToastIds.slice(0, 3);
+  }
+}
+
 function renderNotifications() {
-  const list = $('notificationsList');
-  if (!list) return;
-  if (!notifications.length) {
-    list.innerHTML = '<div class="notifications-empty">Новых уведомлений нет.</div>';
+  const stack = $('notificationToasts');
+  if (!stack) return;
+
+  const unreadMap = new Map(currentUnreadNotifications().map((item) => [Number(item.id), item]));
+  notificationToastIds = notificationToastIds.filter((id) => unreadMap.has(Number(id)));
+  const visibleIds = notificationsPanelOpen ? notificationToastIds.slice(0, 3) : [];
+
+  if (!visibleIds.length) {
+    stack.innerHTML = '';
+    stack.classList.remove('has-items');
     return;
   }
-  list.innerHTML = notifications.map((item) => {
-    const unread = !item.is_read;
+
+  stack.classList.add('has-items');
+  stack.innerHTML = visibleIds.map((id) => {
+    const item = unreadMap.get(Number(id));
+    if (!item) return '';
     const title = escapeHtml(item.title || 'Уведомление');
     const body = escapeHtml(item.body || '');
     const time = escapeHtml(formatDateTime(item.created_at) || '');
     const typeLabel = escapeHtml(notificationTypeLabel(item.type));
+    const icon = item.task_id ? '✓' : '✉';
     return `
-      <button class="notification-item ${unread ? 'is-unread' : ''}" type="button" data-notification-id="${item.id}">
-        <span class="notification-item-top">
-          <span class="notification-type">${typeLabel}</span>
-          <span class="notification-time">${time}</span>
-        </span>
-        <strong>${title}</strong>
-        ${body ? `<span class="notification-body">${body}</span>` : ''}
-      </button>
+      <article class="notification-toast" data-notification-open="${item.id}" role="button" tabindex="0">
+        <button class="notification-close-btn" type="button" data-notification-close="${item.id}" aria-label="Закрыть уведомление">×</button>
+        <div class="notification-toast-topline">
+          <span class="notification-toast-icon" aria-hidden="true">${icon}</span>
+          <div class="notification-toast-meta">
+            <strong class="notification-toast-title">${title}</strong>
+            <span class="notification-toast-subtitle">${typeLabel} · ${time}</span>
+          </div>
+        </div>
+        ${body ? `<div class="notification-body">${body}</div>` : ''}
+      </article>
     `;
   }).join('');
-  list.querySelectorAll('[data-notification-id]').forEach((el) => {
-    el.addEventListener('click', () => openNotification(Number(el.dataset.notificationId)));
+
+  stack.querySelectorAll('[data-notification-open]').forEach((el) => {
+    const openHandler = (event) => {
+      if (event.type === 'keydown' && !['Enter', ' '].includes(event.key)) return;
+      event.preventDefault();
+      openNotification(Number(el.dataset.notificationOpen));
+    };
+    el.addEventListener('click', openHandler);
+    el.addEventListener('keydown', openHandler);
+  });
+
+  stack.querySelectorAll('[data-notification-close]').forEach((el) => {
+    el.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const id = Number(el.dataset.notificationClose);
+      try {
+        await markNotificationRead(id, { silent: true });
+      } catch (err) {
+        notify('Ошибка уведомлений', String(err.message || err));
+      }
+    });
   });
 }
 
@@ -183,11 +238,30 @@ async function loadNotifications({ silent = true } = {}) {
     const previousUnread = notificationsUnreadCount || 0;
     notifications = data.items || [];
     notificationsUnreadCount = Number(data.unread_count || 0);
+    const unreadItems = currentUnreadNotifications();
+
+    if (!notificationsBootstrapDone) {
+      notificationsBootstrapDone = true;
+      rememberUnreadNotificationIds(unreadItems);
+    } else {
+      const newUnreadItems = unreadItems.filter((item) => !notificationSeenUnreadIds.has(Number(item.id)));
+      if (newUnreadItems.length) {
+        enqueueNotificationToasts(newUnreadItems);
+        notificationsPanelOpen = true;
+      }
+      rememberUnreadNotificationIds(unreadItems);
+    }
+
+    if (notificationsUnreadCount === 0) {
+      notificationToastIds = [];
+      notificationsPanelOpen = false;
+    }
+
     updateNotificationsBadge();
     renderNotifications();
 
     if (notificationsUnreadCount > previousUnread && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
-      const newest = notifications.find((item) => !item.is_read);
+      const newest = unreadItems[0];
       const now = Date.now();
       if (newest && now - lastBrowserNotificationAt > 5000) {
         lastBrowserNotificationAt = now;
@@ -201,22 +275,32 @@ async function loadNotifications({ silent = true } = {}) {
 }
 
 async function toggleNotificationsPanel(force) {
-  const panel = $('notificationsPanel');
-  if (!panel) return;
-  notificationsPanelOpen = typeof force === 'boolean' ? force : panel.classList.contains('hidden');
-  panel.classList.toggle('hidden', !notificationsPanelOpen);
-  if (notificationsPanelOpen) {
-    await loadNotifications({ silent: false });
-    if ('Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission().catch(() => {});
-    }
+  const unreadItems = currentUnreadNotifications();
+  if (typeof force === 'boolean') {
+    notificationsPanelOpen = force;
+  } else if (!notificationsPanelOpen && unreadItems.length) {
+    enqueueNotificationToasts(unreadItems.slice(0, 3), { replace: true });
+    notificationsPanelOpen = true;
+  } else {
+    notificationsPanelOpen = !notificationsPanelOpen;
   }
+  renderNotifications();
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission().catch(() => {});
+  }
+}
+
+async function markNotificationRead(notificationId, { silent = false } = {}) {
+  notificationToastIds = notificationToastIds.filter((id) => Number(id) !== Number(notificationId));
+  renderNotifications();
+  await api(`/api/notifications/${notificationId}/read`, { method: 'POST' });
+  await loadNotifications({ silent });
 }
 
 async function openNotification(notificationId) {
   const item = notifications.find((n) => Number(n.id) === Number(notificationId));
   if (!item) return;
-  await api(`/api/notifications/${notificationId}/read`, { method: 'POST' });
+  await markNotificationRead(notificationId, { silent: true });
   if (item.chat_id) {
     showView('chats');
     await loadChats();
@@ -225,11 +309,12 @@ async function openNotification(notificationId) {
     showView('tasks');
     await loadAllTasks();
   }
-  await loadNotifications();
-  await toggleNotificationsPanel(false);
 }
 
 async function markAllNotificationsRead() {
+  notificationToastIds = [];
+  notificationsPanelOpen = false;
+  renderNotifications();
   await api('/api/notifications/read-all', { method: 'POST' });
   await loadNotifications({ silent: false });
 }
@@ -2507,7 +2592,6 @@ function init() {
   bind('navTechSettings', 'click', () => showView('techSettings'));
   bind('navProfile', 'click', () => showView('profile'));
   bind('notificationsBtn', 'click', () => toggleNotificationsPanel());
-  bind('notificationsReadAllBtn', 'click', () => markAllNotificationsRead().catch(err => notify('Ошибка уведомлений', String(err.message || err))));
   document.querySelector('.main-nav')?.addEventListener('click', (event) => {
     const button = event.target.closest('#navChats, #navAnalytics, #navTasks, #navReviews, #navQuestions, #navKnowledge, #navUsers, #navTechSettings, #navProfile');
     if (!button) return;
@@ -2818,16 +2902,6 @@ function init() {
 }
 
 document.addEventListener('DOMContentLoaded', bootstrap);
-
-
-document.addEventListener('click', (event) => {
-  const panel = $('notificationsPanel');
-  const btn = $('notificationsBtn');
-  if (!panel || !btn || panel.classList.contains('hidden')) return;
-  if (!panel.contains(event.target) && !btn.contains(event.target)) {
-    toggleNotificationsPanel(false).catch(() => {});
-  }
-});
 
 
 

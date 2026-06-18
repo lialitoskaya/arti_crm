@@ -410,6 +410,219 @@ def _utc_now_iso() -> str:
     return __import__("datetime").datetime.utcnow().isoformat(timespec="seconds") + "Z"
 
 
+
+
+def _truthy_marketplace_flag(value: Any) -> bool:
+    if value is True:
+        return True
+    if value in (False, None, ""):
+        return False
+    if isinstance(value, (int, float)):
+        return value > 0
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "y", "on", "да", "new", "unread", "not_read", "notread"}:
+            return True
+        if lowered in {"0", "false", "no", "n", "off", "нет", "read", "seen", "viewed", "opened"}:
+            return False
+    return False
+
+
+def _find_first_nested_key(payload: Any, key_names: set[str], depth: int = 0) -> Any:
+    """Find the first value for one of key_names in marketplace raw payload."""
+    if depth > 7 or payload in (None, ""):
+        return None
+    normalized = {str(k).lower().replace("_", "").replace("-", "") for k in key_names}
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            key_norm = str(key).lower().replace("_", "").replace("-", "")
+            if key_norm in normalized:
+                return value
+        for value in payload.values():
+            found = _find_first_nested_key(value, key_names, depth + 1)
+            if found not in (None, ""):
+                return found
+    elif isinstance(payload, list):
+        for item in payload[:80]:
+            found = _find_first_nested_key(item, key_names, depth + 1)
+            if found not in (None, ""):
+                return found
+    return None
+
+
+def _chat_metadata_reports_unread(metadata: dict[str, Any] | None) -> bool:
+    """Return True only when marketplace explicitly reports unread/new customer activity.
+
+    We intentionally do not use CRM status alone. A chat can have status "new" for
+    workflow reasons, while the marketplace has already marked the dialog as read
+    or the manager has already answered.
+    """
+    if not isinstance(metadata, dict):
+        return False
+
+    sync_hint = metadata.get("_sync_hint") if isinstance(metadata.get("_sync_hint"), dict) else {}
+
+    # Yandex Market does not always expose a classic unread_count in the chat list.
+    # Its chat status is the actionable signal for CRM:
+    # NEW / WAITING_FOR_PARTNER = partner should answer; WAITING_FOR_CUSTOMER / FINISHED = no unread action.
+    yandex_status = str(
+        sync_hint.get("yandex_chat_status")
+        or sync_hint.get("chat_status")
+        or metadata.get("status")
+        or metadata.get("chatStatus")
+        or metadata.get("state")
+        or ""
+    ).strip().upper()
+    if yandex_status in {"NEW", "WAITING_FOR_PARTNER", "WAITING_FOR_PARTNER_RESPONSE", "PARTNER_REQUIRED"}:
+        return True
+    if yandex_status in {"WAITING_FOR_CUSTOMER", "FINISHED", "CLOSED", "RESOLVED"}:
+        return False
+    if _truthy_marketplace_flag(sync_hint.get("yandex_needs_partner_reply")):
+        return True
+
+    unread_count = (
+        sync_hint.get("unread_count")
+        if isinstance(sync_hint, dict) and "unread_count" in sync_hint
+        else _find_first_nested_key(metadata, {
+            "unread_count", "unreadCount", "unread_messages_count", "unreadMessagesCount",
+            "new_messages_count", "newMessagesCount",
+        })
+    )
+    try:
+        if unread_count not in (None, "") and int(unread_count) > 0:
+            return True
+    except Exception:
+        if _truthy_marketplace_flag(unread_count):
+            return True
+
+    first_unread = (
+        sync_hint.get("first_unread_message_id")
+        if isinstance(sync_hint, dict) and "first_unread_message_id" in sync_hint
+        else _find_first_nested_key(metadata, {"first_unread_message_id", "firstUnreadMessageId", "first_unread_id"})
+    )
+    if first_unread not in (None, "", 0, "0", False):
+        return True
+
+    for key in (
+        "isNewChat", "is_new_chat", "isUnread", "is_unread", "hasUnread", "has_unread",
+        "unread", "newChat", "new_chat",
+    ):
+        value = _find_first_nested_key(metadata, {key})
+        if _truthy_marketplace_flag(value):
+            return True
+
+    return False
+
+
+def _chat_row_reports_unread(chat_row) -> bool:
+    if not chat_row:
+        return False
+    try:
+        metadata = json.loads(chat_row["metadata_json"] or "{}")
+    except Exception:
+        metadata = {}
+    return _chat_metadata_reports_unread(metadata)
+
+
+def _message_raw_looks_seller_side(raw_payload: dict[str, Any] | None) -> bool:
+    """Extra protection when connector direction is ambiguous."""
+    if not isinstance(raw_payload, dict):
+        return False
+    for key in (
+        "is_seller", "isSeller", "from_seller", "fromSeller",
+        "is_supplier", "isSupplier", "from_supplier", "fromSupplier",
+        "is_operator", "isOperator",
+    ):
+        value = _find_first_nested_key(raw_payload, {key})
+        if _truthy_marketplace_flag(value):
+            return True
+
+    side = _find_first_nested_key(raw_payload, {
+        "sender", "senderType", "author", "authorType", "userType", "source", "from",
+        "side", "role", "type", "participantType", "participant_type",
+    })
+    if isinstance(side, str):
+        lowered = side.strip().lower()
+        if lowered in {
+            "seller", "продавец", "supplier", "vendor", "shop", "merchant",
+            "manager", "operator", "admin", "support", "employee", "staff",
+        }:
+            return True
+    return False
+
+
+def _latest_message_row_conn(conn, chat_id: int):
+    return conn.execute(
+        """
+        SELECT id, direction, created_at
+        FROM messages
+        WHERE chat_id=?
+        ORDER BY datetime(created_at) DESC, id DESC
+        LIMIT 1
+        """,
+        (int(chat_id),),
+    ).fetchone()
+
+
+def _resolve_stale_message_notifications_conn(conn, chat_id: int | None = None) -> int:
+    """Mark message notifications as read when the chat no longer waits for reply.
+
+    A marketplace sync can import an old inbound message after the manager has
+    already answered it. Such messages can still be recent, but they should not
+    keep appearing as notifications. For "new_message" notifications we keep only
+    the notification that points to the current latest inbound message of the chat.
+    """
+    params: list[Any] = []
+    chat_filter = ""
+    if chat_id is not None:
+        chat_filter = " AND n.chat_id=?"
+        params.append(int(chat_id))
+
+    cur = conn.execute(
+        f"""
+        UPDATE notifications AS n
+        SET is_read=1, read_at=CURRENT_TIMESTAMP
+        WHERE n.is_read=0
+          AND n.type='new_message'
+          AND n.chat_id IS NOT NULL
+          {chat_filter}
+          AND (
+            NOT EXISTS (SELECT 1 FROM chats c WHERE c.id=n.chat_id)
+            OR EXISTS (SELECT 1 FROM chats c WHERE c.id=n.chat_id AND c.status='closed')
+            OR EXISTS (
+                SELECT 1
+                FROM chats c
+                WHERE c.id=n.chat_id
+                  AND (
+                    c.metadata_json LIKE '%"unread_count": 0%'
+                    OR c.metadata_json LIKE '%"unreadCount": 0%'
+                    OR c.metadata_json LIKE '%"isNewChat": false%'
+                    OR c.metadata_json LIKE '%"is_new_chat": false%'
+                  )
+                  AND c.metadata_json NOT LIKE '%"first_unread_message_id":%'
+                  AND c.metadata_json NOT LIKE '%"firstUnreadMessageId":%'
+            )
+            OR COALESCE((
+                SELECT m.direction
+                FROM messages m
+                WHERE m.chat_id=n.chat_id
+                ORDER BY datetime(m.created_at) DESC, m.id DESC
+                LIMIT 1
+            ), '') != 'inbound'
+            OR COALESCE(CAST(n.entity_id AS INTEGER), -1) != COALESCE((
+                SELECT m.id
+                FROM messages m
+                WHERE m.chat_id=n.chat_id
+                ORDER BY datetime(m.created_at) DESC, m.id DESC
+                LIMIT 1
+            ), -2)
+          )
+        """,
+        params,
+    )
+    return int(cur.rowcount or 0)
+
+
 def refresh_chat_last_message(conn, chat_id: int) -> None:
     """Rebuild chat last-message cache from the real newest message.
 
@@ -420,7 +633,7 @@ def refresh_chat_last_message(conn, chat_id: int) -> None:
     """
     row = conn.execute(
         """
-        SELECT text, created_at
+        SELECT id, direction, text, created_at
         FROM messages
         WHERE chat_id=?
         ORDER BY datetime(created_at) DESC, id DESC
@@ -446,6 +659,8 @@ def refresh_chat_last_message(conn, chat_id: int) -> None:
             """,
             (chat_id,),
         )
+
+    _resolve_stale_message_notifications_conn(conn, int(chat_id))
 
 
 def normalize_legacy_outbound_timestamps() -> int:
@@ -647,13 +862,36 @@ def _notify_new_inbound_message_conn(conn, *, chat_id: int, message_id: int, tex
     chat = conn.execute(
         """
         SELECT c.id, c.marketplace, c.customer_name, c.customer_public_id,
-               c.external_chat_id, c.assigned_user_id, c.status
+               c.external_chat_id, c.assigned_user_id, c.status, c.metadata_json
         FROM chats c
         WHERE c.id=?
         """,
         (int(chat_id),),
     ).fetchone()
     if not chat or chat["status"] == "closed":
+        return
+
+    if not _chat_row_reports_unread(chat):
+        # Marketplace did not mark this dialog as new/unread. Do not notify about
+        # already-read or already-answered messages imported during sync.
+        return
+
+    message_row = conn.execute(
+        "SELECT raw_json, direction FROM messages WHERE id=? AND chat_id=?",
+        (int(message_id), int(chat_id)),
+    ).fetchone()
+    if message_row:
+        try:
+            raw_payload = json.loads(message_row["raw_json"] or "{}")
+        except Exception:
+            raw_payload = {}
+        if message_row["direction"] != "inbound" or _message_raw_looks_seller_side(raw_payload):
+            return
+
+    latest = _latest_message_row_conn(conn, int(chat_id))
+    if not latest or latest["direction"] != "inbound" or int(latest["id"]) != int(message_id):
+        # Do not notify about historical/read messages when the current chat state
+        # already has a later manager reply.
         return
 
     customer = (chat["customer_name"] or chat["customer_public_id"] or chat["external_chat_id"] or "Клиент")
@@ -684,6 +922,36 @@ def _notify_new_inbound_message_conn(conn, *, chat_id: int, message_id: int, tex
         )
 
 
+
+def cleanup_read_marketplace_notifications() -> int:
+    """Mark old message notifications read when marketplace says dialog is not unread."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT n.id, c.metadata_json
+            FROM notifications n
+            JOIN chats c ON c.id=n.chat_id
+            WHERE n.is_read=0 AND n.type='new_message'
+            """
+        ).fetchall()
+        ids: list[int] = []
+        for row in rows:
+            try:
+                metadata = json.loads(row["metadata_json"] or "{}")
+            except Exception:
+                metadata = {}
+            if not _chat_metadata_reports_unread(metadata):
+                ids.append(int(row["id"]))
+        if not ids:
+            return 0
+        placeholders = ",".join("?" for _ in ids)
+        cur = conn.execute(
+            f"UPDATE notifications SET is_read=1, read_at=CURRENT_TIMESTAMP WHERE id IN ({placeholders})",
+            ids,
+        )
+        return int(cur.rowcount or 0)
+
+
 def list_notifications(user_id: int, *, limit: int = 30, unread_only: bool = False) -> dict[str, Any]:
     limit = max(1, min(int(limit or 30), 100))
     clauses = ["n.user_id=?"]
@@ -691,7 +959,9 @@ def list_notifications(user_id: int, *, limit: int = 30, unread_only: bool = Fal
     if unread_only:
         clauses.append("n.is_read=0")
     where = " AND ".join(clauses)
+    cleanup_read_marketplace_notifications()
     with get_connection() as conn:
+        _resolve_stale_message_notifications_conn(conn)
         rows = conn.execute(
             f"""
             SELECT

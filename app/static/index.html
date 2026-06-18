@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Arti CRM</title>
-  <link rel="stylesheet" href="/static/styles.css?v=91" />
+  <link rel="stylesheet" href="/static/styles.css?v=98" />
   <style id="arti-crm-inline-style">
 /* Inline fallback v43: responsive CSS is embedded so narrow screens never open unstyled. */
 :root {
@@ -1935,19 +1935,10 @@ html, body { max-width: 100%; }
       </div>
       <div class="notifications-widget">
         <button id="notificationsBtn" class="nav-btn notification-toggle" type="button" aria-label="Уведомления">
-          <span class="btn-icon" aria-hidden="true">●</span>
+          <span class="btn-icon" aria-hidden="true">🔔</span>
           <span class="btn-label">Уведомления</span>
           <span id="notificationsBadge" class="notification-badge hidden">0</span>
         </button>
-        <div id="notificationsPanel" class="notifications-panel hidden" aria-live="polite">
-          <div class="notifications-head">
-            <strong>Уведомления</strong>
-            <button id="notificationsReadAllBtn" type="button" class="tiny-link">Прочитать все</button>
-          </div>
-          <div id="notificationsList" class="notifications-list">
-            <div class="notifications-empty">Новых уведомлений нет.</div>
-          </div>
-        </div>
       </div>
       <div class="account-nav">
         <button id="navUsers" class="nav-btn account-nav-btn admin-only hidden" type="button" aria-label="Сотрудники"><span class="btn-icon" aria-hidden="true">◫</span><span class="btn-label">Сотрудники</span></button>
@@ -2507,6 +2498,8 @@ html, body { max-width: 100%; }
     </div>
   </div>
 
-  <script src="/static/app.js?v=91"></script>
+  <div id="notificationToasts" class="notification-toast-stack" aria-live="polite"></div>
+
+  <script src="/static/app.js?v=98"></script>
 </body>
 </html>

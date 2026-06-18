@@ -802,8 +802,21 @@ class OzonConnector(MarketplaceConnector):
                 continue
 
             user = item.get("user") if isinstance(item.get("user"), dict) else {}
-            user_type = str(user.get("type") or item.get("user_type") or item.get("author_type") or "").lower()
-            is_seller = bool(item.get("is_seller")) or user_type in {"seller", "operator", "admin", "support", "manager"}
+            user_type = str(
+                user.get("type")
+                or item.get("user_type")
+                or item.get("author_type")
+                or item.get("sender_type")
+                or item.get("senderType")
+                or item.get("from")
+                or item.get("source")
+                or item.get("side")
+                or ""
+            ).lower()
+            is_seller = (
+                bool(item.get("is_seller") or item.get("isSeller") or item.get("from_seller") or item.get("fromSeller"))
+                or user_type in {"seller", "operator", "admin", "support", "manager", "shop", "merchant", "supplier", "vendor", "employee", "staff"}
+            )
             direction = "outbound" if is_seller else "inbound"
             text = self._extract_message_text(item)
             author_name = self._extract_customer_name_from_any(item)

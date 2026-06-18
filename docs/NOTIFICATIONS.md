@@ -28,3 +28,10 @@ POST /api/notifications/read-all
 ```env
 CRM_NOTIFICATION_RECENT_MESSAGE_HOURS=24
 ```
+
+
+## Яндекс Маркет
+
+Для Яндекса CRM использует статус чата:
+- `NEW`, `WAITING_FOR_PARTNER` — чат требует ответа, уведомление допустимо;
+- `WAITING_FOR_CUSTOMER`, `FINISHED`, `CLOSED` — уведомление по сообщению не нужно.

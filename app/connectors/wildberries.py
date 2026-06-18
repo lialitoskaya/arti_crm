@@ -494,7 +494,7 @@ class WildberriesConnector(MarketplaceConnector):
         if sender in {"client", "customer", "buyer", "покупатель", "user"}:
             return "inbound"
         # WB sometimes uses flags instead of sender names.
-        if self._first_value(obj, "isSeller", "is_seller", "fromSeller", "from_seller") is True:
+        if self._first_value(obj, "isSeller", "is_seller", "fromSeller", "from_seller", "isSupplier", "is_supplier") is True:
             return "outbound"
         if self._first_value(obj, "isClient", "is_client", "fromClient", "from_client") is True:
             return "inbound"
