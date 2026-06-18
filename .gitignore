@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Local database
+crm.sqlite3
+crm.sqlite3-*
+*.sqlite3
+*.sqlite3-*
+*.db
+
+# Secrets
+.env
+.env.local
+.env.*.local
+
+# Marketplace sync state
+.wb_rate_limit_until
+.wb_events_cursor.json
+.wb_events_auto_import.json
+.ozon_*.json
+
+# Local files / uploads / logs
+uploads/
+logs/
+*.log
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Temporary
+tmp/
+temp/

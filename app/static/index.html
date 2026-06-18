@@ -1,0 +1,2512 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Arti CRM</title>
+  <link rel="stylesheet" href="/static/styles.css?v=91" />
+  <style id="arti-crm-inline-style">
+/* Inline fallback v43: responsive CSS is embedded so narrow screens never open unstyled. */
+:root {
+  --bg: #fff7f0;
+  --bg-2: #f7fbff;
+  --surface: rgba(255, 255, 255, .82);
+  --surface-solid: #ffffff;
+  --surface-soft: rgba(255, 248, 242, .75);
+  --line: rgba(32, 41, 57, .10);
+  --line-strong: rgba(32, 41, 57, .16);
+  --text: #172033;
+  --muted: #6d7483;
+  --muted-2: #98a1b2;
+  --accent: #ff7a3d;
+  --accent-2: #ffb26b;
+  --accent-soft: #fff0e6;
+  --primary: #2563eb;
+  --primary-soft: #eaf1ff;
+  --success: #15803d;
+  --success-soft: #e8f8ee;
+  --danger: #d64545;
+  --danger-soft: #fff0ef;
+  --warning: #b45309;
+  --warning-soft: #fff4dc;
+  --violet: #7c3aed;
+  --violet-soft: #f2eafe;
+  --shadow: 0 18px 55px rgba(27, 35, 53, .08);
+  --shadow-soft: 0 8px 24px rgba(27, 35, 53, .06);
+  --radius-xl: 24px;
+  --radius-lg: 18px;
+  --radius-md: 13px;
+  --radius-sm: 10px;
+  color: var(--text);
+  font-family: Inter, "Segoe UI", Roboto, "Helvetica Neue", Arial, system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+html, body { min-height: 100%; }
+body {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text);
+  background:
+    radial-gradient(circle at 0% 12%, rgba(255, 146, 82, .25), transparent 32%),
+    radial-gradient(circle at 100% 0%, rgba(255, 204, 153, .28), transparent 35%),
+    linear-gradient(135deg, #fffaf6 0%, #fff3e8 42%, #f7fbff 100%);
+}
+button, input, select, textarea { font: inherit; }
+button {
+  border: 0;
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  background: linear-gradient(135deg, var(--accent), #ff965f);
+  color: #fff;
+  cursor: pointer;
+  transition: transform .14s ease, box-shadow .14s ease, opacity .14s ease, background .14s ease;
+  box-shadow: 0 10px 22px rgba(255, 122, 61, .20);
+  white-space: nowrap;
+}
+button:hover { transform: translateY(-1px); box-shadow: 0 14px 26px rgba(255, 122, 61, .24); }
+button:active { transform: translateY(0); }
+button:disabled { opacity: .56; cursor: not-allowed; transform: none; box-shadow: none; }
+button.secondary { background: rgba(255,255,255,.72); color: var(--text); border: 1px solid var(--line); box-shadow: none; }
+button.ghost { background: transparent; color: var(--accent); border: 1px solid rgba(255,122,61,.28); box-shadow: none; }
+button.small { padding: 7px 10px; font-size: 12px; border-radius: 11px; }
+button.link-btn { background: transparent; color: var(--accent); padding: 0; border-radius: 0; box-shadow: none; }
+button.link-btn:hover { transform: none; text-decoration: underline; }
+input, select, textarea {
+  border: 1px solid var(--line);
+  background: rgba(255,255,255,.75);
+  color: var(--text);
+  border-radius: var(--radius-md);
+  outline: none;
+  min-width: 0;
+}
+input:focus, select:focus, textarea:focus { border-color: rgba(255, 122, 61, .50); box-shadow: 0 0 0 4px rgba(255, 122, 61, .10); }
+select, input { min-height: 42px; padding: 0 12px; }
+textarea { padding: 12px 14px; resize: none; }
+.hidden { display: none !important; }
+.muted { color: var(--muted); font-size: 13px; }
+
+.app-shell {
+  height: 100vh;
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr);
+  gap: 16px;
+  padding: 16px;
+}
+.app-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid rgba(255,255,255,.60);
+  border-radius: var(--radius-xl);
+  background: rgba(255,255,255,.55);
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(22px);
+}
+.brand-card { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 10px 8px 14px; }
+.brand-mark {
+  width: 38px; height: 38px; border-radius: 14px;
+  display: grid; place-items: center;
+  color: #fff; font-weight: 800; letter-spacing: -.04em;
+  background: linear-gradient(135deg, #ff6b3c, #ffb267 92%);
+  box-shadow: 0 12px 22px rgba(255, 122, 61, .25);
+}
+.brand-copy { min-width: 0; }
+.brand-copy h1 { margin: 0; font-size: 18px; letter-spacing: -.04em; }
+.brand-copy p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+.main-nav { display: flex; flex-direction: column; gap: 8px; }
+.nav-btn {
+  width: 100%; justify-content: flex-start; display: flex; align-items: center; gap: 10px;
+  background: transparent; color: var(--muted); border: 1px solid transparent; box-shadow: none;
+  padding: 11px 12px;
+}
+.nav-btn:hover { background: rgba(255,255,255,.6); box-shadow: none; }
+.nav-btn.active { color: var(--accent); background: rgba(255, 122, 61, .10); border-color: rgba(255, 122, 61, .13); }
+.btn-icon { display: inline-grid; place-items: center; width: 18px; height: 18px; line-height: 1; }
+.nav-spacer { flex: 1; }
+.sync-card {
+  display: flex; gap: 8px; align-items: flex-start;
+  color: var(--muted); font-size: 12px; line-height: 1.35;
+  padding: 12px; border-radius: var(--radius-lg); background: rgba(255,255,255,.58); border: 1px solid var(--line);
+}
+.sync-dot { width: 8px; height: 8px; border-radius: 999px; margin-top: 4px; background: #22c55e; box-shadow: 0 0 0 4px rgba(34,197,94,.11); flex: 0 0 auto; }
+.refresh-btn { width: 100%; justify-content: center; display: flex; gap: 8px; align-items: center; }
+.workspace { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.view { min-height: 0; height: 100%; }
+.panel-card {
+  border: 1px solid rgba(255,255,255,.70);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(20px);
+}
+.layout { display: grid; grid-template-columns: minmax(300px, 360px) minmax(0, 1fr); gap: 16px; }
+.sidebar { min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.section-title-row { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; padding: 22px 18px 12px; }
+.section-title-row h2, .tasks-toolbar h2, .review-header h2 { margin: 0; font-size: 22px; letter-spacing: -.04em; }
+.section-title-row p, .tasks-toolbar p, .review-header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+.soft-counter { min-width: 34px; min-height: 26px; display: inline-grid; place-items: center; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+.filters { display: flex; gap: 8px; padding: 0 14px 12px; }
+.filters select { flex: 1; font-size: 13px; }
+.chat-scope-tabs { display: flex; gap: 6px; padding: 0 14px 12px; }
+.scope-tab { flex: 1; background: rgba(255,255,255,.55); color: var(--muted); border: 1px solid var(--line); box-shadow: none; padding: 9px 10px; }
+.scope-tab.active { color: var(--accent); background: rgba(255, 122, 61, .09); border-color: rgba(255, 122, 61, .28); }
+.stats { padding: 0 18px 12px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.chat-list, .reviews-list { overflow: auto; min-height: 0; padding: 0 10px 12px; }
+.chat-item, .review-item {
+  position: relative; padding: 14px; border-radius: 18px; cursor: pointer;
+  border: 1px solid transparent; background: transparent; transition: background .16s ease, border-color .16s ease, box-shadow .16s ease;
+}
+.chat-item + .chat-item, .review-item + .review-item { margin-top: 4px; }
+.chat-item:hover, .review-item:hover { background: rgba(255,255,255,.56); }
+.chat-item.active, .review-item.active { background: linear-gradient(135deg, rgba(255,122,61,.12), rgba(255,255,255,.74)); border-color: rgba(255, 122, 61, .18); box-shadow: var(--shadow-soft); }
+.chat-item.needs-response { box-shadow: inset 3px 0 0 rgba(214,69,69,.72); }
+.chat-item-topline, .review-item-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; min-width: 0; }
+.chat-item-title { min-width: 0; flex: 1; }
+.chat-item-title strong, .review-item strong { display: block; font-size: 14px; letter-spacing: -.02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-time { color: var(--muted); font-size: 12px; flex: 0 0 auto; }
+.badge { display: inline-flex; align-items: center; border-radius: 999px; padding: 3px 8px; font-size: 11px; font-weight: 700; text-transform: uppercase; }
+.badge.ozon { color: #2563eb; background: #eaf1ff; }
+.badge.yandex { color: #dc2626; background: #fff0ef; }
+.badge.wildberries { color: #7c3aed; background: #f2eafe; }
+.preview, .review-item p { margin: 8px 0 10px; color: var(--muted); font-size: 13px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.chat-badges { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.status-badge, .sla-badge, .review-status, .task-status {
+  display: inline-flex; align-items: center; border-radius: 999px; padding: 4px 8px; font-size: 11px; line-height: 1; font-weight: 650;
+}
+.status-new, .task-status-open { color: var(--success); background: var(--success-soft); }
+.status-in_progress, .task-status-in_progress { color: var(--primary); background: var(--primary-soft); }
+.status-waiting_customer { color: var(--warning); background: var(--warning-soft); }
+.status-closed, .task-status-done { color: var(--muted); background: rgba(109,116,131,.12); }
+.sla-badge, .review-status-unprocessed { color: var(--danger); background: var(--danger-soft); }
+.review-status-processed { color: var(--success); background: var(--success-soft); }
+.empty-chat-item, .empty-card, .empty-state { color: var(--muted); }
+.empty-state { display: grid; place-items: center; height: 100%; text-align: center; padding: 24px; }
+
+.conversation { min-width: 0; min-height: 0; overflow: hidden; }
+.chat-panel { height: 100%; min-height: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto auto; }
+.chat-header { display: flex; justify-content: space-between; gap: 14px; align-items: center; padding: 16px 18px; border-bottom: 1px solid var(--line); background: rgba(255,255,255,.54); }
+.chat-heading { min-width: 0; flex: 1; }
+.chat-heading-row { display: flex; align-items: center; gap: 12px; min-width: 0; position: relative; }
+.customer-avatar { width: 44px; height: 44px; border-radius: 999px; display: grid; place-items: center; color: #fff; background: linear-gradient(135deg, #8b5cf6, #f59e7a); font-weight: 800; flex: 0 0 auto; }
+.chat-title-stack { min-width: 0; flex: 1; }
+.chat-heading h2 { margin: 0; font-size: clamp(16px, 1.4vw, 22px); letter-spacing: -.04em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-heading p { margin: 4px 0 0; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.icon-btn { width: 40px; height: 40px; padding: 0; display: grid; place-items: center; background: rgba(255,255,255,.72); color: var(--text); border: 1px solid var(--line); box-shadow: none; font-size: 20px; }
+.chat-controls { display: flex; gap: 8px; align-items: center; }
+.chat-controls input { width: 150px; }
+.extra-menu { position: absolute; top: 48px; right: 0; z-index: 15; min-width: 230px; padding: 8px; border: 1px solid var(--line); border-radius: 16px; background: rgba(255,255,255,.96); box-shadow: var(--shadow); }
+.extra-menu button { display: block; width: 100%; text-align: left; background: transparent; color: var(--text); box-shadow: none; padding: 10px 12px; }
+.extra-menu button:hover { background: var(--surface-soft); transform: none; }
+.extra-panel { border-bottom: 1px solid var(--line); background: rgba(255,255,255,.62); padding: 14px 18px; }
+.extra-section h3, .review-reply-card h3 { margin: 0; font-size: 15px; letter-spacing: -.02em; }
+.section-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 12px; }
+.task-form, .note-form, .customer-form { display: flex; gap: 8px; align-items: flex-start; }
+.note-form textarea { flex: 1; min-height: 70px; }
+.task-form input, .customer-form input { flex: 1; }
+.messages { min-height: 0; overflow: auto; padding: 22px; background: linear-gradient(180deg, rgba(255,255,255,.25), rgba(255,250,246,.32)); }
+.message { max-width: min(70%, 720px); margin-bottom: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 18px; background: rgba(255,255,255,.82); box-shadow: var(--shadow-soft); }
+.message.outbound { margin-left: auto; background: #eef6ff; border-color: rgba(37,99,235,.12); }
+.message.internal { margin-left: auto; margin-right: auto; background: var(--warning-soft); }
+.message.ai-selected-message { outline: 3px solid rgba(255, 122, 61, .18); border-color: rgba(255,122,61,.35); }
+.message-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; color: var(--muted); font-size: 11px; }
+.message-ai-select { padding: 5px 8px; border-radius: 999px; font-size: 11px; box-shadow: none; }
+.message-text { font-size: 14px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.message-text a { color: var(--primary); }
+.message-images, .review-media { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, min(360px, 100%))); gap: 10px; margin-top: 10px; align-items: start; }
+.image-card { position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; min-height: 96px; max-width: 100%; border-radius: 14px; background: var(--surface-soft); border: 1px solid var(--line); padding: 6px; }
+.image-card img { display: block; width: 100%; height: auto; max-height: 520px; object-fit: contain; border-radius: 10px; }
+.image-fallback { display: none; position: absolute; inset: 0; place-items: center; color: var(--muted); font-size: 12px; background: rgba(255,255,255,.82); }
+.image-error .image-fallback { display: grid; }
+.ai-selection-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 18px; background: rgba(255, 244, 232, .86); border-top: 1px solid rgba(255,122,61,.15); }
+.ai-selection-bar strong { display: block; font-size: 13px; }
+.ai-selection-bar span { color: var(--muted); font-size: 12px; }
+.ai-selection-actions { display: flex; gap: 8px; }
+.composer { display: grid; grid-template-columns: minmax(0, 1fr) 48px; gap: 10px; padding: 14px 18px 18px; background: rgba(255,255,255,.72); border-top: 1px solid var(--line); }
+.composer textarea { min-height: 52px; max-height: 150px; }
+.composer button { width: 48px; height: 48px; padding: 0; border-radius: 16px; font-size: 18px; }
+.ai-filled { animation: aiPulse 1.6s ease; }
+@keyframes aiPulse { 0% { box-shadow: 0 0 0 0 rgba(255,122,61,.30); } 100% { box-shadow: 0 0 0 10px rgba(255,122,61,0); } }
+
+.tasks-page, .reviews-page { height: 100%; min-height: 0; }
+.tasks-page { display: flex; flex-direction: column; gap: 16px; }
+.tasks-toolbar { padding: 18px; display: flex; justify-content: space-between; gap: 16px; align-items: center; }
+.all-tasks-list { overflow: auto; min-height: 0; display: grid; gap: 10px; padding: 0 2px 8px; }
+.all-task-card, .task-card { border: 1px solid var(--line); background: rgba(255,255,255,.75); border-radius: 18px; padding: 14px; box-shadow: var(--shadow-soft); }
+.all-task-card { display: flex; justify-content: space-between; gap: 16px; align-items: center; }
+.task-card-head { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.task-card-head strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.task-context, .task-card p { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
+.task-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.reviews-page { display: grid; grid-template-columns: minmax(320px, 420px) minmax(0, 1fr); gap: 16px; }
+.reviews-list-panel, .review-detail-panel { min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+.review-filters { align-items: center; }
+.check-filter { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; white-space: nowrap; }
+.check-filter input { min-height: 0; width: 16px; height: 16px; }
+.review-stars { color: #f59e0b; letter-spacing: .02em; font-size: 12px; margin-top: 5px; }
+.review-panel { height: 100%; min-height: 0; display: flex; flex-direction: column; overflow: auto; padding: 18px; gap: 14px; }
+.review-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.rating-badge { color: #f59e0b; font-weight: 800; background: var(--warning-soft); border-radius: 999px; padding: 7px 10px; white-space: nowrap; }
+.review-body-card, .review-reply-card, .existing-reply { border: 1px solid var(--line); background: rgba(255,255,255,.78); border-radius: var(--radius-lg); padding: 16px; box-shadow: var(--shadow-soft); }
+.review-body-card p { margin: 0; line-height: 1.55; }
+.review-reply-form { display: grid; gap: 10px; margin-top: 12px; }
+.review-reply-form textarea { min-height: 120px; }
+.review-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.existing-reply { background: var(--success-soft); color: #14532d; margin: 10px 0; }
+
+@media (max-width: 1180px) {
+  .app-shell { grid-template-columns: 76px minmax(0, 1fr); gap: 12px; padding: 12px; }
+  .brand-copy, .btn-label, .sync-status { display: none; }
+  .brand-card, .nav-btn { justify-content: center; padding-left: 0; padding-right: 0; }
+  .refresh-btn .btn-label { display: none; }
+  .sync-card { justify-content: center; }
+  .layout { grid-template-columns: minmax(280px, 340px) minmax(0, 1fr); }
+  .chat-controls input { display: none; }
+}
+@media (max-width: 860px) {
+  body { overflow: auto; }
+  .app-shell { min-height: 100vh; height: auto; grid-template-columns: 1fr; }
+  .app-nav { flex-direction: row; align-items: center; position: sticky; top: 8px; z-index: 20; }
+  .main-nav { flex-direction: row; }
+  .nav-spacer, .sync-card { display: none; }
+  .layout, .reviews-page { grid-template-columns: 1fr; height: auto; }
+  .sidebar, .conversation, .reviews-list-panel, .review-detail-panel { min-height: 480px; }
+  .chat-header { flex-direction: column; align-items: stretch; }
+  .chat-controls { flex-wrap: wrap; }
+  .message { max-width: 92%; }
+}
+@media (max-width: 560px) {
+  .app-shell { padding: 8px; }
+  .app-nav { border-radius: 20px; }
+  .brand-mark { width: 34px; height: 34px; }
+  .filters, .chat-scope-tabs, .task-form, .customer-form, .review-actions { flex-direction: column; align-items: stretch; }
+  .chat-controls { display: grid; grid-template-columns: 1fr; }
+  .btn-label { display: none; }
+}
+
+/* v21 mobile experience */
+.mobile-back-btn { display: none; }
+@media (max-width: 760px) {
+  html, body { height: 100%; }
+  body { overflow: hidden; }
+  .app-shell {
+    height: 100dvh;
+    min-height: 100dvh;
+    padding: 10px 10px 78px;
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .workspace { height: 100%; min-height: 0; overflow: hidden; }
+  .app-nav {
+    position: fixed;
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+    top: auto;
+    z-index: 80;
+    height: 58px;
+    min-height: 0;
+    padding: 7px;
+    border-radius: 22px;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    box-shadow: 0 18px 45px rgba(27,35,53,.14);
+  }
+  .brand-card, .nav-spacer, .sync-card, .refresh-btn { display: none !important; }
+  .main-nav { flex: 1; min-width: 0; flex-direction: row; gap: 6px; }
+  .nav-btn {
+    min-width: 0;
+    flex: 1;
+    height: 44px;
+    justify-content: center;
+    padding: 0;
+    border-radius: 16px;
+  }
+  .nav-btn .btn-icon { width: 22px; height: 22px; font-size: 18px; }
+  .nav-btn .btn-label { display: none !important; }
+  .view { height: 100%; min-height: 0; }
+  .layout { height: 100%; min-height: 0; display: block; }
+  .sidebar, .conversation { height: 100%; min-height: 0; }
+  body:not(.mobile-chat-open) .conversation { display: none; }
+  body.mobile-chat-open .sidebar { display: none; }
+  .panel-card { border-radius: 24px; }
+  .section-title-row { padding: 18px 16px 10px; }
+  .section-title-row h2 { font-size: 21px; }
+  .filters { display: grid; grid-template-columns: 1fr 1fr; padding: 0 12px 10px; }
+  .chat-scope-tabs { padding: 0 12px 10px; }
+  .stats { padding: 0 16px 10px; }
+  .chat-list, .reviews-list { padding: 0 8px 12px; }
+  .chat-item { padding: 13px; border-radius: 18px; }
+  .chat-item-title strong { font-size: 14px; }
+  .preview { font-size: 13px; }
+  .chat-panel { height: 100%; grid-template-rows: auto auto minmax(0, 1fr) auto auto; }
+  .chat-header { padding: 12px; gap: 10px; flex-direction: column; align-items: stretch; }
+  .chat-heading-row { gap: 8px; }
+  .mobile-back-btn {
+    display: grid;
+    place-items: center;
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    border-radius: 14px;
+    background: rgba(255,255,255,.74);
+    border: 1px solid var(--line);
+    color: var(--text);
+    box-shadow: none;
+    font-size: 20px;
+    flex: 0 0 auto;
+  }
+  .customer-avatar { width: 38px; height: 38px; }
+  .chat-heading h2 { font-size: 16px; max-width: 100%; }
+  .chat-heading p { font-size: 11px; }
+  .chat-controls { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+  .chat-controls input { display: none; }
+  .chat-controls button { padding: 0 13px; min-height: 42px; }
+  .extra-menu { right: 0; left: auto; top: 44px; min-width: min(240px, calc(100vw - 40px)); }
+  .extra-panel { padding: 12px; max-height: 38dvh; overflow: auto; }
+  .task-form, .note-form, .customer-form { display: grid; grid-template-columns: 1fr; }
+  .messages { padding: 14px 12px 18px; }
+  .message { max-width: 88%; border-radius: 18px; padding: 11px 12px; }
+  .message-text { font-size: 14px; }
+  .message-meta { font-size: 10.5px; }
+  .message-images, .review-media { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ai-selection-bar { padding: 10px 12px; align-items: stretch; flex-direction: column; }
+  .ai-selection-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .composer { grid-template-columns: minmax(0, 1fr) 46px; gap: 8px; padding: 10px 12px 12px; }
+  .composer textarea { min-height: 46px; max-height: 120px; }
+  .composer button { width: 46px; height: 46px; border-radius: 15px; }
+  .reviews-page { height: 100%; min-height: 0; grid-template-columns: 1fr; gap: 10px; }
+  .reviews-list-panel, .review-detail-panel { min-height: 0; height: 100%; }
+  .tasks-toolbar { padding: 16px; align-items: stretch; flex-direction: column; }
+  .all-task-card { align-items: stretch; flex-direction: column; }
+}
+
+@media (max-width: 420px) {
+  .app-shell { padding: 8px 8px 76px; }
+  .filters { grid-template-columns: 1fr; }
+  .chat-time, .badge { font-size: 10.5px; }
+  .status-badge, .sla-badge, .review-status, .task-status { font-size: 10px; padding: 4px 7px; }
+  .chat-controls { grid-template-columns: 1fr; }
+  .chat-controls button, .chat-controls select { width: 100%; }
+  .message { max-width: 94%; }
+  .message-ai-select { width: 100%; margin-top: 4px; }
+  .message-images, .review-media { grid-template-columns: 1fr; }
+}
+
+/* v23 responsive refinements: no clipped chat/review blocks on narrow desktop/tablet widths */
+html, body { max-width: 100%; }
+.app-shell, .workspace, .view, .layout, .sidebar, .conversation, .panel-card, .chat-panel,
+.chat-header, .chat-heading, .chat-title-stack, .messages, .composer,
+.reviews-page, .reviews-list-panel, .review-detail-panel, .review-panel { min-width: 0; }
+.layout { grid-template-columns: minmax(284px, 32vw) minmax(0, 1fr); }
+.chat-header { overflow: visible; }
+.chat-controls { min-width: 0; flex: 0 1 auto; }
+.chat-controls select { min-width: 116px; max-width: 165px; }
+.chat-controls input { min-width: 110px; max-width: 155px; }
+.messages { overflow-x: hidden; }
+.message { min-width: 0; max-width: min(74%, 680px); overflow: hidden; }
+.message.outbound { margin-left: auto; }
+.message-text { overflow-wrap: anywhere; word-break: normal; }
+.composer textarea { width: 100%; }
+.chat-item-title, .review-item-top > div { min-width: 0; overflow: hidden; }
+.chat-item-footer { min-width: 0; }
+.extra-panel { max-width: 100%; overflow: auto; }
+.review-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+.review-fact {
+  border: 1px solid var(--line);
+  background: rgba(255,255,255,.58);
+  border-radius: 14px;
+  padding: 10px 12px;
+  min-width: 0;
+}
+.review-fact span { display: block; color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+.review-fact strong { display: block; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.review-body-card h3 { margin: 0 0 10px; font-size: 14px; letter-spacing: -.02em; }
+
+@media (max-width: 1120px) {
+  .layout { grid-template-columns: minmax(270px, 34vw) minmax(0, 1fr); gap: 12px; }
+  .section-title-row { padding: 18px 16px 10px; }
+  .filters { padding-left: 12px; padding-right: 12px; }
+  .chat-list, .reviews-list { padding-left: 8px; padding-right: 8px; }
+  .chat-item { padding: 12px; }
+  .message { max-width: min(80%, 620px); }
+  .chat-controls input { display: none; }
+}
+
+/* At this width two full panes become cramped. Use a focused one-pane flow. */
+@media (max-width: 980px) {
+  html, body { height: 100%; }
+  body { overflow: hidden; }
+  .app-shell {
+    height: 100dvh;
+    min-height: 100dvh;
+    padding: 10px 10px 78px;
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .workspace { height: 100%; min-height: 0; overflow: hidden; }
+  .app-nav {
+    position: fixed;
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+    top: auto;
+    z-index: 80;
+    height: 58px;
+    min-height: 0;
+    padding: 7px;
+    border-radius: 22px;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    box-shadow: 0 18px 45px rgba(27,35,53,.14);
+  }
+  .brand-card, .nav-spacer, .sync-card, .refresh-btn { display: none !important; }
+  .main-nav { flex: 1; min-width: 0; flex-direction: row; gap: 6px; }
+  .nav-btn {
+    min-width: 0;
+    flex: 1;
+    height: 44px;
+    justify-content: center;
+    padding: 0;
+    border-radius: 16px;
+  }
+  .nav-btn .btn-icon { width: 22px; height: 22px; font-size: 18px; }
+  .nav-btn .btn-label { display: none !important; }
+  .view { height: 100%; min-height: 0; }
+  .layout { height: 100%; min-height: 0; display: block; }
+  .sidebar, .conversation { height: 100%; min-height: 0; }
+  body:not(.mobile-chat-open) .conversation { display: none; }
+  body.mobile-chat-open .sidebar { display: none; }
+  .panel-card { border-radius: 24px; }
+  .mobile-back-btn {
+    display: grid;
+    place-items: center;
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    border-radius: 14px;
+    background: rgba(255,255,255,.74);
+    border: 1px solid var(--line);
+    color: var(--text);
+    box-shadow: none;
+    font-size: 20px;
+    flex: 0 0 auto;
+  }
+  .chat-panel { height: 100%; grid-template-rows: auto auto minmax(0, 1fr) auto auto; }
+  .chat-header { padding: 12px; gap: 10px; flex-direction: column; align-items: stretch; }
+  .chat-controls { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; }
+  .chat-controls input { display: none; }
+  .chat-controls select { width: 100%; max-width: none; }
+  .messages { padding: 14px 12px 18px; }
+  .message { max-width: 88%; border-radius: 18px; padding: 11px 12px; }
+  .composer { grid-template-columns: minmax(0, 1fr) 46px; gap: 8px; padding: 10px 12px 12px; }
+  .composer textarea { min-height: 46px; max-height: 120px; }
+  .composer button { width: 46px; height: 46px; border-radius: 15px; }
+  .reviews-page { height: 100%; min-height: 0; grid-template-columns: 1fr; gap: 10px; }
+  .reviews-list-panel, .review-detail-panel { min-height: 0; height: 100%; }
+  .review-facts { grid-template-columns: 1fr; }
+  .tasks-toolbar { padding: 16px; align-items: stretch; flex-direction: column; }
+  .all-task-card { align-items: stretch; flex-direction: column; }
+}
+
+@media (max-width: 520px) {
+  .app-shell { padding: 8px 8px 76px; }
+  .filters { display: grid; grid-template-columns: 1fr; }
+  .chat-scope-tabs { gap: 6px; }
+  .chat-time, .badge { font-size: 10.5px; }
+  .status-badge, .sla-badge, .review-status, .task-status { font-size: 10px; padding: 4px 7px; }
+  .chat-controls { grid-template-columns: 1fr; }
+  .chat-controls button, .chat-controls select { width: 100%; }
+  .message { max-width: 94%; }
+  .message-ai-select { width: 100%; margin-top: 4px; }
+  .message-images, .review-media { grid-template-columns: 1fr; }
+}
+
+
+
+/* v24 composer visibility + responsive chat fixes */
+.chat-panel {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+.chat-header,
+.extra-panel,
+.ai-selection-bar,
+.composer {
+  flex: 0 0 auto !important;
+}
+.messages {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+.composer {
+  position: relative !important;
+  z-index: 8 !important;
+  flex-shrink: 0 !important;
+  align-items: end !important;
+  background: rgba(255, 255, 255, .88) !important;
+  backdrop-filter: blur(18px);
+}
+.composer textarea {
+  display: block !important;
+  min-height: 52px !important;
+  max-height: 140px !important;
+  overflow-y: auto !important;
+  line-height: 1.42 !important;
+}
+.composer-hint {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: -2px;
+  padding-left: 2px;
+}
+@media (max-width: 980px) {
+  .chat-panel { height: 100% !important; max-height: 100% !important; }
+  .chat-header { max-height: 32dvh; overflow: visible; }
+  .extra-panel { max-height: 28dvh; overflow: auto; }
+  .messages { min-height: 120px !important; }
+  .composer { padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
+}
+@media (max-width: 520px) {
+  .composer {
+    grid-template-columns: minmax(0, 1fr) 44px !important;
+    padding: 9px 10px 10px !important;
+    gap: 7px !important;
+  }
+  .composer textarea { min-height: 44px !important; max-height: 112px !important; font-size: 14px; }
+  .composer button { width: 44px !important; height: 44px !important; border-radius: 14px !important; }
+  .composer-hint { display: none; }
+}
+
+
+
+/* v30 mobile tabs / bottom navigation polish - inline cache fallback */
+.chat-scope-tabs .btn-label {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+}
+@media (max-width: 980px) {
+  .chat-scope-tabs {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+    padding: 0 12px 12px !important;
+  }
+  .chat-scope-tabs .scope-tab {
+    min-width: 0 !important;
+    width: 100% !important;
+    height: 40px !important;
+    min-height: 40px !important;
+    padding: 0 10px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    border-radius: 14px !important;
+    font-size: 13px !important;
+    line-height: 1 !important;
+    white-space: nowrap !important;
+  }
+  .chat-scope-tabs .scope-tab .btn-label {
+    display: inline-flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+  .app-nav {
+    height: 64px !important;
+    padding: 8px !important;
+    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px)) !important;
+    gap: 8px !important;
+  }
+  .main-nav { height: 100% !important; gap: 8px !important; }
+  .main-nav .nav-btn {
+    height: 48px !important;
+    min-width: 0 !important;
+    flex: 1 1 0 !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    border-radius: 18px !important;
+  }
+  .main-nav .nav-btn .btn-icon {
+    width: 24px !important;
+    height: 24px !important;
+    display: inline-grid !important;
+    place-items: center !important;
+    font-size: 18px !important;
+    line-height: 1 !important;
+    flex: 0 0 auto !important;
+  }
+}
+@media (max-width: 420px) {
+  .chat-scope-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 7px !important; }
+  .chat-scope-tabs .scope-tab { height: 38px !important; min-height: 38px !important; font-size: 12.5px !important; padding-inline: 8px !important; }
+  .app-shell { padding-bottom: calc(82px + env(safe-area-inset-bottom, 0px)) !important; }
+  .app-nav { left: 8px !important; right: 8px !important; bottom: 8px !important; }
+}
+
+
+
+/* v32: task workflow */
+.tasks-toolbar-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.task-form-grid { display: grid; grid-template-columns: minmax(160px, 1.3fr) minmax(130px, .8fr) minmax(170px, .9fr) auto; gap: 8px; align-items: stretch; }
+.task-form-grid textarea { grid-column: 1 / -2; min-height: 48px; resize: vertical; }
+.task-edit-grid { display: grid; grid-template-columns: repeat(3, minmax(120px, 1fr)); gap: 8px; margin-top: 10px; }
+.task-edit-grid label { display: grid; gap: 4px; color: var(--muted); font-size: 11px; font-weight: 700; }
+.task-edit-grid input, .task-edit-grid select { min-height: 36px; font-size: 12px; }
+.task-description { color: var(--text); font-size: 13px; line-height: 1.45; margin: 8px 0 0; white-space: pre-wrap; }
+.task-meta-line { margin-top: 8px; color: var(--muted); font-size: 11px; }
+.task-comments { display: grid; gap: 6px; margin-top: 10px; }
+.task-comment { border: 1px solid rgba(255,122,61,.14); background: rgba(255,248,243,.75); border-radius: 12px; padding: 8px 10px; font-size: 12px; line-height: 1.4; }
+.task-comment-meta { color: var(--muted); font-size: 10px; margin-bottom: 3px; }
+.task-comments-empty { color: var(--muted); font-size: 11px; }
+.task-comment-input { width: 100%; min-height: 48px; margin-top: 10px; resize: vertical; font-size: 12px; }
+.task-main-block { min-width: 0; flex: 1; }
+.task-actions-column { flex-direction: column; align-items: stretch; min-width: 118px; }
+.task-actions-column button { width: 100%; }
+.task-done, .task-archived { opacity: .82; }
+.task-status-archived { color: var(--muted); background: rgba(109,116,131,.12); }
+@media (max-width: 980px) {
+  .task-form-grid, .task-edit-grid { grid-template-columns: 1fr; }
+  .task-form-grid textarea { grid-column: auto; }
+  .tasks-toolbar-controls { width: 100%; }
+  .tasks-toolbar-controls select { flex: 1; }
+}
+@media (max-width: 720px) {
+  .task-actions-column { flex-direction: row; flex-wrap: wrap; min-width: 0; }
+  .task-actions-column button { width: auto; flex: 1 1 120px; }
+}
+
+
+/* v42: compact mobile chat header, message actions, clean image previews */
+.chat-subtitle,
+#chatSubtitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-controls select#chatStatus {
+  font-weight: 650;
+}
+
+.message-meta {
+  position: relative;
+}
+.message-actions-menu-wrap {
+  position: relative;
+  display: inline-flex;
+  margin-left: auto;
+}
+.message-actions-btn {
+  width: 26px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .74);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  box-shadow: none;
+  font-size: 15px;
+  line-height: 1;
+}
+.message-actions-btn:hover {
+  transform: none;
+  box-shadow: none;
+  background: rgba(255, 244, 232, .95);
+  color: var(--accent);
+}
+.message-actions-menu {
+  position: absolute;
+  top: 28px;
+  right: 0;
+  z-index: 30;
+  min-width: 126px;
+  padding: 6px;
+  border-radius: 13px;
+  background: rgba(255, 255, 255, .97);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-soft);
+}
+.message-actions-menu button {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  border: 0;
+  box-shadow: none;
+  font-size: 12px;
+  text-align: left;
+}
+.message-actions-menu button:hover {
+  transform: none;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+@media (max-width: 980px), ((hover: none) and (pointer: coarse) and (max-width: 1180px)) {
+  .chat-header {
+    padding: 12px 12px 10px !important;
+    overflow: visible !important;
+  }
+  .chat-heading-row {
+    grid-template-columns: auto minmax(0, 1fr) 42px !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow: visible !important;
+  }
+  .chat-heading-row .customer-avatar {
+    display: none !important;
+  }
+  .chat-title-stack {
+    min-width: 0 !important;
+    overflow: hidden !important;
+  }
+  .chat-title-stack h2 {
+    font-size: 18px !important;
+    line-height: 1.15 !important;
+  }
+  #chatSubtitle {
+    font-size: 11px !important;
+    line-height: 1.3 !important;
+    display: -webkit-box !important;
+    -webkit-line-clamp: 2 !important;
+    -webkit-box-orient: vertical !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+  }
+  #extraMenuBtn {
+    width: 40px !important;
+    height: 40px !important;
+    min-width: 40px !important;
+    justify-self: end !important;
+    margin-right: 0 !important;
+  }
+  .extra-menu {
+    right: 0 !important;
+    left: auto !important;
+    max-width: min(250px, calc(100vw - 28px)) !important;
+  }
+  .chat-controls {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto !important;
+    align-items: center !important;
+    gap: 8px !important;
+    padding-top: 0 !important;
+  }
+  .chat-controls select#chatStatus {
+    min-height: 38px !important;
+    height: 38px !important;
+    border-radius: 15px !important;
+    padding: 0 34px 0 12px !important;
+    font-size: 14px !important;
+    background-color: rgba(255,255,255,.82) !important;
+  }
+  .chat-controls #saveChatBtn {
+    width: auto !important;
+    min-width: 98px !important;
+    height: 38px !important;
+    min-height: 38px !important;
+    padding: 0 14px !important;
+    border-radius: 15px !important;
+    font-size: 14px !important;
+  }
+  .chat-controls input#assignedTo {
+    display: none !important;
+  }
+  .message-ai-select {
+    display: none !important;
+  }
+  .message-actions-menu-wrap {
+    margin-left: 4px !important;
+  }
+  .message-actions-btn {
+    width: 24px !important;
+    height: 23px !important;
+    min-height: 23px !important;
+    font-size: 14px !important;
+  }
+  .message-actions-menu {
+    top: 27px !important;
+  }
+}
+
+@media (max-width: 420px) {
+  .chat-title-stack h2 { font-size: 16px !important; }
+  #chatSubtitle { -webkit-line-clamp: 1 !important; }
+  .chat-controls #saveChatBtn {
+    min-width: 88px !important;
+    padding-inline: 12px !important;
+  }
+}
+
+
+/* v48: teams, knowledge base and calmer account navigation */
+.account-nav { display: grid; gap: 8px; margin-top: 8px; }
+.account-nav .nav-btn { background: rgba(255,255,255,.56); }
+.nav-btn .btn-icon { color: var(--accent); filter: none; }
+.scope-tab { flex: 1; }
+#myChatsTab.active { background: var(--accent-soft); color: var(--accent); border-color: rgba(255,122,61,.28); }
+.assignee-chip { display:inline-flex; align-items:center; gap:4px; padding:3px 7px; border-radius:999px; background:rgba(255,122,61,.10); color:var(--accent); font-size:10px; font-weight:800; }
+.task-form-grid select, .task-edit-grid select, #assignedUserSelect { min-width: 0; }
+.knowledge-page { height: 100%; min-height: 0; }
+.knowledge-panel { height: 100%; display:flex; flex-direction:column; min-height:0; }
+.knowledge-toolbar { align-items:center; }
+.knowledge-search-row { display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
+.knowledge-search-row input { min-width:220px; }
+.knowledge-layout { flex:1; min-height:0; display:grid; grid-template-columns: 240px minmax(240px,.9fr) minmax(320px,1.3fr); gap:14px; padding:0 18px 18px; }
+.knowledge-categories, .knowledge-articles, .knowledge-editor { min-width:0; overflow:auto; border:1px solid var(--line); border-radius:20px; background:rgba(255,255,255,.62); padding:12px; }
+.knowledge-mini-head { font-size:12px; font-weight:800; color:var(--muted); margin-bottom:8px; text-transform:uppercase; letter-spacing:.04em; }
+.knowledge-category-list, .knowledge-articles-list { display:grid; gap:8px; }
+.knowledge-category-item, .knowledge-article-item { width:100%; text-align:left; background:rgba(255,255,255,.72); color:var(--text); border:1px solid var(--line); box-shadow:none; }
+.knowledge-category-item.active, .knowledge-article-item.active { border-color:rgba(255,122,61,.38); background:var(--accent-soft); }
+.knowledge-article-item strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.knowledge-article-item p { margin:4px 0 0; color:var(--muted); font-size:12px; line-height:1.35; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.knowledge-category-form, .knowledge-article-form { display:grid; gap:8px; margin-top:12px; }
+.knowledge-article-form textarea { min-height:280px; resize:vertical; line-height:1.55; }
+@media (max-width: 1040px) { .knowledge-layout { grid-template-columns: 1fr; overflow:auto; } .knowledge-categories, .knowledge-articles, .knowledge-editor { overflow:visible; } }
+@media (max-width: 760px) { .account-nav { display:none; } .knowledge-page { padding-bottom:76px; } .knowledge-toolbar, .knowledge-search-row { align-items:stretch; flex-direction:column; } .knowledge-search-row input { min-width:0; width:100%; } .knowledge-layout { padding:0 12px 88px; gap:10px; } body[data-active-view="knowledge"] #knowledgeView { display:block !important; } }
+
+</style>
+<style id="arti-crm-v31-responsive-fix">
+/* v31 adaptive chat layout + resilient medium-width UI */
+
+.chat-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+}
+.chat-heading,
+.chat-heading-row,
+.chat-title-stack,
+.chat-controls {
+  min-width: 0;
+}
+.chat-title-stack h2,
+.chat-title-stack p {
+  min-width: 0;
+  max-width: 100%;
+}
+.chat-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+.chat-controls select {
+  flex: 0 1 150px;
+  min-width: 132px;
+  max-width: 180px;
+}
+.chat-controls input {
+  flex: 1 1 150px;
+  min-width: 130px;
+  max-width: 190px;
+}
+.chat-controls button {
+  flex: 0 0 auto;
+  min-height: 42px;
+}
+.messages,
+.message,
+.message-images,
+.image-card,
+.image-card img {
+  min-width: 0;
+  max-width: 100%;
+}
+.message {
+  max-width: min(78%, 680px);
+}
+.image-card {
+  width: 100%;
+}
+.image-card img {
+  height: auto;
+  max-height: min(52vh, 520px);
+  object-fit: contain;
+  background: rgba(255,255,255,.72);
+}
+.composer {
+  position: relative;
+  z-index: 3;
+}
+
+@media (max-width: 1280px) {
+  .app-shell { grid-template-columns: 80px minmax(0, 1fr); }
+  .layout { grid-template-columns: minmax(300px, 36vw) minmax(0, 1fr); }
+  .chat-header {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+  .chat-heading-row {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
+    align-items: center;
+  }
+  .chat-controls {
+    width: 100%;
+    display: grid;
+    grid-template-columns: minmax(130px, 170px) minmax(150px, 1fr) auto;
+    justify-content: stretch;
+  }
+  .chat-controls select,
+  .chat-controls input,
+  .chat-controls button {
+    width: 100%;
+    max-width: none;
+  }
+}
+
+@media (max-width: 1060px) and (min-width: 981px) {
+  .app-shell { gap: 10px; padding: 10px; }
+  .layout { grid-template-columns: minmax(280px, 38vw) minmax(0, 1fr); gap: 10px; }
+  .section-title-row { padding: 16px 14px 8px; }
+  .filters { display: grid; grid-template-columns: 1fr; padding-inline: 12px; }
+  .chat-scope-tabs { padding-inline: 12px; }
+  .chat-item { padding: 12px; }
+  .chat-controls { grid-template-columns: 1fr 1fr; }
+  .chat-controls button { grid-column: 1 / -1; }
+  .message { max-width: 92%; }
+}
+
+@media (max-width: 980px) {
+  .chat-header {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+  .chat-heading-row {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
+    align-items: center;
+  }
+  .chat-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    width: 100%;
+  }
+  .chat-controls input { display: none !important; }
+  .chat-controls select { width: 100%; max-width: none; }
+  .message { max-width: 90%; }
+}
+
+@media (max-width: 640px) {
+  .chat-controls {
+    grid-template-columns: 1fr;
+  }
+  .chat-controls button,
+  .chat-controls select {
+    min-height: 42px;
+  }
+  .chat-subtitle,
+  #chatSubtitle {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    white-space: normal !important;
+  }
+  .message { max-width: 94%; }
+}
+
+@media (max-width: 420px) {
+  .chat-heading-row {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+  .chat-heading-row .customer-avatar {
+    display: none;
+  }
+}
+
+
+
+/* v32: task workflow */
+.tasks-toolbar-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.task-form-grid { display: grid; grid-template-columns: minmax(160px, 1.3fr) minmax(130px, .8fr) minmax(170px, .9fr) auto; gap: 8px; align-items: stretch; }
+.task-form-grid textarea { grid-column: 1 / -2; min-height: 48px; resize: vertical; }
+.task-edit-grid { display: grid; grid-template-columns: repeat(3, minmax(120px, 1fr)); gap: 8px; margin-top: 10px; }
+.task-edit-grid label { display: grid; gap: 4px; color: var(--muted); font-size: 11px; font-weight: 700; }
+.task-edit-grid input, .task-edit-grid select { min-height: 36px; font-size: 12px; }
+.task-description { color: var(--text); font-size: 13px; line-height: 1.45; margin: 8px 0 0; white-space: pre-wrap; }
+.task-meta-line { margin-top: 8px; color: var(--muted); font-size: 11px; }
+.task-comments { display: grid; gap: 6px; margin-top: 10px; }
+.task-comment { border: 1px solid rgba(255,122,61,.14); background: rgba(255,248,243,.75); border-radius: 12px; padding: 8px 10px; font-size: 12px; line-height: 1.4; }
+.task-comment-meta { color: var(--muted); font-size: 10px; margin-bottom: 3px; }
+.task-comments-empty { color: var(--muted); font-size: 11px; }
+.task-comment-input { width: 100%; min-height: 48px; margin-top: 10px; resize: vertical; font-size: 12px; }
+.task-main-block { min-width: 0; flex: 1; }
+.task-actions-column { flex-direction: column; align-items: stretch; min-width: 118px; }
+.task-actions-column button { width: 100%; }
+.task-done, .task-archived { opacity: .82; }
+.task-status-archived { color: var(--muted); background: rgba(109,116,131,.12); }
+@media (max-width: 980px) {
+  .task-form-grid, .task-edit-grid { grid-template-columns: 1fr; }
+  .task-form-grid textarea { grid-column: auto; }
+  .tasks-toolbar-controls { width: 100%; }
+  .tasks-toolbar-controls select { flex: 1; }
+}
+@media (max-width: 720px) {
+  .task-actions-column { flex-direction: row; flex-wrap: wrap; min-width: 0; }
+  .task-actions-column button { width: auto; flex: 1 1 120px; }
+}
+
+
+/* v48: teams, knowledge base and calmer account navigation */
+.account-nav { display: grid; gap: 8px; margin-top: 8px; }
+.account-nav .nav-btn { background: rgba(255,255,255,.56); }
+.nav-btn .btn-icon { color: var(--accent); filter: none; }
+.scope-tab { flex: 1; }
+#myChatsTab.active { background: var(--accent-soft); color: var(--accent); border-color: rgba(255,122,61,.28); }
+.assignee-chip { display:inline-flex; align-items:center; gap:4px; padding:3px 7px; border-radius:999px; background:rgba(255,122,61,.10); color:var(--accent); font-size:10px; font-weight:800; }
+.task-form-grid select, .task-edit-grid select, #assignedUserSelect { min-width: 0; }
+.knowledge-page { height: 100%; min-height: 0; }
+.knowledge-panel { height: 100%; display:flex; flex-direction:column; min-height:0; }
+.knowledge-toolbar { align-items:center; }
+.knowledge-search-row { display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
+.knowledge-search-row input { min-width:220px; }
+.knowledge-layout { flex:1; min-height:0; display:grid; grid-template-columns: 240px minmax(240px,.9fr) minmax(320px,1.3fr); gap:14px; padding:0 18px 18px; }
+.knowledge-categories, .knowledge-articles, .knowledge-editor { min-width:0; overflow:auto; border:1px solid var(--line); border-radius:20px; background:rgba(255,255,255,.62); padding:12px; }
+.knowledge-mini-head { font-size:12px; font-weight:800; color:var(--muted); margin-bottom:8px; text-transform:uppercase; letter-spacing:.04em; }
+.knowledge-category-list, .knowledge-articles-list { display:grid; gap:8px; }
+.knowledge-category-item, .knowledge-article-item { width:100%; text-align:left; background:rgba(255,255,255,.72); color:var(--text); border:1px solid var(--line); box-shadow:none; }
+.knowledge-category-item.active, .knowledge-article-item.active { border-color:rgba(255,122,61,.38); background:var(--accent-soft); }
+.knowledge-article-item strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.knowledge-article-item p { margin:4px 0 0; color:var(--muted); font-size:12px; line-height:1.35; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.knowledge-category-form, .knowledge-article-form { display:grid; gap:8px; margin-top:12px; }
+.knowledge-article-form textarea { min-height:280px; resize:vertical; line-height:1.55; }
+@media (max-width: 1040px) { .knowledge-layout { grid-template-columns: 1fr; overflow:auto; } .knowledge-categories, .knowledge-articles, .knowledge-editor { overflow:visible; } }
+@media (max-width: 760px) { .account-nav { display:none; } .knowledge-page { padding-bottom:76px; } .knowledge-toolbar, .knowledge-search-row { align-items:stretch; flex-direction:column; } .knowledge-search-row input { min-width:0; width:100%; } .knowledge-layout { padding:0 12px 88px; gap:10px; } body[data-active-view="knowledge"] #knowledgeView { display:block !important; } }
+
+</style>
+<style id="arti-crm-v33-overrides">
+
+/* v33: collapse left navigation to icons earlier to avoid broken labels on medium screens */
+@media (max-width: 1320px) and (min-width: 981px) {
+  .app-shell {
+    grid-template-columns: 80px minmax(0, 1fr) !important;
+    gap: 12px !important;
+    padding: 12px !important;
+  }
+  .app-nav {
+    width: 80px !important;
+    min-width: 80px !important;
+    max-width: 80px !important;
+    padding: 12px 10px !important;
+    align-items: center !important;
+    overflow: hidden !important;
+  }
+  .brand-card {
+    width: 100% !important;
+    justify-content: center !important;
+    padding: 8px 0 12px !important;
+    gap: 0 !important;
+  }
+  .brand-mark {
+    width: 44px !important;
+    height: 44px !important;
+    min-width: 44px !important;
+    border-radius: 16px !important;
+    flex: 0 0 44px !important;
+  }
+  .brand-copy,
+  .sync-status,
+  .nav-btn .btn-label,
+  .refresh-btn .btn-label {
+    display: none !important;
+  }
+  .main-nav {
+    width: 100% !important;
+    align-items: center !important;
+    gap: 8px !important;
+  }
+  .main-nav .nav-btn,
+  .refresh-btn {
+    width: 54px !important;
+    min-width: 54px !important;
+    height: 50px !important;
+    padding: 0 !important;
+    display: inline-flex !important;
+    justify-content: center !important;
+    align-items: center !important;
+    border-radius: 18px !important;
+    gap: 0 !important;
+  }
+  .main-nav .nav-btn .btn-icon,
+  .refresh-btn .btn-icon {
+    width: 22px !important;
+    height: 22px !important;
+    display: inline-grid !important;
+    place-items: center !important;
+    font-size: 18px !important;
+    line-height: 1 !important;
+    flex: 0 0 auto !important;
+  }
+  .sync-card {
+    display: none !important;
+  }
+}
+
+/* v33: give content a bit more room at medium widths */
+@media (max-width: 1320px) and (min-width: 981px) {
+  .layout {
+    grid-template-columns: minmax(300px, 35vw) minmax(0, 1fr) !important;
+  }
+  .section-title-row h2,
+  .tasks-toolbar h2,
+  .review-header h2 {
+    font-size: clamp(19px, 2vw, 22px) !important;
+  }
+}
+
+
+/* v48: teams, knowledge base and calmer account navigation */
+.account-nav { display: grid; gap: 8px; margin-top: 8px; }
+.account-nav .nav-btn { background: rgba(255,255,255,.56); }
+.nav-btn .btn-icon { color: var(--accent); filter: none; }
+.scope-tab { flex: 1; }
+#myChatsTab.active { background: var(--accent-soft); color: var(--accent); border-color: rgba(255,122,61,.28); }
+.assignee-chip { display:inline-flex; align-items:center; gap:4px; padding:3px 7px; border-radius:999px; background:rgba(255,122,61,.10); color:var(--accent); font-size:10px; font-weight:800; }
+.task-form-grid select, .task-edit-grid select, #assignedUserSelect { min-width: 0; }
+.knowledge-page { height: 100%; min-height: 0; }
+.knowledge-panel { height: 100%; display:flex; flex-direction:column; min-height:0; }
+.knowledge-toolbar { align-items:center; }
+.knowledge-search-row { display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
+.knowledge-search-row input { min-width:220px; }
+.knowledge-layout { flex:1; min-height:0; display:grid; grid-template-columns: 240px minmax(240px,.9fr) minmax(320px,1.3fr); gap:14px; padding:0 18px 18px; }
+.knowledge-categories, .knowledge-articles, .knowledge-editor { min-width:0; overflow:auto; border:1px solid var(--line); border-radius:20px; background:rgba(255,255,255,.62); padding:12px; }
+.knowledge-mini-head { font-size:12px; font-weight:800; color:var(--muted); margin-bottom:8px; text-transform:uppercase; letter-spacing:.04em; }
+.knowledge-category-list, .knowledge-articles-list { display:grid; gap:8px; }
+.knowledge-category-item, .knowledge-article-item { width:100%; text-align:left; background:rgba(255,255,255,.72); color:var(--text); border:1px solid var(--line); box-shadow:none; }
+.knowledge-category-item.active, .knowledge-article-item.active { border-color:rgba(255,122,61,.38); background:var(--accent-soft); }
+.knowledge-article-item strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.knowledge-article-item p { margin:4px 0 0; color:var(--muted); font-size:12px; line-height:1.35; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.knowledge-category-form, .knowledge-article-form { display:grid; gap:8px; margin-top:12px; }
+.knowledge-article-form textarea { min-height:280px; resize:vertical; line-height:1.55; }
+@media (max-width: 1040px) { .knowledge-layout { grid-template-columns: 1fr; overflow:auto; } .knowledge-categories, .knowledge-articles, .knowledge-editor { overflow:visible; } }
+@media (max-width: 760px) { .account-nav { display:none; } .knowledge-page { padding-bottom:76px; } .knowledge-toolbar, .knowledge-search-row { align-items:stretch; flex-direction:column; } .knowledge-search-row input { min-width:0; width:100%; } .knowledge-layout { padding:0 12px 88px; gap:10px; } body[data-active-view="knowledge"] #knowledgeView { display:block !important; } }
+
+</style>
+<style id="arti-crm-v35-mobile-fixes">
+
+/* v35 mobile layout hardening: prevents narrow clipped panes on phones / desktop-mode mobile browsers */
+@media (max-width: 980px), ((hover: none) and (pointer: coarse) and (max-width: 1180px)) {
+  html, body {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100% !important;
+    overflow: hidden !important;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  body {
+    background:
+      radial-gradient(circle at 0% 0%, rgba(255, 132, 74, .24), transparent 36%),
+      radial-gradient(circle at 100% 12%, rgba(255, 191, 121, .20), transparent 34%),
+      linear-gradient(135deg, #fffaf6 0%, #fff1e7 45%, #f9fbff 100%) !important;
+  }
+
+  .app-shell {
+    display: block !important;
+    width: 100vw !important;
+    max-width: 100vw !important;
+    height: 100dvh !important;
+    min-height: 100dvh !important;
+    overflow: hidden !important;
+    padding: 10px 10px calc(82px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  .workspace,
+  .view,
+  #chatsView,
+  .layout {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+  }
+
+  .layout {
+    grid-template-columns: none !important;
+    gap: 0 !important;
+  }
+
+  .sidebar,
+  .conversation,
+  .panel-card.sidebar,
+  .panel-card.conversation {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+    border-radius: 24px !important;
+  }
+
+  body:not(.mobile-chat-open) .conversation {
+    display: none !important;
+  }
+
+  body.mobile-chat-open .sidebar {
+    display: none !important;
+  }
+
+  body.mobile-chat-open .conversation {
+    display: block !important;
+  }
+
+  .section-title-row {
+    padding: 18px 16px 10px !important;
+    align-items: flex-start !important;
+    gap: 10px !important;
+  }
+
+  .section-title-row h2 {
+    font-size: clamp(20px, 7vw, 26px) !important;
+    line-height: 1.05 !important;
+  }
+
+  .section-title-row p {
+    max-width: 100% !important;
+    font-size: 13px !important;
+    line-height: 1.35 !important;
+  }
+
+  .soft-counter {
+    flex: 0 0 auto !important;
+  }
+
+  .filters {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+    width: 100% !important;
+    padding: 0 14px 10px !important;
+  }
+
+  .filters select,
+  .filters input,
+  .filters button {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    min-height: 42px !important;
+    font-size: 13px !important;
+  }
+
+  .chat-scope-tabs {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+    width: 100% !important;
+    padding: 0 14px 10px !important;
+  }
+
+  .chat-scope-tabs .scope-tab {
+    width: 100% !important;
+    min-width: 0 !important;
+    height: 42px !important;
+    min-height: 42px !important;
+    padding: 0 10px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+
+  .chat-scope-tabs .btn-label {
+    display: inline-flex !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  .stats {
+    padding: 0 16px 10px !important;
+    font-size: 12px !important;
+    line-height: 1.45 !important;
+    overflow-wrap: anywhere !important;
+  }
+
+  .chat-list,
+  .reviews-list {
+    width: 100% !important;
+    min-width: 0 !important;
+    flex: 1 1 auto !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    padding: 0 10px 14px !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .chat-item,
+  .review-item {
+    width: 100% !important;
+    min-width: 0 !important;
+    padding: 14px !important;
+    border-radius: 18px !important;
+  }
+
+  .chat-item-topline,
+  .review-item-top,
+  .chat-item-title,
+  .chat-badges,
+  .preview {
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  .chat-item-title strong,
+  .review-item strong {
+    font-size: 14px !important;
+    max-width: 100% !important;
+  }
+
+  .preview {
+    font-size: 13px !important;
+    line-height: 1.35 !important;
+    -webkit-line-clamp: 2 !important;
+  }
+
+  .app-nav {
+    position: fixed !important;
+    left: 10px !important;
+    right: 10px !important;
+    bottom: 10px !important;
+    top: auto !important;
+    z-index: 1000 !important;
+    width: auto !important;
+    max-width: none !important;
+    height: 62px !important;
+    min-height: 0 !important;
+    padding: 8px !important;
+    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px)) !important;
+    border-radius: 24px !important;
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: center !important;
+    overflow: hidden !important;
+  }
+
+  .brand-card,
+  .nav-spacer,
+  .sync-card,
+  .refresh-btn {
+    display: none !important;
+  }
+
+  .main-nav {
+    display: flex !important;
+    flex-direction: row !important;
+    width: 100% !important;
+    height: 100% !important;
+    gap: 8px !important;
+    min-width: 0 !important;
+  }
+
+  .main-nav .nav-btn {
+    flex: 1 1 0 !important;
+    min-width: 0 !important;
+    width: auto !important;
+    height: 46px !important;
+    padding: 0 !important;
+    justify-content: center !important;
+    align-items: center !important;
+    border-radius: 18px !important;
+  }
+
+  .main-nav .nav-btn .btn-label {
+    display: none !important;
+  }
+
+  .main-nav .nav-btn .btn-icon {
+    display: inline-grid !important;
+    place-items: center !important;
+    width: 24px !important;
+    height: 24px !important;
+    font-size: 18px !important;
+    line-height: 1 !important;
+  }
+
+  .chat-panel {
+    height: 100% !important;
+    max-height: 100% !important;
+  }
+
+  .chat-header {
+    width: 100% !important;
+    grid-template-columns: 1fr !important;
+    padding: 12px !important;
+    gap: 10px !important;
+  }
+
+  .chat-heading-row {
+    display: grid !important;
+    grid-template-columns: auto auto minmax(0, 1fr) auto !important;
+    gap: 8px !important;
+    align-items: center !important;
+  }
+
+  .chat-controls {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto !important;
+    gap: 8px !important;
+    width: 100% !important;
+  }
+
+  .chat-controls input {
+    display: none !important;
+  }
+
+  .chat-controls select,
+  .chat-controls button {
+    width: 100% !important;
+    max-width: none !important;
+    min-width: 0 !important;
+  }
+
+  .messages {
+    padding: 14px 12px 18px !important;
+  }
+
+  .message {
+    max-width: 92% !important;
+    min-width: 0 !important;
+  }
+
+  .composer {
+    grid-template-columns: minmax(0, 1fr) 46px !important;
+    padding: 10px 12px calc(12px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  .composer textarea {
+    min-height: 46px !important;
+    max-height: 120px !important;
+  }
+}
+
+@media (max-width: 420px), ((hover: none) and (pointer: coarse) and (max-width: 440px)) {
+  .app-shell {
+    padding: 8px 8px calc(80px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  .filters {
+    grid-template-columns: 1fr !important;
+    padding-inline: 12px !important;
+  }
+
+  .section-title-row {
+    padding: 16px 14px 8px !important;
+  }
+
+  .section-title-row h2 {
+    font-size: 24px !important;
+  }
+
+  .chat-scope-tabs {
+    padding-inline: 12px !important;
+  }
+
+  .stats {
+    padding-inline: 14px !important;
+  }
+
+  .chat-list,
+  .reviews-list {
+    padding-inline: 8px !important;
+  }
+
+  .chat-item,
+  .review-item {
+    padding: 13px !important;
+  }
+
+  .message {
+    max-width: 95% !important;
+  }
+}
+
+
+/* v48: teams, knowledge base and calmer account navigation */
+.account-nav { display: grid; gap: 8px; margin-top: 8px; }
+.account-nav .nav-btn { background: rgba(255,255,255,.56); }
+.nav-btn .btn-icon { color: var(--accent); filter: none; }
+.scope-tab { flex: 1; }
+#myChatsTab.active { background: var(--accent-soft); color: var(--accent); border-color: rgba(255,122,61,.28); }
+.assignee-chip { display:inline-flex; align-items:center; gap:4px; padding:3px 7px; border-radius:999px; background:rgba(255,122,61,.10); color:var(--accent); font-size:10px; font-weight:800; }
+.task-form-grid select, .task-edit-grid select, #assignedUserSelect { min-width: 0; }
+.knowledge-page { height: 100%; min-height: 0; }
+.knowledge-panel { height: 100%; display:flex; flex-direction:column; min-height:0; }
+.knowledge-toolbar { align-items:center; }
+.knowledge-search-row { display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
+.knowledge-search-row input { min-width:220px; }
+.knowledge-layout { flex:1; min-height:0; display:grid; grid-template-columns: 240px minmax(240px,.9fr) minmax(320px,1.3fr); gap:14px; padding:0 18px 18px; }
+.knowledge-categories, .knowledge-articles, .knowledge-editor { min-width:0; overflow:auto; border:1px solid var(--line); border-radius:20px; background:rgba(255,255,255,.62); padding:12px; }
+.knowledge-mini-head { font-size:12px; font-weight:800; color:var(--muted); margin-bottom:8px; text-transform:uppercase; letter-spacing:.04em; }
+.knowledge-category-list, .knowledge-articles-list { display:grid; gap:8px; }
+.knowledge-category-item, .knowledge-article-item { width:100%; text-align:left; background:rgba(255,255,255,.72); color:var(--text); border:1px solid var(--line); box-shadow:none; }
+.knowledge-category-item.active, .knowledge-article-item.active { border-color:rgba(255,122,61,.38); background:var(--accent-soft); }
+.knowledge-article-item strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.knowledge-article-item p { margin:4px 0 0; color:var(--muted); font-size:12px; line-height:1.35; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.knowledge-category-form, .knowledge-article-form { display:grid; gap:8px; margin-top:12px; }
+.knowledge-article-form textarea { min-height:280px; resize:vertical; line-height:1.55; }
+@media (max-width: 1040px) { .knowledge-layout { grid-template-columns: 1fr; overflow:auto; } .knowledge-categories, .knowledge-articles, .knowledge-editor { overflow:visible; } }
+@media (max-width: 760px) { .account-nav { display:none; } .knowledge-page { padding-bottom:76px; } .knowledge-toolbar, .knowledge-search-row { align-items:stretch; flex-direction:column; } .knowledge-search-row input { min-width:0; width:100%; } .knowledge-layout { padding:0 12px 88px; gap:10px; } body[data-active-view="knowledge"] #knowledgeView { display:block !important; } }
+
+</style>
+<style id="arti-crm-v38-mobile-media-fixes">
+/* v38: mobile input anti-zoom, clean image attachments, read receipts */
+@media (max-width: 768px) {
+  input, select, textarea, button { font-size: 16px !important; }
+  .composer textarea { font-size: 16px !important; line-height: 1.35; }
+}
+.message-receipt {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  margin-top: 8px;
+  color: var(--muted-2);
+  font-size: 11px;
+  line-height: 1;
+  user-select: none;
+}
+.message.inbound .message-receipt { justify-content: flex-start; }
+.message-receipt .receipt-checks { letter-spacing: -2px; font-weight: 800; color: var(--muted-2); }
+.message-receipt.is-read .receipt-checks { color: var(--primary); }
+.message-text:empty { display: none; }
+.image-card { text-decoration: none; }
+.image-card::after {
+  content: "Открыть";
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: rgba(23, 32, 51, .66);
+  color: #fff;
+  font-size: 11px;
+  opacity: 0;
+  transform: translateY(3px);
+  transition: opacity .15s ease, transform .15s ease;
+}
+.image-card:hover::after { opacity: 1; transform: translateY(0); }
+@media (max-width: 768px) {
+  .image-card::after { opacity: 1; transform: none; font-size: 10px; }
+}
+
+/* v48: teams, knowledge base and calmer account navigation */
+.account-nav { display: grid; gap: 8px; margin-top: 8px; }
+.account-nav .nav-btn { background: rgba(255,255,255,.56); }
+.nav-btn .btn-icon { color: var(--accent); filter: none; }
+.scope-tab { flex: 1; }
+#myChatsTab.active { background: var(--accent-soft); color: var(--accent); border-color: rgba(255,122,61,.28); }
+.assignee-chip { display:inline-flex; align-items:center; gap:4px; padding:3px 7px; border-radius:999px; background:rgba(255,122,61,.10); color:var(--accent); font-size:10px; font-weight:800; }
+.task-form-grid select, .task-edit-grid select, #assignedUserSelect { min-width: 0; }
+.knowledge-page { height: 100%; min-height: 0; }
+.knowledge-panel { height: 100%; display:flex; flex-direction:column; min-height:0; }
+.knowledge-toolbar { align-items:center; }
+.knowledge-search-row { display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
+.knowledge-search-row input { min-width:220px; }
+.knowledge-layout { flex:1; min-height:0; display:grid; grid-template-columns: 240px minmax(240px,.9fr) minmax(320px,1.3fr); gap:14px; padding:0 18px 18px; }
+.knowledge-categories, .knowledge-articles, .knowledge-editor { min-width:0; overflow:auto; border:1px solid var(--line); border-radius:20px; background:rgba(255,255,255,.62); padding:12px; }
+.knowledge-mini-head { font-size:12px; font-weight:800; color:var(--muted); margin-bottom:8px; text-transform:uppercase; letter-spacing:.04em; }
+.knowledge-category-list, .knowledge-articles-list { display:grid; gap:8px; }
+.knowledge-category-item, .knowledge-article-item { width:100%; text-align:left; background:rgba(255,255,255,.72); color:var(--text); border:1px solid var(--line); box-shadow:none; }
+.knowledge-category-item.active, .knowledge-article-item.active { border-color:rgba(255,122,61,.38); background:var(--accent-soft); }
+.knowledge-article-item strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.knowledge-article-item p { margin:4px 0 0; color:var(--muted); font-size:12px; line-height:1.35; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.knowledge-category-form, .knowledge-article-form { display:grid; gap:8px; margin-top:12px; }
+.knowledge-article-form textarea { min-height:280px; resize:vertical; line-height:1.55; }
+@media (max-width: 1040px) { .knowledge-layout { grid-template-columns: 1fr; overflow:auto; } .knowledge-categories, .knowledge-articles, .knowledge-editor { overflow:visible; } }
+@media (max-width: 760px) { .account-nav { display:none; } .knowledge-page { padding-bottom:76px; } .knowledge-toolbar, .knowledge-search-row { align-items:stretch; flex-direction:column; } .knowledge-search-row input { min-width:0; width:100%; } .knowledge-layout { padding:0 12px 88px; gap:10px; } body[data-active-view="knowledge"] #knowledgeView { display:block !important; } }
+
+</style>
+
+
+<style id="arti-crm-v43-mobile-view-switch-fix">
+/* v43: mobile navigation view switching fix.
+   Previous mobile hardening forced .view {display:block!important}, which overrode .hidden.
+   These rules must be after all mobile CSS so only the active section is visible. */
+@media (max-width: 980px), ((hover: none) and (pointer: coarse) and (max-width: 1180px)) {
+  #chatsView.hidden,
+  #tasksView.hidden,
+  #reviewsView.hidden,
+  #questionsView.hidden,
+  #usersView.hidden,
+  #profileView.hidden {
+    display: none !important;
+  }
+
+  #chatsView.active-view,
+  #tasksView.active-view,
+  #reviewsView.active-view,
+  #questionsView.active-view,
+  #usersView.active-view,
+  #profileView.active-view {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+  }
+
+  #tasksView.active-view,
+  #reviewsView.active-view,
+  #questionsView.active-view,
+  #usersView.active-view,
+  #profileView.active-view {
+    overflow: auto !important;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 10px !important;
+  }
+
+  body[data-active-view="tasks"] #chatsView,
+  body[data-active-view="tasks"] #reviewsView,
+  body[data-active-view="tasks"] #questionsView,
+  body[data-active-view="tasks"] #knowledgeView,
+  body[data-active-view="tasks"] #usersView,
+  body[data-active-view="tasks"] #profileView,
+  body[data-active-view="reviews"] #chatsView,
+  body[data-active-view="reviews"] #tasksView,
+  body[data-active-view="reviews"] #questionsView,
+  body[data-active-view="reviews"] #knowledgeView,
+  body[data-active-view="reviews"] #usersView,
+  body[data-active-view="reviews"] #profileView,
+  body[data-active-view="chats"] #tasksView,
+  body[data-active-view="chats"] #reviewsView,
+  body[data-active-view="chats"] #questionsView,
+  body[data-active-view="chats"] #knowledgeView,
+  body[data-active-view="chats"] #usersView,
+  body[data-active-view="chats"] #profileView,
+  body[data-active-view="users"] #chatsView,
+  body[data-active-view="users"] #tasksView,
+  body[data-active-view="users"] #reviewsView,
+  body[data-active-view="users"] #questionsView,
+  body[data-active-view="users"] #knowledgeView,
+  body[data-active-view="users"] #profileView,
+  body[data-active-view="profile"] #chatsView,
+  body[data-active-view="profile"] #tasksView,
+  body[data-active-view="profile"] #reviewsView,
+  body[data-active-view="profile"] #questionsView,
+  body[data-active-view="profile"] #knowledgeView,
+  body[data-active-view="profile"] #usersView,
+  body[data-active-view="knowledge"] #chatsView,
+  body[data-active-view="knowledge"] #tasksView,
+  body[data-active-view="knowledge"] #reviewsView,
+  body[data-active-view="knowledge"] #questionsView,
+  body[data-active-view="knowledge"] #usersView,
+  body[data-active-view="knowledge"] #profileView,
+  body[data-active-view="questions"] #chatsView,
+  body[data-active-view="questions"] #tasksView,
+  body[data-active-view="questions"] #reviewsView,
+  body[data-active-view="questions"] #knowledgeView,
+  body[data-active-view="questions"] #usersView,
+  body[data-active-view="questions"] #profileView {
+    display: none !important;
+  }
+
+  body[data-active-view="tasks"] #tasksView,
+  body[data-active-view="reviews"] #reviewsView,
+  body[data-active-view="questions"] #questionsView,
+  body[data-active-view="knowledge"] #knowledgeView,
+  body[data-active-view="chats"] #chatsView,
+  body[data-active-view="users"] #usersView,
+  body[data-active-view="profile"] #profileView {
+    display: block !important;
+  }
+}
+
+/* v48: teams, knowledge base and calmer account navigation */
+.account-nav { display: grid; gap: 8px; margin-top: 8px; }
+.account-nav .nav-btn { background: rgba(255,255,255,.56); }
+.nav-btn .btn-icon { color: var(--accent); filter: none; }
+.scope-tab { flex: 1; }
+#myChatsTab.active { background: var(--accent-soft); color: var(--accent); border-color: rgba(255,122,61,.28); }
+.assignee-chip { display:inline-flex; align-items:center; gap:4px; padding:3px 7px; border-radius:999px; background:rgba(255,122,61,.10); color:var(--accent); font-size:10px; font-weight:800; }
+.task-form-grid select, .task-edit-grid select, #assignedUserSelect { min-width: 0; }
+.knowledge-page { height: 100%; min-height: 0; }
+.knowledge-panel { height: 100%; display:flex; flex-direction:column; min-height:0; }
+.knowledge-toolbar { align-items:center; }
+.knowledge-search-row { display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
+.knowledge-search-row input { min-width:220px; }
+.knowledge-layout { flex:1; min-height:0; display:grid; grid-template-columns: 240px minmax(240px,.9fr) minmax(320px,1.3fr); gap:14px; padding:0 18px 18px; }
+.knowledge-categories, .knowledge-articles, .knowledge-editor { min-width:0; overflow:auto; border:1px solid var(--line); border-radius:20px; background:rgba(255,255,255,.62); padding:12px; }
+.knowledge-mini-head { font-size:12px; font-weight:800; color:var(--muted); margin-bottom:8px; text-transform:uppercase; letter-spacing:.04em; }
+.knowledge-category-list, .knowledge-articles-list { display:grid; gap:8px; }
+.knowledge-category-item, .knowledge-article-item { width:100%; text-align:left; background:rgba(255,255,255,.72); color:var(--text); border:1px solid var(--line); box-shadow:none; }
+.knowledge-category-item.active, .knowledge-article-item.active { border-color:rgba(255,122,61,.38); background:var(--accent-soft); }
+.knowledge-article-item strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.knowledge-article-item p { margin:4px 0 0; color:var(--muted); font-size:12px; line-height:1.35; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.knowledge-category-form, .knowledge-article-form { display:grid; gap:8px; margin-top:12px; }
+.knowledge-article-form textarea { min-height:280px; resize:vertical; line-height:1.55; }
+@media (max-width: 1040px) { .knowledge-layout { grid-template-columns: 1fr; overflow:auto; } .knowledge-categories, .knowledge-articles, .knowledge-editor { overflow:visible; } }
+@media (max-width: 760px) { .account-nav { display:none; } .knowledge-page { padding-bottom:76px; } .knowledge-toolbar, .knowledge-search-row { align-items:stretch; flex-direction:column; } .knowledge-search-row input { min-width:0; width:100%; } .knowledge-layout { padding:0 12px 88px; gap:10px; } body[data-active-view="knowledge"] #knowledgeView { display:block !important; } }
+
+</style>
+
+
+<style id="arti-crm-v50-fixes">
+/* v50: stable mobile chat scrolling, knowledge reader mode and assignment selects */
+.knowledge-empty-state, .knowledge-reader { padding: 18px; }
+.knowledge-empty-state h3, .knowledge-reader h3, .knowledge-form-head h3 { margin: 0 0 8px; letter-spacing: -.03em; }
+.knowledge-reader { display: flex; flex-direction: column; gap: 14px; }
+.knowledge-reader-head { display: flex; justify-content: space-between; gap: 14px; align-items: flex-start; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.knowledge-reader-meta { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+.knowledge-reader-tags { display: flex; gap: 6px; flex-wrap: wrap; color: var(--muted); font-size: 12px; }
+.knowledge-reader-tags span { border: 1px solid var(--line); border-radius: 999px; padding: 4px 8px; background: rgba(255,255,255,.64); }
+.knowledge-reader-content { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.62; font-size: 14px; color: var(--text); }
+.knowledge-form-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+#assignedUserSelect, #taskAssignee, [data-task-assignee] { min-width: 0; }
+@media (max-width: 760px) {
+  html, body { width: 100%; height: 100dvh; overflow: hidden; }
+  body { position: fixed; inset: 0; }
+  .app-shell { position: fixed; inset: 0; width: 100%; height: 100dvh; overflow: hidden; }
+  .workspace, .view, .layout, .conversation, .chat-panel { height: 100%; min-height: 0; overflow: hidden; }
+  .chat-panel { grid-template-rows: auto auto minmax(0, 1fr) auto; }
+  .messages { overflow-y: auto !important; overflow-x: hidden !important; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; touch-action: pan-y; min-height: 0; }
+  .composer { flex: 0 0 auto; }
+  .message-images { grid-template-columns: 1fr !important; }
+  .image-card img { max-height: 62dvh; }
+  .knowledge-layout { grid-template-columns: 1fr !important; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .knowledge-categories, .knowledge-articles, .knowledge-editor { max-height: none; overflow: visible; }
+  .knowledge-reader-head { flex-direction: column; }
+}
+</style>
+
+<style id="arti-crm-v51-knowledge-base-redesign">
+/* v51: two-column knowledge base with nested articles and image attachments */
+.knowledge-layout-v51 {
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr) !important;
+  gap: 16px !important;
+  padding: 0 18px 18px !important;
+}
+.knowledge-layout-v51 .knowledge-articles { display: none !important; }
+.knowledge-library,
+.knowledge-reader-panel {
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: rgba(255,255,255,.70);
+  box-shadow: 0 14px 44px rgba(27,35,53,.05);
+}
+.knowledge-library { padding: 14px; display:flex; flex-direction:column; gap:12px; min-height:0; overflow:auto; }
+.knowledge-reader-panel { padding: 28px 30px; overflow:auto; }
+.knowledge-left-head { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
+.knowledge-hint { margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.35; }
+.knowledge-tree { display:grid; gap:10px; }
+.knowledge-section { display:grid; gap:8px; }
+.knowledge-category-item { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:12px 14px; border-radius:16px; min-height:52px; }
+.knowledge-category-item span:first-child { min-width:0; display:grid; gap:3px; }
+.knowledge-category-item strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.knowledge-category-item small { color: var(--muted); font-size: 12px; font-weight: 600; }
+.knowledge-chevron { flex:0 0 auto; color: var(--muted); font-size:18px; line-height:1; }
+.knowledge-nested { display:grid; gap:8px; margin-left:10px; padding-left:10px; border-left:2px solid rgba(255,122,61,.16); }
+.knowledge-article-item { padding:12px 13px; border-radius:16px; }
+.knowledge-article-item strong { font-size:14px; }
+.knowledge-article-item p { -webkit-line-clamp: 2; }
+.knowledge-reader-head { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; margin-bottom:14px; }
+.knowledge-reader-head h3 { margin: 6px 0 8px; font-size: clamp(24px, 3vw, 34px); letter-spacing:-.04em; }
+.knowledge-edit-icon { width:38px; height:38px; min-width:38px; border-radius:14px; font-size:17px; padding:0; color:var(--accent); background:var(--accent-soft); border:1px solid rgba(255,122,61,.20); }
+.knowledge-reader-image { width:100%; max-height:420px; object-fit:contain; border-radius:20px; border:1px solid var(--line); background:#fff; margin: 14px 0 20px; box-shadow: var(--shadow-soft); }
+.knowledge-reader-content { font-size:15px; line-height:1.72; color:var(--text); white-space:normal; }
+.knowledge-image-field { display:grid; gap:6px; color:var(--muted); font-size:13px; }
+.knowledge-image-field input { padding:10px; background:rgba(255,255,255,.72); }
+.knowledge-image-preview { display:flex; align-items:center; gap:12px; padding:10px; border:1px solid var(--line); border-radius:16px; background:rgba(255,255,255,.62); color:var(--muted); font-size:13px; }
+.knowledge-image-preview img { width:74px; height:56px; object-fit:cover; border-radius:12px; border:1px solid var(--line); background:#fff; }
+.knowledge-clear-image { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:13px; }
+.knowledge-article-form { max-width: 780px; margin: 0 auto; }
+.knowledge-article-form textarea { min-height: 320px; }
+@media (max-width: 980px) {
+  .knowledge-layout-v51 { grid-template-columns: 1fr !important; overflow:auto; }
+  .knowledge-reader-panel { padding: 20px; }
+}
+@media (max-width: 760px) {
+  .knowledge-layout-v51 { padding: 0 12px 88px !important; }
+  .knowledge-toolbar { gap:12px; }
+  .knowledge-reader-head { gap:10px; }
+  .knowledge-reader-head h3 { font-size:24px; }
+  .knowledge-reader-panel { padding:16px; border-radius:22px; }
+}
+</style>
+
+
+<style id="arti-crm-v85-analytics-view-fix">
+@media (max-width: 980px), ((hover: none) and (pointer: coarse) and (max-width: 1180px)) {
+  #analyticsView.hidden { display: none !important; }
+  #analyticsView.active-view {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    overflow: auto !important;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 92px !important;
+  }
+
+  body[data-active-view="analytics"] #chatsView,
+  body[data-active-view="analytics"] #tasksView,
+  body[data-active-view="analytics"] #reviewsView,
+  body[data-active-view="analytics"] #questionsView,
+  body[data-active-view="analytics"] #knowledgeView,
+  body[data-active-view="analytics"] #usersView,
+  body[data-active-view="analytics"] #techSettingsView,
+  body[data-active-view="analytics"] #profileView {
+    display: none !important;
+  }
+}
+</style>
+
+</head>
+<body>
+
+  <section id="loginScreen" class="login-screen">
+    <form id="loginForm" class="login-card">
+      <div class="login-mark">A</div>
+      <h1>Arti Crm</h1>
+      <p>Войдите, чтобы открыть CRM</p>
+      <input id="loginUsername" autocomplete="username" placeholder="Логин" required />
+      <input id="loginPassword" autocomplete="current-password" type="password" placeholder="Пароль" required />
+      <button id="loginSubmitBtn" type="submit">Войти</button>
+      <div id="loginError" class="login-error"></div>
+    </form>
+  </section>
+
+  <div id="appShell" class="app-shell app-locked">
+    <aside class="app-nav" aria-label="Навигация Arti CRM">
+      <div class="brand-card">
+        <div class="brand-mark" aria-hidden="true">✦</div>
+        <div class="brand-copy">
+          <h1>Arti Crm</h1>
+          <p>маркетплейсы</p>
+        </div>
+      </div>
+
+      <nav class="main-nav">
+        <button id="navChats" class="nav-btn active" type="button" aria-label="Чаты"><span class="btn-icon" aria-hidden="true">◌</span><span class="btn-label">Чаты</span></button>
+        <button id="navAnalytics" class="nav-btn" type="button" aria-label="Аналитика"><span class="btn-icon" aria-hidden="true">⌁</span><span class="btn-label">Аналитика</span></button>
+        <button id="navReviews" class="nav-btn" type="button" aria-label="Отзывы"><span class="btn-icon" aria-hidden="true">✦</span><span class="btn-label">Отзывы</span></button>
+        <button id="navQuestions" class="nav-btn" type="button" aria-label="Вопросы Ozon"><span class="btn-icon" aria-hidden="true">?</span><span class="btn-label">Вопросы</span></button>
+        <button id="navTasks" class="nav-btn" type="button" aria-label="Задачи"><span class="btn-icon" aria-hidden="true">⌄</span><span class="btn-label">Задачи</span></button>
+        <button id="navKnowledge" class="nav-btn" type="button" aria-label="База знаний"><span class="btn-icon" aria-hidden="true">≡</span><span class="btn-label">База знаний</span></button>
+        <button id="mobileLogoutBtn" class="nav-btn mobile-logout-btn" type="button" aria-label="Выйти"><span class="btn-icon" aria-hidden="true">⎋</span><span class="btn-label">Выйти</span></button>
+      </nav>
+
+      <div class="nav-spacer"></div>
+      <div class="sync-card user-card">
+        <span class="sync-dot"></span>
+        <span id="currentUserLabel" class="sync-status">—</span>
+      </div>
+      <div class="notifications-widget">
+        <button id="notificationsBtn" class="nav-btn notification-toggle" type="button" aria-label="Уведомления">
+          <span class="btn-icon" aria-hidden="true">●</span>
+          <span class="btn-label">Уведомления</span>
+          <span id="notificationsBadge" class="notification-badge hidden">0</span>
+        </button>
+        <div id="notificationsPanel" class="notifications-panel hidden" aria-live="polite">
+          <div class="notifications-head">
+            <strong>Уведомления</strong>
+            <button id="notificationsReadAllBtn" type="button" class="tiny-link">Прочитать все</button>
+          </div>
+          <div id="notificationsList" class="notifications-list">
+            <div class="notifications-empty">Новых уведомлений нет.</div>
+          </div>
+        </div>
+      </div>
+      <div class="account-nav">
+        <button id="navUsers" class="nav-btn account-nav-btn admin-only hidden" type="button" aria-label="Сотрудники"><span class="btn-icon" aria-hidden="true">◫</span><span class="btn-label">Сотрудники</span></button>
+        <button id="navTechSettings" class="nav-btn account-nav-btn admin-only hidden" type="button" aria-label="Тех. настройки"><span class="btn-icon" aria-hidden="true">⚙</span><span class="btn-label">Тех. настройки</span></button>
+        <button id="navProfile" class="nav-btn account-nav-btn" type="button" aria-label="Профиль"><span class="btn-icon" aria-hidden="true">◯</span><span class="btn-label">Профиль</span></button>
+      </div>
+      <div class="sync-card">
+        <span class="sync-dot"></span>
+        <span id="syncStatus" class="sync-status">Фоновое обновление активно</span>
+      </div>
+      <button id="refreshBtn" class="secondary refresh-btn" type="button" aria-label="Обновить"><span class="btn-icon" aria-hidden="true">↻</span><span class="btn-label">Обновить</span></button>
+      <button id="logoutBtn" class="secondary refresh-btn" type="button" aria-label="Выйти"><span class="btn-icon" aria-hidden="true">⎋</span><span class="btn-label">Выйти</span></button>
+    </aside>
+
+    <div class="workspace">
+      <main id="chatsView" class="layout view active-view">
+        <aside class="sidebar panel-card">
+          <div class="section-title-row">
+            <div>
+              <h2>Чаты</h2>
+              <p>Активные диалоги клиентов</p>
+            </div>
+            <span class="soft-counter" id="chatCountLabel">—</span>
+          </div>
+          <div class="filters">
+            <select id="marketplaceFilter" aria-label="Фильтр маркетплейса">
+              <option value="">Все</option>
+              <option value="ozon">Ozon</option>
+              <option value="yandex">Яндекс</option>
+              <option value="wildberries">WB</option>
+            </select>
+            <select id="statusFilter" aria-label="Фильтр статуса">
+              <option value="">Все активные</option>
+            </select>
+          </div>
+          <div class="chat-scope-tabs" role="tablist" aria-label="Раздел чатов">
+            <button id="activeChatsTab" class="scope-tab active" type="button"><span class="btn-label">Активные</span></button>
+            <button id="myChatsTab" class="scope-tab" type="button"><span class="btn-label">Мои чаты</span></button>
+            <button id="archiveChatsTab" class="scope-tab" type="button"><span class="btn-label">Архив</span></button>
+          </div>
+          <div id="stats" class="stats"></div>
+          <div id="chatList" class="chat-list"></div>
+        </aside>
+
+        <section class="conversation panel-card">
+          <div id="emptyState" class="empty-state">Выберите чат слева. Маркетплейсы обновляются автоматически в фоне.</div>
+          <div id="chatPanel" class="chat-panel hidden">
+            <div class="chat-header">
+              <div class="chat-heading">
+                <div class="chat-heading-row">
+                  <button id="mobileBackBtn" class="mobile-back-btn" type="button" aria-label="Назад к списку чатов">←</button>
+                  <div class="customer-avatar" id="chatAvatar" aria-hidden="true">A</div>
+                  <div class="chat-title-stack">
+                    <div class="chat-title-inline">
+                      <h2 id="chatTitle"></h2>
+                      <span id="chatMarketplaceBadge" class="marketplace-pill hidden"></span>
+                    </div>
+                    <p id="chatSubtitle"></p>
+                  </div>
+                  <button id="extraMenuBtn" class="icon-btn" type="button" aria-label="Дополнительные функции" title="Дополнительные функции">⋯</button>
+                  <div id="extraMenu" class="extra-menu hidden" role="menu">
+                    <button type="button" data-extra="tasks">Задачи по чату</button>
+                    <button type="button" data-extra="note">Внутренняя заметка</button>
+                    <button type="button" data-extra="customer">Имя клиента</button>
+                    <button id="aiGenerateMenuBtn" type="button">✨ ИИ ответ на выбранное</button>
+                  </div>
+                </div>
+              </div>
+              <div class="chat-controls">
+                <select id="chatStatus" aria-label="Статус чата">
+                  <option value="new">Новый</option>
+                </select>
+                <select id="assignedUserSelect" aria-label="Ответственный за чат"><option value="">Не назначен</option></select>
+              </div>
+            </div>
+
+            <div id="extraPanel" class="extra-panel hidden">
+              <section id="tasksSection" class="extra-section hidden">
+                <div class="section-head">
+                  <h3>Задачи по чату</h3>
+                  <button class="link-btn" type="button" data-view="tasks">Открыть все задачи</button>
+                </div>
+                <div id="taskList" class="task-list"></div>
+                <form id="taskForm" class="task-form task-form-grid">
+                  <input id="taskTitle" placeholder="Новая задача" />
+                  <select id="taskAssignee" aria-label="Исполнитель"><option value="">Не назначен</option></select>
+                  <input id="taskDueAt" type="datetime-local" aria-label="Срок выполнения" />
+                  <textarea id="taskDescription" placeholder="Описание задачи / детали"></textarea>
+                  <button type="submit">Добавить</button>
+                </form>
+              </section>
+
+              <section id="noteSection" class="extra-section hidden">
+                <div class="section-head"><h3>Внутренняя заметка</h3></div>
+                <form id="noteForm" class="note-form">
+                  <textarea id="noteText" placeholder="Эта заметка видна только внутри CRM и не уйдёт клиенту"></textarea>
+                  <button type="submit">Добавить заметку</button>
+                </form>
+              </section>
+
+              <section id="customerSection" class="extra-section hidden">
+                <div class="section-head"><h3>Имя клиента</h3></div>
+                <form id="customerForm" class="customer-form">
+                  <input id="customerNameInput" placeholder="Например: Анна" />
+                  <button type="submit">Сохранить имя</button>
+                </form>
+                <p class="muted">Если маркетплейс не передаёт имя покупателя через API, его можно указать вручную.</p>
+              </section>
+            </div>
+
+            <div id="messages" class="messages"></div>
+
+            <div id="aiSelectionBar" class="ai-selection-bar hidden">
+              <div>
+                <strong>Выбрано сообщение для ИИ</strong>
+                <span id="aiSelectedSnippet"></span>
+                <span id="aiNotice" class="ai-notice"></span>
+              </div>
+              <div class="ai-selection-actions">
+                <button id="aiGenerateBtn" type="button">✨ ИИ ответ</button>
+                <button id="aiClearSelectionBtn" class="secondary" type="button">Снять выбор</button>
+              </div>
+            </div>
+
+            <form id="messageForm" class="composer">
+              <textarea id="messageText" placeholder="Напишите сообщение клиенту..." rows="2"></textarea>
+              <button type="submit" aria-label="Отправить">➤</button>
+            </form>
+          </div>
+        </section>
+        
+
+      </main>
+
+
+      <main id="analyticsView" class="analytics-page tasks-page view hidden">
+        <section class="tasks-toolbar panel-card analytics-toolbar">
+          <div>
+            <h2>Аналитика</h2>
+            <p>Первые обращения клиентов по дням, скорость ответа, закрытия и пиковые часы.</p>
+          </div>
+          <div class="analytics-toolbar-actions">
+            <button id="analyticsRefreshBtn" class="secondary small" type="button">Обновить</button>
+          </div>
+        </section>
+
+        <section class="analytics-filters panel-card">
+          <label>Дата с<input id="analyticsDateFrom" type="date" /></label>
+          <label>Дата по<input id="analyticsDateTo" type="date" /></label>
+          <label>Маркетплейс
+            <select id="analyticsMarketplace">
+              <option value="">Все</option>
+              <option value="ozon">Ozon</option>
+              <option value="wildberries">WB</option>
+              <option value="yandex">Яндекс</option>
+            </select>
+          </label>
+          <label>Час с<input id="analyticsHourFrom" type="number" min="0" max="23" placeholder="0" /></label>
+          <label>Час по<input id="analyticsHourTo" type="number" min="0" max="23" placeholder="23" /></label>
+          <button id="analyticsWorkHoursBtn" class="secondary small" type="button">10–19</button>
+          <button id="analyticsClearHoursBtn" class="ghost small" type="button">Все часы</button>
+        </section>
+
+        <section id="analyticsDefinition" class="analytics-note panel-card">
+          <strong>Как считаем:</strong> обращение — первое входящее сообщение клиента в конкретном чате за день. Среднее время ответа считается отдельно — по каждому диалоговому блоку клиента до следующего ответа менеджера.
+        </section>
+
+        <section class="analytics-grid">
+          <article class="analytics-card panel-card">
+            <span>Всего обращений</span>
+            <strong id="analyticsTotalRequests">—</strong>
+            <small id="analyticsTotalRequestsHint">первые обращения за день</small>
+          </article>
+          <article class="analytics-card panel-card">
+            <span>Клиентов / чатов</span>
+            <strong id="analyticsUniqueChats">—</strong>
+            <small id="analyticsUniqueClientsHint">уникальные клиенты / чаты</small>
+          </article>
+          <article class="analytics-card panel-card">
+            <span>Среднее время ответа</span>
+            <strong id="analyticsAvgResponse">—</strong>
+            <small id="analyticsAvgResponseHint">по диалоговым ответам</small>
+          </article>
+          <article class="analytics-card panel-card">
+            <span>До 10:00 / после 19:00</span>
+            <strong id="analyticsOutsideHours">—</strong>
+            <small id="analyticsOutsideHoursHint">первые обращения вне окна</small>
+          </article>
+          <article class="analytics-card panel-card">
+            <span>Закрытых обращений</span>
+            <strong id="analyticsClosedChats">—</strong>
+            <small>чаты со статусом «Закрыт»</small>
+          </article>
+          <article class="analytics-card panel-card">
+            <span>Пиковый час</span>
+            <strong id="analyticsPeakHour">—</strong>
+            <small id="analyticsPeakHourHint">самая высокая активность</small>
+          </article>
+        </section>
+
+        <section class="analytics-columns">
+          <article class="panel-card analytics-panel">
+            <div class="analytics-panel-head">
+              <h3>Пиковые часы обращений</h3>
+              <p>Распределение первых обращений клиента за день по часам.</p>
+            </div>
+            <div id="analyticsHourlyChart" class="analytics-hourly-chart"></div>
+          </article>
+
+          <article class="panel-card analytics-panel">
+            <div class="analytics-panel-head">
+              <h3>Обращения по дням</h3>
+              <p>Сколько входящих сообщений и закрытых чатов было в день.</p>
+            </div>
+            <div id="analyticsDailyTable" class="analytics-table"></div>
+          </article>
+        </section>
+
+        <section class="panel-card analytics-panel">
+          <div class="analytics-panel-head">
+            <h3>Разбивка по маркетплейсам</h3>
+            <p>Помогает понять, откуда идёт основная нагрузка.</p>
+          </div>
+          <div id="analyticsMarketplaceBreakdown" class="analytics-marketplace-breakdown"></div>
+        </section>
+      </main>
+
+      <main id="reviewsView" class="reviews-page view hidden">
+        <section class="reviews-list-panel panel-card">
+          <div class="section-title-row">
+            <div>
+              <h2>Отзывы Ozon</h2>
+              <p>Список отзывов и ответы продавца</p>
+            </div>
+            <button id="syncReviewsBtn" class="secondary small" type="button">Обновить</button>
+          </div>
+          <div class="filters review-filters">
+            <select id="reviewStatusFilter" aria-label="Фильтр отзывов">
+              <option value="">Все статусы</option>
+              <option value="UNPROCESSED">Без ответа</option>
+              <option value="PROCESSED">Обработанные</option>
+            </select>
+            <label class="check-filter"><input id="reviewUnansweredFilter" type="checkbox" /> только без ответа</label>
+          </div>
+          <div id="reviewsList" class="reviews-list"></div>
+        </section>
+
+        <section class="review-detail-panel panel-card">
+          <div id="reviewEmptyState" class="empty-state">Выберите отзыв слева. Ozon-отзывы обновляются фоново, если включены в .env.</div>
+          <div id="reviewPanel" class="review-panel hidden">
+            <div class="review-header">
+              <div>
+                <h2 id="reviewTitle"></h2>
+                <p id="reviewSubtitle"></p>
+              </div>
+              <span id="reviewRating" class="rating-badge"></span>
+            </div>
+            <div id="reviewFacts" class="review-facts"></div>
+            <article class="review-body-card">
+              <h3>Текст отзыва</h3>
+              <p id="reviewText"></p>
+              <div id="reviewMedia" class="review-media"></div>
+            </article>
+            <section class="review-reply-card">
+              <h3>Ответ на отзыв</h3>
+              <div id="reviewExistingReply" class="existing-reply hidden"></div>
+              <form id="reviewReplyForm" class="review-reply-form">
+                <textarea id="reviewReplyText" placeholder="Напишите ответ на отзыв..."></textarea>
+                <div class="review-actions">
+                  <label class="check-filter"><input id="reviewMarkProcessed" type="checkbox" checked /> отметить как обработанный</label>
+                  <button type="submit">Ответить</button>
+                </div>
+              </form>
+              <button id="startChatFromReviewBtn" class="ghost" type="button">Создать чат по отзыву</button>
+              <p class="muted">Чат можно создать только если Ozon передал в отзыве номер отправления.</p>
+            </section>
+          </div>
+        </section>
+      </main>
+
+      <main id="questionsView" class="reviews-page view hidden">
+        <section class="reviews-list-panel panel-card">
+          <div class="section-title-row">
+            <div>
+              <h2>Вопросы Ozon</h2>
+              <p>Вопросы покупателей по товарам и ответы продавца</p>
+            </div>
+            <button id="syncQuestionsBtn" class="secondary small" type="button">Обновить</button>
+          </div>
+          <div class="filters review-filters">
+            <select id="questionStatusFilter" aria-label="Фильтр вопросов">
+              <option value="">Все статусы</option>
+              <option value="UNPROCESSED">Без ответа</option>
+              <option value="PROCESSED">Обработанные</option>
+            </select>
+            <label class="check-filter"><input id="questionUnansweredFilter" type="checkbox" checked /> только без ответа</label>
+          </div>
+          <div id="questionsList" class="reviews-list"></div>
+        </section>
+
+        <section class="review-detail-panel panel-card">
+          <div id="questionEmptyState" class="empty-state">Выберите вопрос слева. Ozon-вопросы обновляются фоново, если включены в .env.</div>
+          <div id="questionPanel" class="review-panel hidden">
+            <div class="review-header">
+              <div>
+                <h2 id="questionTitle"></h2>
+                <p id="questionSubtitle"></p>
+              </div>
+              <span id="questionStatusBadge" class="rating-badge"></span>
+            </div>
+            <div id="questionFacts" class="review-facts"></div>
+            <article class="review-body-card">
+              <h3>Вопрос покупателя</h3>
+              <p id="questionText"></p>
+              <a id="questionProductLink" class="ghost hidden" target="_blank" rel="noreferrer">Открыть товар</a>
+            </article>
+            <section class="review-reply-card">
+              <h3>Ответ на вопрос</h3>
+              <div id="questionExistingAnswer" class="existing-reply hidden"></div>
+              <form id="questionAnswerForm" class="review-reply-form">
+                <textarea id="questionAnswerText" placeholder="Напишите ответ на вопрос покупателя..."></textarea>
+                <div class="review-actions">
+                  <label class="check-filter"><input id="questionMarkProcessed" type="checkbox" checked /> отметить как обработанный</label>
+                  <button type="submit">Ответить</button>
+                </div>
+              </form>
+              <p class="muted">Ответ отправляется в Ozon Seller через API. После отправки CRM сохранит текст ответа локально.</p>
+            </section>
+          </div>
+        </section>
+      </main>
+
+      <main id="tasksView" class="tasks-page view hidden">
+        <section class="tasks-toolbar panel-card">
+          <div>
+            <h2>Задачи</h2>
+            <p>Все задачи по чатам в одном разделе.</p>
+          </div>
+          <div class="tasks-toolbar-controls">
+            <select id="taskBucketFilter" aria-label="Раздел задач">
+              <option value="active">Активные</option>
+              <option value="mine">Мои задачи</option>
+              <option value="done">Выполнено</option>
+              <option value="archive">Архив задач</option>
+              <option value="all">Все задачи</option>
+            </select>
+            <select id="taskStatusFilter" aria-label="Фильтр задач">
+              <option value="">Все статусы</option>
+              <option value="open">Открытые</option>
+              <option value="in_progress">В работе</option>
+              <option value="done">Выполнено</option>
+              <option value="archived">Архив</option>
+              <option value="cancelled">Отменённые</option>
+            </select>
+          </div>
+        </section>
+        <section id="allTasksList" class="all-tasks-list"></section>
+      </main>
+
+
+      <main id="knowledgeView" class="knowledge-page view hidden">
+        <section class="knowledge-panel panel-card">
+          <div class="tasks-toolbar knowledge-toolbar">
+            <div>
+              <h2>База знаний</h2>
+              <p>Инструкции, шаблоны ответов, правила возвратов и информация по товарам.</p>
+            </div>
+            <div class="knowledge-search-row">
+              <input id="knowledgeSearch" placeholder="Поиск по названию, тегам и содержанию" />
+              <button id="knowledgeNewArticleBtn" type="button">Добавить статью</button>
+            </div>
+          </div>
+          <div class="knowledge-layout knowledge-layout-v51">
+            <aside class="knowledge-categories knowledge-library">
+              <div class="knowledge-left-head">
+                <div>
+                  <div class="knowledge-mini-head">Разделы и статьи</div>
+                  <p class="knowledge-hint">Выберите раздел, затем откройте статью.</p>
+                </div>
+              </div>
+              <div id="knowledgeCategories" class="knowledge-category-list knowledge-tree"></div>
+              <form id="knowledgeCategoryForm" class="knowledge-category-form">
+                <div class="knowledge-form-caption">Быстрое добавление раздела</div>
+                <input id="knowledgeCategoryTitle" placeholder="Новый раздел" />
+                <button class="small secondary" type="submit">Добавить раздел</button>
+              </form>
+              <div id="knowledgeArticlesList" class="knowledge-articles-list hidden"></div>
+            </aside>
+            <section class="knowledge-editor knowledge-reader-panel">
+              <div id="knowledgeEmpty" class="knowledge-empty-state">
+                <h3>Выберите статью</h3>
+                <p class="muted">Слева откройте раздел и выберите инструкцию для чтения. Новую статью можно создать кнопкой сверху.</p>
+              </div>
+
+              <article id="knowledgeReader" class="knowledge-reader hidden">
+                <div class="knowledge-reader-head">
+                  <div>
+                    <div id="knowledgeReaderCategory" class="knowledge-reader-meta"></div>
+                    <h3 id="knowledgeReaderTitle"></h3>
+                    <div id="knowledgeReaderTags" class="knowledge-reader-tags"></div>
+                  </div>
+                  <div class="knowledge-reader-actions">
+                    <button id="knowledgeBackToListBtn" class="secondary small knowledge-mobile-back hidden" type="button">← К списку</button>
+                    <button id="knowledgeEditArticleBtn" class="icon-btn knowledge-edit-icon" type="button" title="Редактировать статью" aria-label="Редактировать статью">✎</button>
+                  </div>
+                </div>
+                <img id="knowledgeReaderImage" class="knowledge-reader-image hidden" alt="Изображение статьи" />
+                <div id="knowledgeReaderContent" class="knowledge-reader-content"></div>
+              </article>
+
+              <form id="knowledgeArticleForm" class="knowledge-article-form hidden">
+                <div class="knowledge-form-head">
+                  <h3 id="knowledgeFormTitle">Новая статья</h3>
+                  <div class="knowledge-form-actions">
+                    <button id="knowledgeBackFromEditorBtn" class="secondary small knowledge-mobile-back hidden" type="button">← К списку</button>
+                    <button id="knowledgeCancelEditBtn" class="secondary small" type="button">Отмена</button>
+                  </div>
+                </div>
+                <input id="knowledgeArticleTitle" placeholder="Название статьи" />
+                <select id="knowledgeArticleCategory"><option value="">Без раздела</option></select>
+                <input id="knowledgeArticleTags" placeholder="Теги: возврат, доставка, гарантия" />
+                <label class="knowledge-image-field">
+                  <span>Изображение к статье</span>
+                  <input id="knowledgeArticleImageFile" type="file" accept="image/*" />
+                </label>
+                <input id="knowledgeArticleImageUrl" placeholder="Или ссылка на изображение" />
+                <div id="knowledgeImagePreview" class="knowledge-image-preview hidden"></div>
+                <label class="knowledge-clear-image hidden" id="knowledgeClearImageLabel"><input id="knowledgeClearImage" type="checkbox" /> Удалить изображение из статьи</label>
+                <textarea id="knowledgeArticleContent" placeholder="Текст инструкции, шаблон ответа, важные нюансы..."></textarea>
+                <button type="submit">Сохранить статью</button>
+                <p class="muted">Рекомендуемые разделы: возвраты, доставка, гарантия, размеры, карточки товаров, конфликтные ситуации, шаблоны ответов.</p>
+              </form>
+            </section>
+          </div>
+        </section>
+      </main>
+
+      <main id="usersView" class="tasks-page view hidden">
+        <section class="tasks-toolbar panel-card">
+          <div>
+            <h2>Сотрудники</h2>
+            <p>Создание сотрудников и управление доступом.</p>
+          </div>
+        </section>
+        <section class="settings-grid">
+          <div class="settings-card panel-card">
+            <h3>Добавить сотрудника</h3>
+            <form id="userCreateForm" class="settings-form">
+              <input id="newUserUsername" autocomplete="off" placeholder="Логин" required />
+              <input id="newUserDisplayName" autocomplete="off" placeholder="Имя сотрудника" />
+              <input id="newUserPassword" autocomplete="new-password" type="password" placeholder="Пароль" required />
+              <select id="newUserRole">
+                <option value="manager">Менеджер</option>
+                <option value="viewer">Наблюдатель</option>
+                <option value="admin">Администратор</option>
+              </select>
+              <button type="submit">Создать сотрудника</button>
+            </form>
+          </div>
+          <div class="settings-card panel-card">
+            <h3>Список сотрудников</h3>
+            <div id="usersList" class="users-list"></div>
+          </div>
+        </section>
+      </main>
+
+
+      <main id="techSettingsView" class="tasks-page view hidden">
+        <section class="tasks-toolbar panel-card tech-settings-hero">
+          <div>
+            <h2>Технические настройки</h2>
+            <p>Статусы чатов для фильтрации и работы менеджеров.</p>
+          </div>
+          <button id="saveChatSettingsBtn" type="button">Сохранить все изменения</button>
+        </section>
+
+        <section class="tech-settings-page">
+          <div class="settings-card panel-card chat-status-settings-card">
+            <div class="settings-card-head">
+              <div>
+                <h3>Статусы чатов</h3>
+                <p class="muted">Добавляйте свои статусы, меняйте порядок, цвет и активность. Воронки временно скрыты.</p>
+              </div>
+            </div>
+
+            <form id="chatStatusForm" class="chat-status-create-form">
+              <input id="chatStatusTitle" placeholder="Новый статус, например: Ожидает видео" required />
+              <select id="chatStatusColor" aria-label="Цвет статуса">
+                <option value="orange">🟠 Оранжевый</option>
+                <option value="blue">🔵 Синий</option>
+                <option value="purple">🟣 Фиолетовый</option>
+                <option value="green">🟢 Зелёный</option>
+                <option value="red">🔴 Красный</option>
+                <option value="gray">⚪ Серый</option>
+              </select>
+              <input id="chatStatusSort" type="number" placeholder="Порядок" value="0" />
+              <button type="submit">Добавить статус</button>
+            </form>
+
+            <div class="status-settings-header" aria-hidden="true">
+              <span>Название</span>
+              <span>Цвет</span>
+              <span>Порядок</span>
+              <span>Активен</span>
+              <span></span>
+            </div>
+            <div id="chatStatusesList" class="status-settings-list"></div>
+
+            <div class="settings-actions-bottom">
+              <button id="saveChatSettingsBottomBtn" type="button">Сохранить все изменения</button>
+              <p class="muted">Кнопка сохранит сразу все изменённые статусы. Удаление статуса применяется сразу после подтверждения.</p>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <main id="profileView" class="tasks-page view hidden">
+        <section class="tasks-toolbar panel-card">
+          <div>
+            <h2>Профиль</h2>
+            <p>Изменение вашего логина, имени и пароля.</p>
+          </div>
+        </section>
+        <section class="settings-grid one-col">
+          <div class="settings-card panel-card">
+            <h3>Мои данные</h3>
+            <form id="profileForm" class="settings-form">
+              <label>Логин<input id="profileUsername" autocomplete="username" /></label>
+              <label>Имя<input id="profileDisplayName" autocomplete="name" /></label>
+              <label>Текущий пароль<input id="profileCurrentPassword" type="password" autocomplete="current-password" placeholder="Нужен только при смене пароля" /></label>
+              <label>Новый пароль<input id="profileNewPassword" type="password" autocomplete="new-password" placeholder="Минимум 6 символов" /></label>
+              <button type="submit">Сохранить профиль</button>
+              <p class="muted">Логин меняется сразу. Пароль изменится только если указать текущий и новый пароль.</p>
+            </form>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <div id="knowledgeModal" class="knowledge-modal hidden" aria-hidden="true">
+    <div class="knowledge-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="knowledgeModalTitle">
+      <div class="knowledge-modal-topbar">
+        <button id="knowledgeModalBackBtn" class="knowledge-modal-nav" type="button" aria-label="Назад к списку">←</button>
+        <div class="knowledge-modal-toolbar-actions">
+          <button id="knowledgeModalEditBtn" class="secondary small" type="button">Редактировать</button>
+          <button id="knowledgeModalCloseBtn" class="knowledge-modal-close" type="button" aria-label="Закрыть">✕</button>
+        </div>
+      </div>
+      <div class="knowledge-modal-body">
+        <div id="knowledgeModalCategory" class="knowledge-reader-meta"></div>
+        <h3 id="knowledgeModalTitle"></h3>
+        <div id="knowledgeModalTags" class="knowledge-reader-tags"></div>
+        <img id="knowledgeModalImage" class="knowledge-reader-image hidden" alt="Изображение статьи" />
+        <div id="knowledgeModalContent" class="knowledge-reader-content"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js?v=91"></script>
+</body>
+</html>
