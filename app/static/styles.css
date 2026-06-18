@@ -5082,3 +5082,389 @@ button:not(.nav-btn):not(.scope-tab):not(.icon-btn):not(.mobile-back-btn):not(#c
   font-size: 13px;
   font-weight: 700;
 }
+
+
+/* v103: analytics visual polish */
+.analytics-filters {
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(32, 41, 57, .06);
+  background: rgba(255,255,255,.62);
+  box-shadow: 0 8px 24px rgba(27, 35, 53, .04);
+  border-radius: 22px;
+}
+
+.analytics-filters label {
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.analytics-note {
+  padding: 14px 18px;
+  background: rgba(255,255,255,.58);
+  border: 1px solid rgba(32, 41, 57, .06);
+  border-radius: 20px;
+  box-shadow: 0 8px 24px rgba(27, 35, 53, .04);
+}
+
+.analytics-grid {
+  gap: 14px;
+}
+
+.analytics-card {
+  min-height: 136px;
+  padding: 18px;
+  border: 1px solid rgba(32, 41, 57, .05);
+  background: linear-gradient(180deg, rgba(255,255,255,.92), rgba(255,255,255,.78));
+  box-shadow: 0 10px 28px rgba(27, 35, 53, .05);
+}
+
+.analytics-card span {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  letter-spacing: 0;
+  line-height: 1.4;
+}
+
+.analytics-card strong {
+  display: block;
+  font-size: clamp(18px, 2vw, 24px);
+  font-weight: 700;
+  letter-spacing: -.03em;
+  line-height: 1.1;
+  color: var(--text);
+}
+
+.analytics-card small {
+  display: block;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.analytics-columns {
+  gap: 16px;
+}
+
+.analytics-panel {
+  padding: 18px;
+  border: 1px solid rgba(32, 41, 57, .05);
+  background: linear-gradient(180deg, rgba(255,255,255,.92), rgba(255,255,255,.82));
+  box-shadow: 0 10px 28px rgba(27, 35, 53, .05);
+}
+
+.analytics-panel-head {
+  align-items: baseline;
+  gap: 18px;
+  margin-bottom: 16px;
+}
+
+.analytics-panel-head h3 {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -.02em;
+  line-height: 1.3;
+  color: var(--text);
+}
+
+.analytics-panel-head p {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.analytics-hourly-chart {
+  gap: 8px;
+}
+
+.analytics-hour-row {
+  grid-template-columns: 56px minmax(0, 1fr) 44px;
+  gap: 12px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 14px;
+  background: rgba(248, 250, 252, .72);
+  border: 1px solid rgba(32, 41, 57, .05);
+}
+
+.analytics-hour-button {
+  transition: background .15s ease, border-color .15s ease, transform .15s ease;
+}
+
+.analytics-hour-button:hover {
+  background: rgba(255,255,255,.94);
+  border-color: rgba(255,122,61,.14);
+  transform: translateY(-1px);
+}
+
+.analytics-hour-button:hover .analytics-hour-track {
+  box-shadow: none;
+}
+
+.analytics-hour-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.analytics-hour-track,
+.analytics-marketplace-track {
+  height: 9px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(233, 238, 246, .95), rgba(240, 243, 248, .85));
+  overflow: hidden;
+}
+
+.analytics-hour-fill {
+  background: linear-gradient(90deg, #ffd8be 0%, #ffbe91 50%, #f2a865 100%);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.26);
+}
+
+.analytics-hour-value {
+  text-align: right;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.analytics-table {
+  border: 1px solid rgba(32, 41, 57, .05);
+  border-radius: 18px;
+  background: rgba(255,255,255,.72);
+}
+
+.analytics-table table {
+  font-size: 13px;
+}
+
+.analytics-table th,
+.analytics-table td {
+  padding: 12px 12px;
+  white-space: nowrap;
+  vertical-align: top;
+}
+
+.analytics-table th {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .03em;
+  color: var(--muted);
+}
+
+.analytics-table td {
+  color: var(--text);
+}
+
+.analytics-table tbody tr:hover {
+  background: rgba(255, 122, 61, .04);
+}
+
+.analytics-marketplace-breakdown {
+  gap: 10px;
+}
+
+.analytics-marketplace-row {
+  grid-template-columns: 108px minmax(0, 1fr) auto;
+  gap: 14px;
+  padding: 10px 0;
+}
+
+.analytics-marketplace-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.analytics-marketplace-fill {
+  background: linear-gradient(90deg, #ffd8be 0%, #ffbe91 52%, #f2a865 100%);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.26);
+}
+
+.analytics-empty {
+  padding: 16px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.analytics-drilldown-summary {
+  margin: 10px 0 14px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255,248,242,.72);
+  border: 1px solid rgba(255,122,61,.10);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.analytics-excluded-details {
+  margin-top: 16px;
+  border-top: 1px solid rgba(32, 41, 57, .07);
+  padding-top: 14px;
+}
+
+.analytics-excluded-details > summary {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.analytics-drilldown-table td:nth-child(4) {
+  white-space: normal;
+  min-width: 280px;
+}
+
+@media (max-width: 1180px) {
+  .analytics-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .analytics-card strong {
+    font-size: 22px;
+  }
+}
+
+@media (max-width: 760px) {
+  .analytics-filters {
+    gap: 10px;
+    padding: 14px;
+    border-radius: 18px;
+  }
+  .analytics-note,
+  .analytics-card,
+  .analytics-panel,
+  .analytics-table {
+    border-radius: 16px;
+  }
+  .analytics-card {
+    min-height: 120px;
+    padding: 16px;
+  }
+  .analytics-card strong {
+    font-size: 20px;
+  }
+  .analytics-panel-head h3 {
+    font-size: 15px;
+  }
+  .analytics-hour-row {
+    grid-template-columns: 50px minmax(0, 1fr) 36px;
+    gap: 10px;
+    padding: 6px;
+  }
+  .analytics-marketplace-row {
+    grid-template-columns: 84px minmax(0, 1fr) auto;
+    gap: 10px;
+  }
+}
+
+
+/* v103 patch: remove dark analytics colors and reduce KPI numbers */
+.analytics-page .analytics-card strong,
+#analyticsTotalRequests,
+#analyticsUniqueChats,
+#analyticsAvgResponse,
+#analyticsOutsideHours,
+#analyticsClosedChats,
+#analyticsPeakHour {
+  font-size: 20px !important;
+  line-height: 1.2 !important;
+  letter-spacing: -0.02em !important;
+  font-weight: 700 !important;
+  color: #273246 !important;
+}
+
+#analyticsPeakHour {
+  font-size: 22px !important;
+}
+
+.analytics-page .analytics-card {
+  min-height: 118px !important;
+  padding: 16px !important;
+}
+
+.analytics-page .analytics-card span {
+  font-size: 12px !important;
+  line-height: 1.35 !important;
+  font-weight: 700 !important;
+  color: #6d7483 !important;
+}
+
+.analytics-page .analytics-card small {
+  font-size: 12px !important;
+  line-height: 1.45 !important;
+  color: #7b8494 !important;
+}
+
+.analytics-page .analytics-hour-row,
+.analytics-page button.analytics-hour-row,
+.analytics-page .analytics-hour-button {
+  background: rgba(255, 255, 255, 0.72) !important;
+  border: 1px solid rgba(32, 41, 57, 0.055) !important;
+  box-shadow: none !important;
+  color: #273246 !important;
+}
+
+.analytics-page .analytics-hour-row:hover,
+.analytics-page button.analytics-hour-row:hover,
+.analytics-page .analytics-hour-button:hover {
+  background: rgba(255, 248, 242, 0.92) !important;
+  border-color: rgba(255, 122, 61, 0.13) !important;
+  box-shadow: 0 6px 18px rgba(27, 35, 53, 0.04) !important;
+}
+
+.analytics-page .analytics-hour-track,
+.analytics-page .analytics-marketplace-track {
+  height: 8px !important;
+  background: #f0f3f8 !important;
+  background-image: none !important;
+  border: 1px solid rgba(32, 41, 57, 0.04) !important;
+  box-shadow: inset 0 1px 2px rgba(27, 35, 53, 0.025) !important;
+}
+
+.analytics-page .analytics-hour-fill,
+.analytics-page .analytics-marketplace-fill {
+  background: #ffbf91 !important;
+  background-image: linear-gradient(90deg, #ffd7be 0%, #ffc192 60%, #f4ab70 100%) !important;
+  box-shadow: none !important;
+}
+
+.analytics-page .analytics-hour-label,
+.analytics-page .analytics-hour-value {
+  color: #8a93a3 !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+}
+
+.analytics-page .analytics-panel-head h3 {
+  font-size: 16px !important;
+  font-weight: 700 !important;
+  color: #273246 !important;
+}
+
+.analytics-page .analytics-panel-head p,
+.analytics-page .analytics-note,
+.analytics-page .analytics-drilldown-summary {
+  font-size: 12px !important;
+  color: #7b8494 !important;
+}
+
+.analytics-page .analytics-table th {
+  color: #8a93a3 !important;
+}
+
+.analytics-page .analytics-table td {
+  color: #334155 !important;
+}
+
+@media (max-width: 760px) {
+  .analytics-page .analytics-card strong,
+  #analyticsTotalRequests,
+  #analyticsUniqueChats,
+  #analyticsAvgResponse,
+  #analyticsOutsideHours,
+  #analyticsClosedChats,
+  #analyticsPeakHour {
+    font-size: 19px !important;
+  }
+}

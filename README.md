@@ -2,7 +2,7 @@
 
 Локальная CRM для обработки чатов, вопросов, отзывов и базы знаний по маркетплейсам.
 
-Текущая сборка: `v102_analytics_cte_bindings_fix_2026-06-18`.
+Текущая сборка: `v103_analytics_ui_polish_2026-06-18`.
 
 ## Быстрый запуск
 
@@ -172,3 +172,8 @@ CRM_NOTIFICATION_RECENT_MESSAGE_HOURS=24
 ## v102
 
 Исправлена ошибка `sqlite3.ProgrammingError: Incorrect number of bindings supplied` в основном endpoint `/api/analytics/chats`.
+
+
+## v103
+
+Обновлён визуальный стиль раздела «Аналитика»: светлая палитра, уменьшены цифры KPI, выровнена типографика, осветлены графики и таблицы.

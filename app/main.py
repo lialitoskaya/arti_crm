@@ -28,9 +28,9 @@ from app.schemas import AiReplyCreate, ChatCreate, ChatUpdate, InternalNoteCreat
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
-CRM_BUILD_VERSION = "v102_analytics_cte_bindings_fix_2026-06-18"
+CRM_BUILD_VERSION = "v103_analytics_ui_polish_2026-06-18"
 
-app = FastAPI(title="Arti CRM", version="1.0.2")
+app = FastAPI(title="Arti CRM", version="1.0.3")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 AUTH_COOKIE_NAME = "arti_crm_session"
