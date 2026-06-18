@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from app import repository as repo
-from app.services.analytics import build_chat_analytics
+from app.services.analytics import build_chat_analytics, build_chat_analytics_drilldown
 from app.connectors.mock import MockConnector
 from app.connectors.ozon import OzonConnector
 from app.connectors.wildberries import WildberriesConnector
@@ -28,9 +28,9 @@ from app.schemas import AiReplyCreate, ChatCreate, ChatUpdate, InternalNoteCreat
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
-CRM_BUILD_VERSION = "v99_analytics_exclude_marketplace_bots_2026-06-18"
+CRM_BUILD_VERSION = "v102_analytics_cte_bindings_fix_2026-06-18"
 
-app = FastAPI(title="Arti CRM", version="0.99.0")
+app = FastAPI(title="Arti CRM", version="1.0.2")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 AUTH_COOKIE_NAME = "arti_crm_session"
@@ -2394,6 +2394,30 @@ def chat_analytics(
         hour_from=hour_from,
         hour_to=hour_to,
         tz_offset_minutes=tz_offset_minutes,
+    )
+
+
+@app.get("/api/analytics/chats/drilldown")
+def chat_analytics_drilldown(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    marketplace: str | None = None,
+    hour_from: int | None = None,
+    hour_to: int | None = None,
+    tz_offset_minutes: int | None = None,
+    limit: int = 1000,
+    include_excluded: bool = True,
+) -> dict[str, Any]:
+    """Audit rows used by hourly chat analytics."""
+    return build_chat_analytics_drilldown(
+        date_from=date_from,
+        date_to=date_to,
+        marketplace=marketplace,
+        hour_from=hour_from,
+        hour_to=hour_to,
+        tz_offset_minutes=tz_offset_minutes,
+        limit=limit,
+        include_excluded=include_excluded,
     )
 
 

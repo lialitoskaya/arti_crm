@@ -5027,3 +5027,58 @@ button:not(.nav-btn):not(.scope-tab):not(.icon-btn):not(.mobile-back-btn):not(#c
   }
   .notification-body { padding-left: 0; }
 }
+
+
+/* v100: analytics hourly drilldown */
+.analytics-drilldown-panel {
+  margin-top: 16px;
+}
+
+.analytics-drilldown-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.analytics-drilldown-summary {
+  margin: 8px 0 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.analytics-hour-button {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  box-shadow: none !important;
+  transform: none !important;
+  color: inherit;
+  cursor: pointer;
+}
+
+.analytics-hour-button:hover .analytics-hour-track {
+  box-shadow: inset 0 0 0 1px rgba(255, 122, 61, 0.18);
+}
+
+.analytics-drilldown-table table {
+  min-width: 920px;
+}
+
+.analytics-drilldown-table td:nth-child(4) {
+  max-width: 380px;
+}
+
+.analytics-excluded-details {
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.analytics-excluded-details > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}

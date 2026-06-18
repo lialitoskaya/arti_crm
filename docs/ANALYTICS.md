@@ -135,3 +135,15 @@ daily[].inbound_messages         # входящие сообщения по дн
 - среднее время ответа.
 
 Исключение выполняется по `author` и `raw_json`: `support`, `system`, `bot`, `notificationuser`, `systemuser`, `поддержка`, `система`, `бот` и похожие marketplace-маркеры.
+
+
+## Drill-down по часам
+
+Для проверки расчёта добавлен endpoint:
+
+`GET /api/analytics/chats/drilldown`
+
+Он возвращает:
+- `items` — конкретные сообщения, которые входят в отчёт как первые обращения клиента за день;
+- `hourly` — эти же строки, сгруппированные по часам;
+- `excluded_service_items` — служебные сообщения, которые были исключены из KPI.

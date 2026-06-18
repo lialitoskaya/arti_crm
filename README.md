@@ -2,7 +2,7 @@
 
 Локальная CRM для обработки чатов, вопросов, отзывов и базы знаний по маркетплейсам.
 
-Текущая сборка: `v99_analytics_exclude_marketplace_bots_2026-06-18`.
+Текущая сборка: `v102_analytics_cte_bindings_fix_2026-06-18`.
 
 ## Быстрый запуск
 
@@ -154,3 +154,21 @@ CRM_NOTIFICATION_RECENT_MESSAGE_HOURS=24
 - пиковые часы;
 - сообщения до 10:00 / после 19:00;
 - среднее время ответа.
+
+
+## Проверка аналитики по строкам
+
+В разделе «Аналитика» добавлен блок «Проверка расчёта по часам». Он показывает конкретные чаты и сообщения, которые попали в отчёт как первые обращения клиента за день. Из строки можно открыть чат.
+
+Также доступен API:
+`GET /api/analytics/chats/drilldown`
+
+
+## v101
+
+Исправлена ошибка `sqlite3.ProgrammingError: Incorrect number of bindings supplied` в endpoint `/api/analytics/chats/drilldown`.
+
+
+## v102
+
+Исправлена ошибка `sqlite3.ProgrammingError: Incorrect number of bindings supplied` в основном endpoint `/api/analytics/chats`.

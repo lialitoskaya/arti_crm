@@ -2161,8 +2161,12 @@ function setAnalyticsText(id, value) {
 async function loadAnalytics() {
   setupAnalyticsDefaults();
   const query = analyticsQueryString();
-  const data = await api(`/api/analytics/chats?${query}`);
+  const [data, drilldown] = await Promise.all([
+    api(`/api/analytics/chats?${query}`),
+    api(`/api/analytics/chats/drilldown?${query}&limit=1000&include_excluded=1`),
+  ]);
   renderAnalytics(data);
+  renderAnalyticsDrilldown(drilldown);
   analyticsLoadedOnce = true;
 }
 
@@ -2207,15 +2211,114 @@ function renderAnalyticsHourly(rows) {
     const count = Number(row.requests || row.inbound_messages || 0);
     const width = Math.max(2, Math.round((count / max) * 100));
     return `
-      <div class="analytics-hour-row">
+      <button class="analytics-hour-row analytics-hour-button" type="button" data-analytics-hour="${Number(row.hour)}">
         <div class="analytics-hour-label">${escapeHtml(String(row.hour).padStart(2, '0'))}:00</div>
         <div class="analytics-hour-track" title="${escapeHtml(hourLabel(row.hour))}">
           <div class="analytics-hour-fill" style="width:${width}%"></div>
         </div>
         <div class="analytics-hour-value">${count}</div>
-      </div>
+      </button>
     `;
   }).join('') || '<div class="analytics-empty">Нет данных за выбранный период.</div>';
+  el.querySelectorAll('[data-analytics-hour]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const hour = Number(btn.dataset.analyticsHour);
+      const from = $('analyticsHourFrom');
+      const to = $('analyticsHourTo');
+      if (from) from.value = String(hour);
+      if (to) to.value = String(hour);
+      loadAnalytics().catch(err => notify('Ошибка аналитики', String(err.message || err)));
+      $('analyticsDrilldownTable')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
+}
+
+function renderAnalyticsDrilldown(data) {
+  const summaryEl = $('analyticsDrilldownSummary');
+  const tableEl = $('analyticsDrilldownTable');
+  const excludedEl = $('analyticsExcludedTable');
+  if (!tableEl) return;
+
+  const items = data?.items || [];
+  const excluded = data?.excluded_service_items || [];
+  const filters = data?.filters || {};
+  if (summaryEl) {
+    const hoursText = filters.hour_from !== null && filters.hour_from !== undefined
+      ? ` · час ${String(filters.hour_from).padStart(2, '0')}:00${filters.hour_to !== filters.hour_from ? `–${String(filters.hour_to).padStart(2, '0')}:59` : ''}`
+      : '';
+    summaryEl.textContent = `В отчёт входит строк: ${items.length}${hoursText}. Исключено служебных сообщений: ${data?.excluded_service_count || 0}.`;
+  }
+
+  if (!items.length) {
+    tableEl.innerHTML = '<div class="analytics-empty">Нет строк, которые входят в расчёт по текущим фильтрам.</div>';
+  } else {
+    tableEl.innerHTML = `
+      <table>
+        <thead>
+          <tr>
+            <th>Дата/час</th>
+            <th>Маркетплейс</th>
+            <th>Клиент / чат</th>
+            <th>Сообщение</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${items.map(item => `
+            <tr>
+              <td>${escapeHtml(item.local_datetime || item.created_at || '')}<br><small>${String(item.local_hour ?? '').padStart(2, '0')}:00</small></td>
+              <td>${escapeHtml(marketplaceLabel(item.marketplace))}</td>
+              <td>
+                <strong>${escapeHtml(item.customer_label || item.customer_name || 'Клиент')}</strong><br>
+                <small>ID чата: ${escapeHtml(String(item.chat_id || ''))}${item.order_id ? ` · заказ ${escapeHtml(String(item.order_id))}` : ''}</small>
+              </td>
+              <td>${escapeHtml(item.text_preview || '')}</td>
+              <td><button class="secondary small" type="button" data-open-analytics-chat="${Number(item.chat_id)}">Открыть</button></td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+    tableEl.querySelectorAll('[data-open-analytics-chat]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const chatId = Number(btn.dataset.openAnalyticsChat);
+        showView('chats');
+        await loadChats();
+        await openChat(chatId);
+      });
+    });
+  }
+
+  if (excludedEl) {
+    if (!excluded.length) {
+      excludedEl.innerHTML = '<div class="analytics-empty">Нет исключённых служебных сообщений за выбранный период.</div>';
+    } else {
+      excludedEl.innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th>Дата/час</th>
+              <th>Маркетплейс</th>
+              <th>Чат</th>
+              <th>Автор</th>
+              <th>Текст</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${excluded.map(item => `
+              <tr>
+                <td>${escapeHtml(item.created_at || '')}<br><small>${String(item.local_hour ?? '').padStart(2, '0')}:00</small></td>
+                <td>${escapeHtml(marketplaceLabel(item.marketplace))}</td>
+                <td>${escapeHtml(item.customer_label || '—')}<br><small>ID ${escapeHtml(String(item.chat_id || ''))}</small></td>
+                <td>${escapeHtml(item.author || '')}</td>
+                <td>${escapeHtml(item.text_preview || '')}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+  }
 }
 
 function renderAnalyticsDaily(rows) {
@@ -2600,6 +2703,7 @@ function init() {
     showView(targetView);
   });
   bind('analyticsRefreshBtn', 'click', loadAnalytics);
+  bind('analyticsDrilldownRefreshBtn', 'click', loadAnalytics);
   ['analyticsDateFrom', 'analyticsDateTo', 'analyticsMarketplace', 'analyticsHourFrom', 'analyticsHourTo'].forEach((id) => {
     const el = $(id);
     if (el && !el.dataset.boundAnalytics) {

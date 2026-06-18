@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Arti CRM</title>
-  <link rel="stylesheet" href="/static/styles.css?v=99" />
+  <link rel="stylesheet" href="/static/styles.css?v=102" />
   <style id="arti-crm-inline-style">
 /* Inline fallback v43: responsive CSS is embedded so narrow screens never open unstyled. */
 :root {
@@ -2164,6 +2164,24 @@ html, body { max-width: 100%; }
           </div>
           <div id="analyticsMarketplaceBreakdown" class="analytics-marketplace-breakdown"></div>
         </section>
+
+        <section class="panel-card analytics-panel analytics-drilldown-panel">
+          <div class="analytics-panel-head">
+            <div>
+              <h3>Проверка расчёта по часам</h3>
+              <p>Здесь видны конкретные чаты и сообщения, которые попали в отчёт как первые обращения клиента за день.</p>
+            </div>
+            <div class="analytics-drilldown-actions">
+              <button id="analyticsDrilldownRefreshBtn" class="secondary small" type="button">Обновить строки</button>
+            </div>
+          </div>
+          <div id="analyticsDrilldownSummary" class="analytics-drilldown-summary">—</div>
+          <div id="analyticsDrilldownTable" class="analytics-table analytics-drilldown-table"></div>
+          <details class="analytics-excluded-details">
+            <summary>Служебные сообщения, исключённые из аналитики</summary>
+            <div id="analyticsExcludedTable" class="analytics-table"></div>
+          </details>
+        </section>
       </main>
 
       <main id="reviewsView" class="reviews-page view hidden">
@@ -2500,6 +2518,6 @@ html, body { max-width: 100%; }
 
   <div id="notificationToasts" class="notification-toast-stack" aria-live="polite"></div>
 
-  <script src="/static/app.js?v=99"></script>
+  <script src="/static/app.js?v=102"></script>
 </body>
 </html>

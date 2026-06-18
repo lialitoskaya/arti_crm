@@ -7,7 +7,7 @@ from typing import Any
 from app.db import get_connection
 
 
-# Analytics v99
+# Analytics v102
 # -----------------------------------------------------------------------------
 # Business definition for "обращение": first real client inbound message per chat per
 # local day. Marketplace bot/support/system messages are excluded. If a client writes again on the same day, it is not counted as a new
@@ -576,6 +576,204 @@ def _top_hours(hourly: list[dict[str, Any]]) -> tuple[dict[str, Any] | None, lis
         return None, []
     top = [row for row in hourly if int(row.get("requests") or 0) == max_count][:5]
     return top[0], top
+
+
+def build_chat_analytics_drilldown(
+    *,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    marketplace: str | None = None,
+    hour_from: int | None = None,
+    hour_to: int | None = None,
+    tz_offset_minutes: int | None = None,
+    limit: int = 1000,
+    include_excluded: bool = True,
+) -> dict[str, Any]:
+    """Rows that are counted by hourly analytics.
+
+    This is an audit/drill-down endpoint for the dashboard:
+    - `items` are the exact first-daily customer requests included in analytics.
+    - `excluded_service_items` are inbound-looking marketplace bot/support/system
+      messages excluded from KPI, so operators can verify filtering.
+    """
+    offset = int(
+        tz_offset_minutes
+        if tz_offset_minutes is not None
+        else _env_int("CRM_ANALYTICS_TZ_OFFSET_MINUTES", 180, minimum=-720, maximum=840)
+    )
+    default_from, default_to = _period_defaults(offset)
+    start = _date_or_default(date_from, default_from)
+    end = _date_or_default(date_to, default_to)
+    if start > end:
+        start, end = end, start
+
+    market = str(marketplace or "").strip().lower() or None
+    h_from = _hour_or_none(hour_from)
+    h_to = _hour_or_none(hour_to)
+    modifier = _tz_modifier(offset)
+    safe_limit = max(1, min(int(limit or 1000), 5000))
+
+    params: list[Any] = [modifier, modifier, modifier, modifier, modifier, start, end]
+    marketplace_sql = _marketplace_filter_sql("c", market, params)
+    hour_sql = _hour_filter_sql("local_hour", h_from, h_to, params)
+
+    request_sql = f"""
+        WITH inbound_ranked AS (
+            SELECT
+                m.id AS message_id,
+                m.chat_id,
+                m.created_at,
+                m.text,
+                m.author,
+                c.marketplace,
+                c.external_chat_id,
+                c.customer_name,
+                c.customer_public_id,
+                c.order_id,
+                c.status AS chat_status,
+                c.assigned_to,
+                c.assigned_user_id,
+                COALESCE(NULLIF(c.customer_name, ''), NULLIF(c.customer_public_id, ''), c.external_chat_id, 'Клиент') AS customer_label,
+                COALESCE(NULLIF(c.customer_public_id, ''), c.marketplace || ':' || c.external_chat_id) AS client_key,
+                date(datetime(m.created_at, ?)) AS local_day,
+                CAST(strftime('%H', datetime(m.created_at, ?)) AS INTEGER) AS local_hour,
+                datetime(m.created_at, ?) AS local_datetime,
+                ROW_NUMBER() OVER (
+                    PARTITION BY m.chat_id, date(datetime(m.created_at, ?))
+                    ORDER BY julianday(m.created_at), m.id
+                ) AS daily_inbound_rank
+            FROM messages m
+            JOIN chats c ON c.id = m.chat_id
+            WHERE m.direction='inbound'
+              AND {_analytics_client_message_sql('m')}
+              AND date(datetime(m.created_at, ?)) BETWEEN ? AND ?
+              {marketplace_sql}
+        )
+        SELECT *
+        FROM inbound_ranked
+        WHERE daily_inbound_rank=1
+          {hour_sql}
+        ORDER BY local_day DESC, local_hour DESC, datetime(created_at) DESC, message_id DESC
+        LIMIT ?
+    """
+    request_params = params + [safe_limit]
+
+    with get_connection() as conn:
+        rows = conn.execute(request_sql, request_params).fetchall()
+        items = []
+        for row in rows:
+            text = str(row["text"] or "")
+            items.append({
+                "message_id": int(row["message_id"]),
+                "chat_id": int(row["chat_id"]),
+                "marketplace": row["marketplace"],
+                "external_chat_id": row["external_chat_id"],
+                "customer_name": row["customer_name"],
+                "customer_public_id": row["customer_public_id"],
+                "customer_label": row["customer_label"],
+                "order_id": row["order_id"],
+                "chat_status": row["chat_status"],
+                "created_at": row["created_at"],
+                "local_datetime": row["local_datetime"],
+                "local_day": row["local_day"],
+                "local_hour": int(row["local_hour"]) if row["local_hour"] is not None else None,
+                "text_preview": text[:240],
+                "author": row["author"],
+            })
+
+        excluded_items: list[dict[str, Any]] = []
+        if include_excluded:
+            excluded_params: list[Any] = [modifier, modifier, modifier, start, end]
+            excluded_market_sql = _marketplace_filter_sql("c", market, excluded_params)
+            excluded_hour_sql = ""
+            if h_from is not None or h_to is not None:
+                excluded_params.append(modifier)
+                excluded_hour_sql = _hour_filter_sql("CAST(strftime('%H', datetime(m.created_at, ?)) AS INTEGER)", h_from, h_to, excluded_params)
+            excluded_rows = conn.execute(
+                f"""
+                SELECT
+                    m.id AS message_id,
+                    m.chat_id,
+                    m.created_at,
+                    m.text,
+                    m.author,
+                    c.marketplace,
+                    c.external_chat_id,
+                    c.customer_name,
+                    c.customer_public_id,
+                    c.order_id,
+                    c.status AS chat_status,
+                    COALESCE(NULLIF(c.customer_name, ''), NULLIF(c.customer_public_id, ''), c.external_chat_id, 'Клиент') AS customer_label,
+                    date(datetime(m.created_at, ?)) AS local_day,
+                    CAST(strftime('%H', datetime(m.created_at, ?)) AS INTEGER) AS local_hour
+                FROM messages m
+                JOIN chats c ON c.id = m.chat_id
+                WHERE m.direction='inbound'
+                  AND NOT {_analytics_client_message_sql('m')}
+                  AND date(datetime(m.created_at, ?)) BETWEEN ? AND ?
+                  {excluded_market_sql}
+                  {excluded_hour_sql}
+                ORDER BY datetime(m.created_at) DESC, m.id DESC
+                LIMIT 300
+                """,
+                excluded_params,
+            ).fetchall()
+            for row in excluded_rows:
+                text = str(row["text"] or "")
+                excluded_items.append({
+                    "message_id": int(row["message_id"]),
+                    "chat_id": int(row["chat_id"]),
+                    "marketplace": row["marketplace"],
+                    "external_chat_id": row["external_chat_id"],
+                    "customer_label": row["customer_label"],
+                    "chat_status": row["chat_status"],
+                    "created_at": row["created_at"],
+                    "local_day": row["local_day"],
+                    "local_hour": int(row["local_hour"]) if row["local_hour"] is not None else None,
+                    "text_preview": text[:240],
+                    "author": row["author"],
+                    "excluded_reason": "marketplace_bot_support_system",
+                })
+
+    hourly: dict[int, dict[str, Any]] = {
+        hour: {"hour": hour, "requests": 0, "chats": []}
+        for hour in range(24)
+    }
+    for item in items:
+        hour = item.get("local_hour")
+        if hour is None:
+            continue
+        bucket = hourly.setdefault(int(hour), {"hour": int(hour), "requests": 0, "chats": []})
+        bucket["requests"] += 1
+        bucket["chats"].append({
+            "chat_id": item["chat_id"],
+            "message_id": item["message_id"],
+            "marketplace": item["marketplace"],
+            "customer_label": item["customer_label"],
+            "local_day": item["local_day"],
+            "local_datetime": item["local_datetime"],
+            "text_preview": item["text_preview"],
+        })
+
+    return {
+        "ok": True,
+        "filters": {
+            "date_from": start,
+            "date_to": end,
+            "marketplace": market or "",
+            "hour_from": h_from,
+            "hour_to": h_to,
+            "tz_offset_minutes": offset,
+            "limit": safe_limit,
+        },
+        "definition": "items — точные строки, которые входят в hourly/daily аналитику как первое реальное обращение клиента в чате за локальный день",
+        "count": len(items),
+        "items": items,
+        "hourly": [hourly[hour] for hour in range(24)],
+        "excluded_service_count": len(excluded_items),
+        "excluded_service_items": excluded_items,
+    }
+
 
 
 def build_chat_analytics(
