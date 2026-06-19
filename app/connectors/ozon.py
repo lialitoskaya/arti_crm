@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import base64
 import json
 import hashlib
 import re
@@ -861,6 +862,28 @@ class OzonConnector(MarketplaceConnector):
             raise RuntimeError("OZON_CLIENT_ID/OZON_API_KEY are not configured")
         payload = {"chat_id": external_chat_id, "text": text}
         return await self._post("/v1/chat/send/message", payload)
+
+    async def send_file(
+        self,
+        external_chat_id: str,
+        *,
+        filename: str,
+        content: bytes,
+        content_type: str | None = None,
+    ) -> dict[str, Any]:
+        """Send an image/file to an Ozon chat.
+
+        Ozon Seller API expects JSON with chat_id, name and base64_content.
+        """
+        if not self.client_id or not self.api_key:
+            raise RuntimeError("OZON_CLIENT_ID/OZON_API_KEY are not configured")
+        safe_name = os.path.basename(filename or "image.jpg") or "image.jpg"
+        payload = {
+            "chat_id": external_chat_id,
+            "name": safe_name,
+            "base64_content": base64.b64encode(content).decode("ascii"),
+        }
+        return await self._post("/v1/chat/send/file", payload)
 
 
 

@@ -40,6 +40,7 @@ let lastBrowserNotificationAt = 0;
 let mobileChatClosedByUser = false;
 
 let currentChatMetaSaveTimer = null;
+let selectedChatImageFiles = [];
 let openChatRequestSeq = 0;
 
 function mergeChatSummary(updated) {
@@ -393,6 +394,26 @@ async function api(path, options = {}) {
   return response.json();
 }
 
+async function apiForm(path, formData, options = {}) {
+  const response = await fetch(path, {
+    method: options.method || 'POST',
+    cache: 'no-store',
+    body: formData,
+    ...(options.fetchOptions || {}),
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    let detail = body;
+    try {
+      const parsed = JSON.parse(body);
+      detail = parsed.detail || parsed.error || body;
+    } catch (_) {}
+    if (response.status === 401) showLogin();
+    throw new Error(`${response.status}: ${detail}`);
+  }
+  return response.json();
+}
+
 function parseDate(value) {
   if (!value) return null;
   const raw = String(value);
@@ -431,7 +452,7 @@ function isImagePlaceholderText(value) {
   const text = String(value || '').trim();
   if (!text) return false;
   if (/^!\[[^\]]*\]\((https?:\/\/[^)]+|[^)]*изображ[^)]*)\)$/i.test(text)) return true;
-  if (/^https?:\/\/[^\s<>"']+\.(jpg|jpeg|png|webp|gif|bmp|svg)(\?|#|$)/i.test(text)) return true;
+  if (/^(https?:\/\/|\/api\/chat-uploads\/)[^\s<>"']+\.(jpg|jpeg|png|webp|gif|bmp|svg)(\?|#|$)/i.test(text)) return true;
   if (/^https?:\/\/api-seller\.ozon\.ru\/v\d+\/chat\/file\//i.test(text)) return true;
   return false;
 }
@@ -797,13 +818,42 @@ function backToChatListMobile() {
   renderChatList();
 }
 
+let messagesAutoScrollToken = 0;
+let messagesAutoScrollActive = false;
+let messagesAutoScrollProgrammaticAt = 0;
+
+function messagesDistanceFromBottom(box) {
+  if (!box) return 0;
+  return box.scrollHeight - box.scrollTop - box.clientHeight;
+}
+
+function bindMessagesScrollGuard(box) {
+  if (!box || box.dataset.scrollGuardBound === '1') return;
+  box.dataset.scrollGuardBound = '1';
+  box.addEventListener('scroll', () => {
+    if (!messagesAutoScrollActive) return;
+    // Ignore scroll events caused by our own box.scrollTop changes.
+    if (Date.now() - messagesAutoScrollProgrammaticAt < 90) return;
+    // If the operator scrolls up while images are still loading, stop all pending
+    // auto-scroll callbacks so the dialog is not thrown back to the bottom.
+    if (messagesDistanceFromBottom(box) > 120) {
+      messagesAutoScrollActive = false;
+      messagesAutoScrollToken += 1;
+    }
+  }, { passive: true });
+}
+
 function scrollMessagesToBottom(reason = '') {
   const box = $('messages');
   if (!box) return;
+  bindMessagesScrollGuard(box);
+
+  const token = ++messagesAutoScrollToken;
+  messagesAutoScrollActive = true;
 
   const doScroll = () => {
-    // Use scrollHeight repeatedly: image previews and mobile browser UI can change
-    // layout after the first paint. This keeps a newly opened dialog on the last message.
+    if (token !== messagesAutoScrollToken || !messagesAutoScrollActive) return;
+    messagesAutoScrollProgrammaticAt = Date.now();
     box.scrollTop = box.scrollHeight;
   };
 
@@ -818,10 +868,22 @@ function scrollMessagesToBottom(reason = '') {
 
   box.querySelectorAll('img').forEach(img => {
     if (!img.complete) {
-      img.addEventListener('load', doScroll, { once: true });
-      img.addEventListener('error', doScroll, { once: true });
+      const safeImageScroll = () => {
+        if (token !== messagesAutoScrollToken || !messagesAutoScrollActive) return;
+        requestAnimationFrame(doScroll);
+      };
+      img.addEventListener('load', safeImageScroll, { once: true });
+      img.addEventListener('error', safeImageScroll, { once: true });
     }
   });
+
+  // After the first layout settles, release the sticky-bottom mode. New image
+  // loads after this point must not override manual reading position.
+  setTimeout(() => {
+    if (token === messagesAutoScrollToken) {
+      messagesAutoScrollActive = false;
+    }
+  }, 900);
 }
 
 async function loadSyncStatus() {
@@ -1201,6 +1263,9 @@ function renderMessages(messages) {
         img.src = safeImageUrl;
         img.alt = 'Изображение из сообщения';
         img.loading = 'lazy';
+        img.decoding = 'async';
+        img.width = 640;
+        img.height = 480;
         img.referrerPolicy = 'no-referrer';
         img.onerror = () => card.classList.add('image-error');
 
@@ -1237,7 +1302,7 @@ function cleanMessageTextForDisplay(value, imageUrls = []) {
 
   if (imageUrls.length) {
     // If an image URL is rendered as a preview below the message, remove the raw URL from text.
-    text = text.replace(/https?:\/\/[^\s<>"]+/g, (rawUrl) => {
+    text = text.replace(/(?:https?:\/\/|\/api\/chat-uploads\/)[^\s<>"]+/g, (rawUrl) => {
       const clean = rawUrl.replace(/[),.;]+$/, '');
       const trailing = rawUrl.slice(clean.length);
       return imageUrls.includes(clean) || isLikelyImageUrl(clean, 'text') ? trailing : rawUrl;
@@ -1249,6 +1314,12 @@ function cleanMessageTextForDisplay(value, imageUrls = []) {
 
 function messageReceiptInfo(message) {
   if (!message || message.direction === 'internal') return null;
+  if (message.raw && message.raw._crm_marketplace_attachment_sent) {
+    return { icon: '✓✓', label: 'отправлено', read: false, title: 'Изображение отправлено в маркетплейс и сохранено в CRM' };
+  }
+  if (message.raw && message.raw._crm_local_attachment) {
+    return { icon: '✓', label: 'локально в CRM', read: false, title: 'Изображение сохранено только в CRM-чате' };
+  }
 
   if (message.direction === 'outbound') {
     const state = outboundReceiptState(message);
@@ -1402,7 +1473,7 @@ function renderTextWithLinks(container, value) {
 
 function extractImageUrls(message) {
   const found = new Set();
-  const textUrls = String(message.text || '').match(/https?:\/\/[^\s<>"]+/g) || [];
+  const textUrls = String(message.text || '').match(/(?:https?:\/\/|\/api\/chat-uploads\/)[^\s<>"]+/g) || [];
   for (const url of textUrls) {
     const clean = url.replace(/[),.;]+$/, '');
     if (isLikelyImageUrl(clean, 'text')) found.add(clean);
@@ -1434,6 +1505,7 @@ function scanForImages(value, keyHint, found) {
 }
 
 function isLikelyImageUrl(url, keyHint = '') {
+  if (/^\/api\/chat-uploads\//i.test(url)) return true;
   if (!/^https:\/\//i.test(url)) return false;
   const lower = url.toLowerCase();
   const hint = String(keyHint || '').toLowerCase();
@@ -1458,6 +1530,53 @@ function imagePreviewSrc(url) {
 }
 
 
+
+
+function renderComposerAttachments() {
+  const box = $('composerAttachmentPreview');
+  if (!box) return;
+  if (!selectedChatImageFiles.length) {
+    box.classList.add('hidden');
+    box.innerHTML = '';
+    return;
+  }
+  box.classList.remove('hidden');
+  box.innerHTML = selectedChatImageFiles.map((file, index) => `
+    <span class="composer-attachment-chip" title="${escapeHtml(file.name || 'Изображение')}">
+      <span class="composer-attachment-icon">🖼</span>
+      <span class="composer-attachment-name">${escapeHtml(file.name || 'Изображение')}</span>
+      <button type="button" data-remove-chat-image="${index}" aria-label="Удалить изображение">×</button>
+    </span>
+  `).join('');
+  box.querySelectorAll('[data-remove-chat-image]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const idx = Number(btn.dataset.removeChatImage);
+      selectedChatImageFiles = selectedChatImageFiles.filter((_, i) => i !== idx);
+      const input = $('chatImageInput');
+      if (input && !selectedChatImageFiles.length) input.value = '';
+      renderComposerAttachments();
+    });
+  });
+}
+
+function clearComposerAttachments() {
+  selectedChatImageFiles = [];
+  const input = $('chatImageInput');
+  if (input) input.value = '';
+  renderComposerAttachments();
+}
+
+function handleChatImageSelection(event) {
+  const files = Array.from(event.target?.files || []).filter((file) => file.type && file.type.startsWith('image/'));
+  if (!files.length) {
+    selectedChatImageFiles = [];
+    renderComposerAttachments();
+    return;
+  }
+  selectedChatImageFiles = files.slice(0, 5);
+  if (files.length > 5) notify('Изображения', 'Можно прикрепить до 5 изображений за раз.');
+  renderComposerAttachments();
+}
 
 function closeMessageActionsMenus() {
   document.querySelectorAll('.message-actions-menu').forEach(el => el.classList.add('hidden'));
@@ -3143,6 +3262,8 @@ function init() {
   }
 
   const messageForm = $('messageForm');
+  bind('attachImageBtn', 'click', () => $('chatImageInput')?.click());
+  bind('chatImageInput', 'change', handleChatImageSelection);
 
   const messageTextArea = $('messageText');
   if (messageTextArea) {
@@ -3161,16 +3282,27 @@ function init() {
       event.preventDefault();
       if (!currentChatId) return;
       const text = $('messageText').value.trim();
-      if (!text) return;
+      const imageFiles = selectedChatImageFiles.slice();
+      if (!text && !imageFiles.length) return;
 
       const sendBtn = messageForm.querySelector('button[type="submit"]');
+      const attachBtn = $('attachImageBtn');
       if (sendBtn) sendBtn.disabled = true;
+      if (attachBtn) attachBtn.disabled = true;
       try {
-        await api(`/api/chats/${currentChatId}/messages`, {
-          method: 'POST',
-          body: JSON.stringify({ text, author: 'manager' }),
-        });
+        if (imageFiles.length) {
+          const formData = new FormData();
+          imageFiles.forEach((file) => formData.append('images', file));
+          formData.append('caption', text || '');
+          await apiForm(`/api/chats/${currentChatId}/attachments`, formData);
+        } else {
+          await api(`/api/chats/${currentChatId}/messages`, {
+            method: 'POST',
+            body: JSON.stringify({ text, author: 'manager' }),
+          });
+        }
         $('messageText').value = '';
+        clearComposerAttachments();
         autosizeComposerTextarea($('messageText'));
         await loadChats();
         await openChat(currentChatId);
@@ -3178,6 +3310,7 @@ function init() {
         notify('Сообщение не отправлено', String(err.message || err));
       } finally {
         if (sendBtn) sendBtn.disabled = false;
+        if (attachBtn) attachBtn.disabled = false;
       }
     });
   }

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Arti CRM</title>
-  <link rel="stylesheet" href="/static/styles.css?v=103p25" />
+  <link rel="stylesheet" href="/static/styles.css?v=103p31" />
   <style id="arti-crm-inline-style">
 /* Inline fallback v43: responsive CSS is embedded so narrow screens never open unstyled. */
 :root {
@@ -2089,8 +2089,13 @@ html, body { max-width: 100%; }
             </div>
 
             <form id="messageForm" class="composer">
-              <textarea id="messageText" placeholder="Напишите сообщение клиенту..." rows="2"></textarea>
-              <button type="submit" aria-label="Отправить">➤</button>
+              <div id="composerAttachmentPreview" class="composer-attachments hidden"></div>
+              <div class="composer-main-row">
+                <button id="attachImageBtn" class="composer-attach-btn" type="button" aria-label="Добавить изображение" title="Добавить изображение">＋</button>
+                <textarea id="messageText" placeholder="Напишите сообщение клиенту..." rows="2"></textarea>
+                <button class="composer-send-btn" type="submit" aria-label="Отправить">➤</button>
+              </div>
+              <input id="chatImageInput" class="hidden" type="file" accept="image/*" multiple />
             </form>
           </div>
         </section>
@@ -2604,6 +2609,6 @@ html, body { max-width: 100%; }
 
   <div id="notificationToasts" class="notification-toast-stack" aria-live="polite"></div>
 
-  <script src="/static/app.js?v=103p25"></script>
+  <script src="/static/app.js?v=103p31"></script>
 </body>
 </html>

@@ -12,7 +12,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -27,6 +27,9 @@ from app.schemas import AiReplyCreate, ChatCreate, ChatUpdate, InternalNoteCreat
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
+CHAT_ATTACHMENTS_DIR = Path(os.getenv("CRM_CHAT_ATTACHMENTS_DIR", str(Path.cwd() / "chat_attachments"))).resolve()
+MAX_CHAT_IMAGE_BYTES = int(os.getenv("CRM_MAX_CHAT_IMAGE_MB", "12")) * 1024 * 1024
+ALLOWED_CHAT_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 
 CRM_BUILD_VERSION = "v103_analytics_ui_polish_2026-06-18"
 
@@ -2937,6 +2940,185 @@ async def ai_reply(chat_id: int, payload: AiReplyCreate) -> dict[str, Any]:
         "selected_message_id": payload.message_id,
         "model": os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
     }
+
+
+
+def _safe_chat_image_extension(upload: UploadFile) -> str:
+    raw_name = Path(upload.filename or "image").name
+    ext = Path(raw_name).suffix.lower()
+    content_type = (upload.content_type or "").lower()
+    if ext not in ALLOWED_CHAT_IMAGE_EXTENSIONS:
+        if content_type == "image/png":
+            ext = ".png"
+        elif content_type in {"image/jpeg", "image/jpg"}:
+            ext = ".jpg"
+        elif content_type == "image/webp":
+            ext = ".webp"
+        elif content_type == "image/gif":
+            ext = ".gif"
+    if ext not in ALLOWED_CHAT_IMAGE_EXTENSIONS or not content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Можно прикреплять только изображения JPG, PNG, WEBP или GIF")
+    return ext
+
+
+async def _read_chat_image(upload: UploadFile) -> tuple[str, bytes]:
+    ext = _safe_chat_image_extension(upload)
+    data = await upload.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Файл изображения пустой")
+    if len(data) > MAX_CHAT_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="Изображение слишком большое")
+    return ext, data
+
+
+def _store_chat_image(upload: UploadFile, chat_id: int, ext: str, data: bytes) -> dict[str, Any]:
+    CHAT_ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
+    filename = f"chat_{int(chat_id)}_{uuid.uuid4().hex}{ext}"
+    path = (CHAT_ATTACHMENTS_DIR / filename).resolve()
+    if CHAT_ATTACHMENTS_DIR not in path.parents and path != CHAT_ATTACHMENTS_DIR:
+        raise HTTPException(status_code=400, detail="Некорректное имя файла")
+    path.write_bytes(data)
+    return {
+        "filename": filename,
+        "original_filename": Path(upload.filename or filename).name,
+        "content_type": upload.content_type or "image/*",
+        "size_bytes": len(data),
+        "url": f"/api/chat-uploads/{filename}",
+    }
+
+
+async def _save_chat_image(upload: UploadFile, chat_id: int) -> dict[str, Any]:
+    ext, data = await _read_chat_image(upload)
+    return _store_chat_image(upload, chat_id, ext, data)
+
+
+@app.get("/api/chat-uploads/{filename}")
+def api_chat_upload(filename: str, request: Request) -> FileResponse:
+    _current_user(request)
+    safe_name = Path(filename).name
+    if safe_name != filename:
+        raise HTTPException(status_code=404, detail="File not found")
+    path = (CHAT_ATTACHMENTS_DIR / safe_name).resolve()
+    if CHAT_ATTACHMENTS_DIR not in path.parents or not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(path)
+
+
+@app.post("/api/chats/{chat_id}/attachments")
+async def add_chat_attachments(
+    chat_id: int,
+    request: Request,
+    images: list[UploadFile] = File(...),
+    caption: str = Form(default=""),
+) -> dict[str, Any]:
+    chat = repo.get_chat(chat_id)
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    if not images:
+        raise HTTPException(status_code=400, detail="Выберите изображение")
+    if len(images) > 5:
+        raise HTTPException(status_code=400, detail="Можно прикрепить до 5 изображений за раз")
+
+    current_user = _current_user(request)
+    current_user_id = int(current_user.get("id") or 0)
+    author = (current_user.get("display_name") or current_user.get("username") or "manager").strip()
+
+    prepared: list[dict[str, Any]] = []
+    for upload in images:
+        ext, data = await _read_chat_image(upload)
+        prepared.append({
+            "upload": upload,
+            "ext": ext,
+            "data": data,
+            "filename": Path(upload.filename or f"image{ext}").name or f"image{ext}",
+            "content_type": upload.content_type or "image/*",
+        })
+
+    marketplace = chat["marketplace"]
+    connector = connectors.get(marketplace) or connectors["mock"]
+    caption_text = (caption or "").strip()
+    marketplace_responses: list[dict[str, Any]] = []
+
+    try:
+        if chat.get("metadata", {}).get("source") == "mock" or marketplace == "mock":
+            # Demo/mock chats do not have a real marketplace API. Keep local mode there.
+            attachments = [
+                _store_chat_image(item["upload"], chat_id, item["ext"], item["data"])
+                for item in prepared
+            ]
+            image_lines = [f"![Изображение]({item['url']})" for item in attachments]
+            text = "\n".join([part for part in [caption_text, *image_lines] if part]).strip() or "[изображение]"
+            message_id = repo.add_message(
+                chat_id=chat_id,
+                direction="outbound",
+                text=text,
+                author=author,
+                external_message_id=f"local-image:{uuid.uuid4().hex}",
+                raw={"_crm_local_attachment": True, "attachments": attachments},
+            )
+            return {"ok": True, "message_id": message_id, "attachments": attachments, "chat": repo.get_chat(chat_id)}
+
+        if not hasattr(connector, "send_file"):
+            raise HTTPException(status_code=400, detail=f"Отправка изображений в {marketplace} пока не поддержана")
+
+        if marketplace == "wildberries":
+            # WB Buyers Chat public method in the current connector supports text replies only.
+            raise HTTPException(status_code=400, detail="WB Buyers Chat API сейчас поддерживает отправку текста из CRM. Для фото нужен отдельный подтверждённый метод WB загрузки/отправки файлов.")
+
+        if caption_text:
+            if marketplace == "wildberries" and hasattr(connector, "set_reply_sign_from_metadata"):
+                connector.set_reply_sign_from_metadata(chat["external_chat_id"], chat.get("metadata") or {})  # type: ignore[attr-defined]
+            caption_response = await connector.send_message(chat["external_chat_id"], caption_text)
+            marketplace_responses.append({"type": "text", "response": caption_response})
+
+        for item in prepared:
+            try:
+                file_response = await connector.send_file(
+                    chat["external_chat_id"],
+                    filename=item["filename"],
+                    content=item["data"],
+                    content_type=item["content_type"],
+                )
+            except NotImplementedError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            marketplace_responses.append({"type": "file", "filename": item["filename"], "response": file_response})
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    attachments = [
+        _store_chat_image(item["upload"], chat_id, item["ext"], item["data"])
+        for item in prepared
+    ]
+    image_lines = [f"![Изображение]({item['url']})" for item in attachments]
+    text = "\n".join([part for part in [caption_text, *image_lines] if part]).strip() or "[изображение]"
+    external_ids = [
+        str((entry.get("response") or {}).get("message_id") or (entry.get("response") or {}).get("id") or (entry.get("response") or {}).get("result") or "")
+        for entry in marketplace_responses
+        if isinstance(entry.get("response"), dict)
+    ]
+    external_message_id = ";".join([value for value in external_ids if value]) or f"marketplace-image:{uuid.uuid4().hex}"
+    message_id = repo.add_message(
+        chat_id=chat_id,
+        direction="outbound",
+        text=text,
+        author=author,
+        external_message_id=external_message_id,
+        raw={
+            "_crm_marketplace_attachment_sent": True,
+            "attachments": attachments,
+            "marketplace_responses": marketplace_responses,
+        },
+    )
+    assigned_on_send = False
+    if current_user_id and _env_bool("CRM_AUTO_ASSIGN_FIRST_RESPONSE", True):
+        assigned_on_send = repo.assign_chat_to_user_if_unassigned(
+            chat_id=chat_id,
+            user_id=current_user_id,
+            reason="first_crm_attachment_reply",
+        )
+    return {"ok": True, "message_id": message_id, "attachments": attachments, "chat": repo.get_chat(chat_id), "assigned_on_send": assigned_on_send}
 
 
 @app.post("/api/chats/{chat_id}/messages")

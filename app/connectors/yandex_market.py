@@ -194,3 +194,41 @@ class YandexMarketConnector(MarketplaceConnector):
             json_body={"message": text},
         )
         return data
+
+    async def send_file(
+        self,
+        external_chat_id: str,
+        *,
+        filename: str,
+        content: bytes,
+        content_type: str | None = None,
+    ) -> dict[str, Any]:
+        """Send an image/file to a Yandex Market chat via multipart/form-data."""
+        if not self.token or not self.business_id:
+            raise RuntimeError("YANDEX_MARKET_TOKEN/YANDEX_MARKET_BUSINESS_ID are not configured")
+        if len(content) > 5 * 1024 * 1024:
+            raise RuntimeError("Yandex Market принимает файлы в чат до 5 МБ")
+        headers = {
+            "Api-Key": self.token,
+            "Accept": "application/json",
+        }
+        safe_name = os.path.basename(filename or "image.jpg") or "image.jpg"
+        files = {"file": (safe_name, content, content_type or "application/octet-stream")}
+        async with httpx.AsyncClient(timeout=45) as client:
+            response = await client.post(
+                self._url("/chats/file/send"),
+                headers=headers,
+                params={"chatId": external_chat_id},
+                files=files,
+            )
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(f"Yandex Market API error {response.status_code} at /chats/file/send: {response.text[:1500]}") from exc
+        try:
+            data = response.json()
+        except Exception:
+            data = {"ok": True}
+        if isinstance(data, dict) and data.get("status") == "ERROR":
+            raise RuntimeError(f"Yandex Market API returned ERROR at /chats/file/send: {str(data)[:1500]}")
+        return data if isinstance(data, dict) else {"ok": True}

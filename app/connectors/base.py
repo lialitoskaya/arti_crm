@@ -41,3 +41,14 @@ class MarketplaceConnector(ABC):
     @abstractmethod
     async def send_message(self, external_chat_id: str, text: str) -> dict[str, Any]:
         """Send message back to marketplace and return raw response."""
+
+    async def send_file(
+        self,
+        external_chat_id: str,
+        *,
+        filename: str,
+        content: bytes,
+        content_type: str | None = None,
+    ) -> dict[str, Any]:
+        """Send a file/image back to marketplace and return raw response."""
+        raise NotImplementedError(f"{self.marketplace} does not support file sending in this connector")
