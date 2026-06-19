@@ -75,6 +75,20 @@ def _status_map(conn) -> dict[str, dict[str, Any]]:
     ).fetchall()
     return {row["key"]: row_to_dict(row) for row in rows}
 
+
+def _chat_status_blocks_waiting_response(chat: dict[str, Any]) -> bool:
+    status = str(chat.get("status") or "").strip().lower()
+    label = str(chat.get("status_title") or chat.get("status_label") or STATUS_LABELS.get(status, "") or "").strip().lower()
+    normalized_label = label.replace("ё", "е")
+    if status in {"closed", "waiting_customer"}:
+        return True
+    if "закры" in normalized_label:
+        return True
+    if "ждем клиент" in normalized_label or "ждём клиент" in label:
+        return True
+    return False
+
+
 def _decorate_chat_sla(chat: dict[str, Any]) -> dict[str, Any]:
     """Add simple SLA flags and repair visible last-message fields for UI."""
     actual_text = chat.get("actual_last_message_text")
@@ -85,8 +99,9 @@ def _decorate_chat_sla(chat: dict[str, Any]) -> dict[str, Any]:
         chat["last_message_preview"] = _message_preview(actual_text)
 
     direction = chat.get("last_message_direction")
-    waiting = direction == "inbound"
+    waiting = direction == "inbound" and not _chat_status_blocks_waiting_response(chat)
     chat["sla_waiting_response"] = waiting
+    chat["sla_waiting_since_at"] = chat.get("last_message_at") if waiting else None
     chat["sla_label"] = "ждёт ответа" if waiting else None
     chat["status_label"] = chat.get("status_title") or STATUS_LABELS.get(chat.get("status"), chat.get("status"))
     if chat.get("status_color"):

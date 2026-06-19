@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Arti CRM</title>
-  <link rel="stylesheet" href="/static/styles.css?v=103p3" />
+  <link rel="stylesheet" href="/static/styles.css?v=103p6" />
   <style id="arti-crm-inline-style">
 /* Inline fallback v43: responsive CSS is embedded so narrow screens never open unstyled. */
 :root {
@@ -1925,8 +1925,8 @@ html, body { max-width: 100%; }
         <button id="navQuestions" class="nav-btn" type="button" aria-label="Вопросы Ozon"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9.1 9a3 3 0 1 1 5.2 2c-.9 1-1.8 1.6-1.8 3"/><path d="M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg></span><span class="btn-label">Вопросы</span></button>
         <button id="navTasks" class="nav-btn" type="button" aria-label="Задачи"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 6h11"/><path d="M9 12h11"/><path d="M9 18h11"/><path d="M4 6l1.5 1.5L7.8 5"/><path d="M4 12l1.5 1.5L7.8 11"/><path d="M4 18l1.5 1.5L7.8 17"/></svg></span><span class="btn-label">Задачи</span></button>
         <button id="navKnowledge" class="nav-btn" type="button" aria-label="База знаний"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15.5A2.5 2.5 0 0 0 17.5 16H6.5A2.5 2.5 0 0 0 4 18.5z"/><path d="M8 7h8"/><path d="M8 11h8"/><path d="M4 18.5A2.5 2.5 0 0 0 6.5 21H20"/></svg></span><span class="btn-label">База знаний</span></button>
-        <button id="mobileMoreBtn" class="nav-btn mobile-more-btn" type="button" aria-label="Ещё"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="5" cy="5" r="1.5" fill="currentColor"/><circle cx="12" cy="5" r="1.5" fill="currentColor"/><circle cx="19" cy="5" r="1.5" fill="currentColor"/><circle cx="5" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="19" cy="12" r="1.5" fill="currentColor"/><circle cx="5" cy="19" r="1.5" fill="currentColor"/><circle cx="12" cy="19" r="1.5" fill="currentColor"/><circle cx="19" cy="19" r="1.5" fill="currentColor"/></svg></span><span class="btn-label">Ещё</span><span id="mobileMoreBadge" class="notification-badge hidden">0</span></button>
-        <button id="mobileLogoutBtn" class="nav-btn mobile-logout-btn" type="button" aria-label="Выйти"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg></span><span class="btn-label">Выйти</span></button>
+        <button id="mobileMoreBtn" class="nav-btn mobile-more-btn" type="button" aria-label="Ещё"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="5" cy="5" r="1.5"/><circle cx="12" cy="5" r="1.5"/><circle cx="19" cy="5" r="1.5"/><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/><circle cx="5" cy="19" r="1.5"/><circle cx="12" cy="19" r="1.5"/><circle cx="19" cy="19" r="1.5"/></svg></span><span class="btn-label">Ещё</span><span id="mobileMoreBadge" class="notification-badge hidden">0</span></button>
+        <button id="mobileLogoutBtn" class="nav-btn mobile-logout-btn legacy-logout-btn" type="button" aria-label="Выйти"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg></span><span class="btn-label">Выйти</span></button>
       </nav>
 
       <div class="nav-spacer"></div>
@@ -1950,7 +1950,7 @@ html, body { max-width: 100%; }
         <span id="syncStatus" class="sync-status">Фоновое обновление активно</span>
       </div>
       <button id="refreshBtn" class="secondary refresh-btn" type="button" aria-label="Обновить"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0 2 5.3"/><path d="M20 4v7h-7"/></svg></span><span class="btn-label">Обновить</span></button>
-      <button id="logoutBtn" class="secondary refresh-btn" type="button" aria-label="Выйти"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg></span><span class="btn-label">Выйти</span></button>
+      <button id="logoutBtn" class="secondary refresh-btn legacy-logout-btn" type="button" aria-label="Выйти"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg></span><span class="btn-label">Выйти</span></button>
     </aside>
 
 
@@ -2515,6 +2515,12 @@ html, body { max-width: 100%; }
               <button type="submit">Сохранить профиль</button>
               <p class="muted">Логин меняется сразу. Пароль изменится только если указать текущий и новый пароль.</p>
             </form>
+            <div class="profile-account-actions">
+              <button id="profileLogoutBtn" class="secondary profile-logout-btn" type="button">
+                <span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg></span>
+                <span>Выйти из аккаунта</span>
+              </button>
+            </div>
           </div>
         </section>
       </main>
@@ -2542,6 +2548,6 @@ html, body { max-width: 100%; }
 
   <div id="notificationToasts" class="notification-toast-stack" aria-live="polite"></div>
 
-  <script src="/static/app.js?v=103p3"></script>
+  <script src="/static/app.js?v=103p6"></script>
 </body>
 </html>

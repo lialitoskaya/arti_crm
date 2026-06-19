@@ -5677,6 +5677,150 @@ button:not(.nav-btn):not(.scope-tab):not(.icon-btn):not(.mobile-back-btn):not(#c
   }
 }
 
-.mobile-more-btn { position: relative; }
-.mobile-more-btn .notification-badge { position: absolute; top: 4px; right: 4px; min-width: 18px; height: 18px; padding: 0 5px; font-size: 10px; }
-.mobile-more-item .notification-badge { justify-self: end; }
+
+/* v103 patch 4 — waiting response elapsed marker */
+.sla-badge-waiting {
+  color: #c65a21 !important;
+  background: #fff2e7 !important;
+  border: 1px solid rgba(255, 122, 61, 0.16) !important;
+  font-weight: 700 !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+}
+
+.chat-item.needs-response {
+  box-shadow: inset 3px 0 0 rgba(255, 122, 61, 0.58) !important;
+}
+
+.chat-item.needs-response .preview {
+  color: #5f6878 !important;
+}
+
+@media (max-width: 760px) {
+  .sla-badge-waiting {
+    max-width: 100%;
+    white-space: normal;
+    line-height: 1.2;
+  }
+}
+
+
+/* v103 patch 5 — fix accidental desktop More tab and make mobile More deterministic */
+#mobileMoreBtn,
+#mobileLogoutBtn {
+  display: none !important;
+}
+
+.mobile-more-sheet,
+.mobile-nav-backdrop {
+  display: none !important;
+}
+
+@media (min-width: 981px) {
+  #mobileMoreBtn,
+  #mobileLogoutBtn,
+  .mobile-more-sheet,
+  .mobile-nav-backdrop {
+    display: none !important;
+  }
+}
+
+/* Mobile/tablet bottom navigation mode: show the More entry and its sheet. */
+@media (max-width: 980px), ((hover: none) and (pointer: coarse) and (max-width: 1180px)) {
+  #mobileMoreBtn {
+    display: flex !important;
+  }
+
+  #mobileLogoutBtn {
+    display: none !important;
+  }
+
+  .mobile-more-sheet:not(.hidden),
+  .mobile-nav-backdrop:not(.hidden) {
+    display: block !important;
+  }
+}
+
+#mobileMoreBtn {
+  position: relative;
+}
+
+#mobileMoreBtn .btn-icon svg circle {
+  fill: currentColor;
+  stroke: none;
+}
+
+#mobileMoreBtn .notification-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  font-size: 10px;
+}
+
+.mobile-more-item .notification-badge {
+  justify-self: end;
+}
+
+
+/* v103 patch 6 — move logout into Profile and remove duplicate logout buttons */
+.legacy-logout-btn,
+#logoutBtn,
+#mobileLogoutBtn {
+  display: none !important;
+}
+
+.profile-account-actions {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(32, 41, 57, 0.08);
+}
+
+.profile-logout-btn {
+  width: 100%;
+  min-height: 44px;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #c65a55 !important;
+  background: rgba(255,255,255,0.72) !important;
+  border: 1px solid rgba(198, 90, 85, 0.18) !important;
+  box-shadow: none !important;
+}
+
+.profile-logout-btn:hover {
+  background: rgba(255, 240, 239, 0.72) !important;
+}
+
+.profile-logout-btn .btn-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* The dots item is only a mobile bottom-nav More button. It must not appear in the desktop/side menu. */
+#mobileMoreBtn {
+  display: none !important;
+}
+
+@media (max-width: 980px), ((hover: none) and (pointer: coarse) and (max-width: 1180px)) {
+  #mobileMoreBtn {
+    display: flex !important;
+  }
+
+  #mobileLogoutBtn,
+  #logoutBtn,
+  .legacy-logout-btn {
+    display: none !important;
+  }
+}
+
+@media (min-width: 981px) {
+  #mobileMoreBtn,
+  .mobile-more-sheet,
+  .mobile-nav-backdrop {
+    display: none !important;
+  }
+}

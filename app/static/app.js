@@ -400,8 +400,61 @@ function chatSubtitleParts(chat) {
   if (chat.customer_public_id) parts.push(`клиент ID: ${chat.customer_public_id}`);
   if (chat.external_chat_id) parts.push(`chat_id: ${chat.external_chat_id}`);
   if (chat.last_message_at) parts.push(`последнее: ${formatDateTime(chat.last_message_at)}`);
-  if (chat.sla_waiting_response) parts.push('ждёт ответа');
+  if (shouldShowWaitingMarker(chat)) parts.push(waitingDurationText(chat.sla_waiting_since_at || chat.last_message_at));
   return parts.join(' · ');
+}
+
+
+function pluralRu(value, one, few, many) {
+  const n = Math.abs(Number(value || 0));
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
+  return many;
+}
+
+function waitingDurationText(value) {
+  const startedAt = parseDate(value);
+  if (!startedAt) return 'ждёт ответа';
+  const minutes = Math.max(0, Math.floor((Date.now() - startedAt.getTime()) / 60000));
+  if (minutes < 1) return 'ждёт ответа меньше минуты';
+  if (minutes < 60) {
+    return `ждёт ответа ${minutes} ${pluralRu(minutes, 'минуту', 'минуты', 'минут')}`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  if (hours < 24) {
+    const hourText = `${hours} ${pluralRu(hours, 'час', 'часа', 'часов')}`;
+    return rest > 0
+      ? `ждёт ответа ${hourText} ${rest} ${pluralRu(rest, 'минуту', 'минуты', 'минут')}`
+      : `ждёт ответа ${hourText}`;
+  }
+  const days = Math.floor(hours / 24);
+  const restHours = hours % 24;
+  const dayText = `${days} ${pluralRu(days, 'день', 'дня', 'дней')}`;
+  return restHours > 0
+    ? `ждёт ответа ${dayText} ${restHours} ${pluralRu(restHours, 'час', 'часа', 'часов')}`
+    : `ждёт ответа ${dayText}`;
+}
+
+function isWaitingResponseBlockedStatus(chat) {
+  const status = String(chat?.status || '').toLowerCase();
+  const label = String(chat?.status_label || statusNames[status] || '').toLowerCase().replace('ё', 'е');
+  return status === 'closed'
+    || status === 'waiting_customer'
+    || label.includes('закры')
+    || label.includes('ждем клиент');
+}
+
+function shouldShowWaitingMarker(chat) {
+  return Boolean(chat?.sla_waiting_response) && !isWaitingResponseBlockedStatus(chat);
+}
+
+function waitingResponseBadge(chat) {
+  if (!shouldShowWaitingMarker(chat)) return '';
+  const since = chat.sla_waiting_since_at || chat.last_message_at || chat.updated_at || chat.created_at;
+  return `<span class="sla-badge sla-badge-waiting">${escapeHtml(waitingDurationText(since))}</span>`;
 }
 
 
@@ -881,9 +934,10 @@ function renderChatList() {
   }
   for (const chat of chats) {
     const item = document.createElement('div');
-    item.className = `chat-item ${chat.id === currentChatId ? 'active' : ''} ${chat.sla_waiting_response ? 'needs-response' : ''}`;
+    const showWaitingMarker = shouldShowWaitingMarker(chat);
+    item.className = `chat-item ${chat.id === currentChatId ? 'active' : ''} ${showWaitingMarker ? 'needs-response' : ''}`;
     item.onclick = () => openChat(chat.id);
-    const slaBadge = chat.sla_waiting_response ? '<span class="sla-badge">ждёт ответа</span>' : '';
+    const slaBadge = waitingResponseBadge(chat);
     const assigneeBadge = chat.assigned_user_id ? `<span class="assignee-chip">${escapeHtml(chat.assigned_user_display_name || chat.assigned_user_username || chat.assigned_to || 'назначен')}</span>` : ''; 
     const time = formatChatTime(chat.last_message_at || chat.updated_at || chat.created_at);
     item.innerHTML = `
@@ -2408,7 +2462,7 @@ function toggleMobileMoreSheet(force) {
 function handleMobileMoreAction(action, view) {
   if (action === 'logout') {
     toggleMobileMoreSheet(false);
-    $('mobileLogoutBtn')?.click();
+    $('profileLogoutBtn')?.click();
     return;
   }
   if (action === 'notifications') {
@@ -2704,7 +2758,7 @@ function setupAuthUi() {
     showLogin('');
   };
 
-  ['logoutBtn', 'mobileLogoutBtn'].forEach((id) => {
+  ['logoutBtn', 'mobileLogoutBtn', 'profileLogoutBtn'].forEach((id) => {
     const btn = $(id);
     if (btn && !btn.dataset.bound) {
       btn.dataset.bound = '1';
@@ -2744,7 +2798,7 @@ function init() {
   bind('navTechSettings', 'click', () => showView('techSettings'));
   bind('navProfile', 'click', () => showView('profile'));
   bind('notificationsBtn', 'click', () => toggleNotificationsPanel());
-  bind('mobileMoreBtn', 'click', () => toggleMobileMoreSheet());
+  bind('mobileMoreBtn', 'click', (event) => { event.preventDefault(); event.stopPropagation(); toggleMobileMoreSheet(true); });
   bind('mobileMoreClose', 'click', () => toggleMobileMoreSheet(false));
   bind('mobileNavBackdrop', 'click', () => toggleMobileMoreSheet(false));
   $('mobileMoreSheet')?.addEventListener('click', (event) => {
@@ -3084,5 +3138,16 @@ document.addEventListener('click', (event) => {
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
     toggleMobileMoreSheet(false);
+  }
+});
+
+
+
+document.addEventListener('click', (event) => {
+  const moreBtn = event.target.closest?.('#mobileMoreBtn');
+  if (moreBtn) {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleMobileMoreSheet(true);
   }
 });
