@@ -133,16 +133,7 @@ def _customer_info_from_messages(messages) -> tuple[str | None, str | None]:
 
 
 def _ozon_system_dialog_markers() -> tuple[str, ...]:
-    """Conservative markers for Ozon non-customer/system dialogs.
-
-    v27 used broad words such as "system", "notification" and "support" and
-    searched the whole raw payload. Ozon message payloads can contain such words
-    as technical keys even in normal buyer chats, so real customer chats could be
-    deleted/hidden.
-
-    v28 only uses explicit technical account markers by default. You can extend
-    this list in .env, but avoid generic words like system/support/notification.
-    """
+    """Exact account markers for Ozon non-customer/system dialogs."""
     return tuple(
         token.strip().lower()
         for token in os.getenv(
@@ -153,57 +144,86 @@ def _ozon_system_dialog_markers() -> tuple[str, ...]:
     )
 
 
-def _extract_system_indicator_values(value: Any, depth: int = 0) -> list[str]:
-    """Read only structured author/source/type fields from a marketplace message.
+def _ozon_chatbot_first_message_markers() -> tuple[str, ...]:
+    return tuple(
+        token.strip().lower()
+        for token in os.getenv("OZON_FIRST_MESSAGE_SYSTEM_USER_MARKERS", "chatbot").split(",")
+        if token.strip()
+    )
 
-    We intentionally do NOT scan all keys/text. This keeps customer chats safe
-    even when their raw JSON contains words like system/support/notification in
-    unrelated technical fields.
-    """
+
+def _normalize_system_sender(value: Any) -> str:
+    return re.sub(r"[\s_\-]+", "", str(value or "").strip().lower())
+
+
+def _system_sender_matches(value: Any, markers: tuple[str, ...]) -> bool:
+    normalized = _normalize_system_sender(value)
+    if not normalized:
+        return False
+    normalized_markers = {_normalize_system_sender(marker) for marker in markers if marker}
+    return normalized in normalized_markers
+
+
+def _extract_sender_designations(value: Any, depth: int = 0) -> list[str]:
+    """Extract sender/user names only; do not scan arbitrary raw text."""
     if depth > 4 or value in (None, ""):
         return []
     values: list[str] = []
-    interesting_keys = {
-        "type", "role", "user_type", "usertype", "author_type", "authortype",
-        "sender_type", "sendertype", "source", "kind", "event_type", "eventtype",
+    name_keys = {
         "name", "login", "username", "user_name", "display_name", "displayname",
-        "system_name", "systemname",
+        "nickname", "author_name", "authorname", "sender_name", "sendername",
+        "from_name", "fromname", "system_name", "systemname",
     }
+    container_keys = {"user", "author", "sender", "from", "participant", "profile"}
     if isinstance(value, dict):
         for key, nested in value.items():
             key_l = str(key).lower()
-            if key_l in interesting_keys and nested not in (None, ""):
-                if isinstance(nested, (str, int, float, bool)):
-                    values.append(str(nested).lower())
-            if key_l in {"user", "author", "sender", "from", "source", "participant", "profile", "metadata"}:
-                values.extend(_extract_system_indicator_values(nested, depth + 1))
+            if key_l in name_keys and isinstance(nested, (str, int, float)):
+                values.append(str(nested))
+            elif key_l in container_keys:
+                if isinstance(nested, (str, int, float)):
+                    values.append(str(nested))
+                elif isinstance(nested, dict):
+                    values.extend(_extract_sender_designations(nested, depth + 1))
     elif isinstance(value, list):
         for item in value[:20]:
-            values.extend(_extract_system_indicator_values(item, depth + 1))
+            values.extend(_extract_sender_designations(item, depth + 1))
     return values
 
 
-def _messages_are_ozon_system_dialog(messages: list[Any]) -> bool:
-    """Return True only for clearly technical Ozon service dialogs.
+def _message_system_designations(message: Any) -> list[str]:
+    indicators: list[str] = []
+    author = getattr(message, "author", None)
+    if author not in (None, ""):
+        indicators.append(str(author))
+    raw = getattr(message, "raw", None)
+    indicators.extend(_extract_sender_designations(raw))
+    return [item.strip().lower() for item in indicators if str(item or "").strip()]
 
-    Customer safety rule: if we are unsure, keep the chat. A chat is excluded only
-    when explicit technical account markers such as notificationuser/systemuser
-    appear in structured author/source/type fields.
+
+def _messages_are_ozon_system_dialog(messages: list[Any]) -> bool:
+    """Return True only for exact Ozon technical sender names.
+
+    Rules:
+    - notificationuser/systemuser are blocked on any message;
+    - chatbot blocks only when it is the first message sender/user name.
     """
-    if os.getenv("OZON_EXCLUDE_SYSTEM_HISTORY_CHATS", "0").strip().lower() in {"0", "false", "no", "off", "нет"}:
+    if os.getenv("OZON_EXCLUDE_SYSTEM_HISTORY_CHATS", "1").strip().lower() in {"0", "false", "no", "off", "нет"}:
         return False
-    markers = _ozon_system_dialog_markers()
-    if not markers or not messages:
+    if not messages:
         return False
+
+    technical_markers = _ozon_system_dialog_markers()
     for message in messages:
-        raw = getattr(message, "raw", None)
-        author = getattr(message, "author", None)
-        indicators = []
-        if author not in (None, ""):
-            indicators.append(str(author).lower())
-        indicators.extend(_extract_system_indicator_values(raw))
-        if any(marker in indicator for marker in markers for indicator in indicators):
+        indicators = _message_system_designations(message)
+        if any(_system_sender_matches(indicator, technical_markers) for indicator in indicators):
             return True
+
+    first_indicators = _message_system_designations(messages[0])
+    first_markers = _ozon_chatbot_first_message_markers()
+    if any(_system_sender_matches(indicator, first_markers) for indicator in first_indicators):
+        return True
+
     return False
 
 
@@ -898,16 +918,14 @@ async def _sync_marketplace_unlocked(marketplace: str, *, background: bool = Fal
 
         messages = messages or []
         if marketplace == "ozon" and _messages_are_ozon_system_dialog(messages):
-            # Safety-first rule: never delete Ozon chats automatically unless the
-            # operator explicitly enables it. Ozon payloads can contain technical
-            # markers inside normal buyer dialogs, so uncertain chats must stay in
-            # local history and can be classified/hidden later.
-            if _env_bool("OZON_DELETE_SYSTEM_HISTORY_CHATS", False):
-                repo.mark_ozon_chat_as_system(chat_id, reason="history_system_marker")
+            # Explicit system dialogs are not customer chats. Delete local copies by
+            # default so they do not appear in the inbox or trigger future history loads.
+            repo.mark_ozon_chat_as_system(chat_id, reason="history_system_marker")
+            if _env_bool("OZON_DELETE_SYSTEM_HISTORY_CHATS", True):
                 repo.delete_chats_by_ids([chat_id])
                 continue
-            if _env_bool("OZON_MARK_SYSTEM_HISTORY_CHATS", False):
-                repo.mark_ozon_chat_as_system(chat_id, reason="history_system_marker")
+            if not _env_bool("OZON_MARK_SYSTEM_HISTORY_CHATS", True):
+                continue
 
         # Если список чатов не содержит имени покупателя, пробуем взять его из истории.
         if not _is_real_customer_name(unified_chat.customer_name):
@@ -2874,7 +2892,7 @@ def api_mark_all_notifications_read(request: Request) -> dict[str, Any]:
 @app.patch("/api/chats/{chat_id}")
 def update_chat(chat_id: int, payload: ChatUpdate, request: Request) -> dict[str, Any]:
     current_user = _current_user(request)
-    before = repo.get_chat(chat_id)
+    before = repo.get_chat_summary(chat_id)
     chat = repo.update_chat(chat_id, payload)
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")

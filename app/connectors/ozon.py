@@ -410,46 +410,57 @@ class OzonConnector(MarketplaceConnector):
 
 
     @staticmethod
-    def _payload_contains_token(payload: Any, tokens: tuple[str, ...], *, max_depth: int = 7) -> bool:
-        """Recursive safe search for system-user markers in Ozon payloads."""
-        lowered_tokens = tuple(t.lower() for t in tokens if t)
-        if not lowered_tokens:
-            return False
+    def _normalize_system_sender(value: Any) -> str:
+        return re.sub(r"[\s_\-]+", "", str(value or "").strip().lower())
 
-        def walk(value: Any, depth: int = 0) -> bool:
-            if depth > max_depth:
-                return False
-            if value in (None, ""):
-                return False
-            if isinstance(value, str):
-                text = value.lower()
-                return any(token in text for token in lowered_tokens)
-            if isinstance(value, (int, float, bool)):
-                return False
-            if isinstance(value, list):
-                return any(walk(item, depth + 1) for item in value[:80])
-            if isinstance(value, dict):
-                for key, nested in value.items():
-                    key_l = str(key).lower()
-                    if any(token in key_l for token in lowered_tokens):
-                        return True
-                    if walk(nested, depth + 1):
-                        return True
+    @classmethod
+    def _system_sender_matches(cls, value: Any, markers: tuple[str, ...]) -> bool:
+        normalized = cls._normalize_system_sender(value)
+        if not normalized:
             return False
+        normalized_markers = {cls._normalize_system_sender(marker) for marker in markers if marker}
+        return normalized in normalized_markers
 
-        return walk(payload)
+    @classmethod
+    def _exact_sender_designations_from_payload(cls, payload: Any, depth: int = 0) -> list[str]:
+        """Extract only sender/user names, not arbitrary text/type fields.
+
+        This avoids the previous over-filtering where normal customer chats were
+        skipped because raw payloads contained words like chatbot/notification in
+        unrelated metadata.
+        """
+        if depth > 4 or payload in (None, ""):
+            return []
+        values: list[str] = []
+        name_keys = {
+            "name", "login", "username", "user_name", "display_name", "displayname",
+            "nickname", "author_name", "authorname", "sender_name", "sendername",
+            "from_name", "fromname", "system_name", "systemname",
+        }
+        container_keys = {"user", "author", "sender", "from", "participant", "profile"}
+        if isinstance(payload, dict):
+            for key, nested in payload.items():
+                key_l = str(key).lower()
+                if key_l in name_keys and isinstance(nested, (str, int, float)):
+                    values.append(str(nested))
+                elif key_l in container_keys:
+                    if isinstance(nested, (str, int, float)):
+                        values.append(str(nested))
+                    elif isinstance(nested, dict):
+                        values.extend(cls._exact_sender_designations_from_payload(nested, depth + 1))
+        elif isinstance(payload, list):
+            for item in payload[:20]:
+                values.extend(cls._exact_sender_designations_from_payload(item, depth + 1))
+        return values
 
     @classmethod
     def _looks_like_notification_user_chat(cls, item: dict[str, Any]) -> bool:
-        """Detect Ozon system notification conversations such as notificationuser.
-
-        These are not buyer dialogs and should not appear in the operator inbox.
-        """
+        """Detect explicit Ozon notification/system user chats by sender nick only."""
         if os.getenv("OZON_EXCLUDE_NOTIFICATIONUSER_CHATS", "1").strip().lower() in {"0", "false", "no", "off", "нет"}:
             return False
         tokens_raw = os.getenv("OZON_NOTIFICATION_USER_MARKERS", "notificationuser,notification_user,systemuser,system_user")
-        tokens = tuple(t.strip().lower() for t in tokens_raw.split(",") if t.strip())
-        return cls._payload_contains_token(item, tokens)
+        markers = tuple(t.strip().lower() for t in tokens_raw.split(",") if t.strip())
+        return any(cls._system_sender_matches(value, markers) for value in cls._exact_sender_designations_from_payload(item))
 
 
     @classmethod
@@ -540,8 +551,13 @@ class OzonConnector(MarketplaceConnector):
 
     @classmethod
     def _is_customer_chat_item(cls, item: dict[str, Any]) -> bool:
-        # v81: by default keep everything Ozon returns. Do not risk losing buyer
-        # dialogs during deep backfill. Strict filtering can be enabled manually.
+        # notificationuser/systemuser are explicit Ozon technical senders.
+        # Skip them at the chat-list stage so CRM does not even request history.
+        if cls._looks_like_notification_user_chat(item):
+            return False
+
+        # v81: by default keep uncertain Ozon chats. Do not risk losing buyer
+        # dialogs during deep backfill. Strict filtering can still be enabled manually.
         mode = os.getenv("OZON_EXCLUDE_SUPPORT_CHATS", "0").strip().lower()
         if mode in {"0", "false", "no", "off", "нет"}:
             return True

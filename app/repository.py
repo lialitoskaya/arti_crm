@@ -89,6 +89,58 @@ def _chat_status_blocks_waiting_response(chat: dict[str, Any]) -> bool:
     return False
 
 
+def _closed_status_condition_sql() -> str:
+    # Closed/archived workflow statuses must stay out of the active inbox.
+    # This also covers user-created statuses with title "Закрыт" and generated
+    # keys such as "zakryt", not only the built-in key "closed".
+    return (
+        "("
+        "c.status='closed' OR "
+        "lower(c.status) IN ('closed', 'archive', 'archived', 'zakryt', 'zakryto') OR "
+        "c.status LIKE '%Закры%' OR c.status LIKE '%закры%' OR "
+        "c.status IN ("
+        "SELECT key FROM chat_statuses "
+        "WHERE key='closed' "
+        "OR lower(key) IN ('closed', 'archive', 'archived', 'zakryt', 'zakryto') "
+        "OR title LIKE '%Закры%' "
+        "OR title LIKE '%закры%'"
+        ")"
+        ")"
+    )
+
+
+def _is_closed_status_key_conn(conn, status_value: str | None) -> bool:
+    raw = str(status_value or "").strip()
+    if not raw:
+        return False
+    lowered = raw.lower()
+    if lowered in {"closed", "archive", "archived", "zakryt", "zakryto"}:
+        return True
+    if "закры" in lowered or "архив" in lowered:
+        return True
+    row = conn.execute(
+        """
+        SELECT key, title
+        FROM chat_statuses
+        WHERE key=?
+        LIMIT 1
+        """,
+        (raw,),
+    ).fetchone()
+    if not row:
+        return False
+    title = str(row["title"] or "").strip().lower().replace("ё", "е")
+    key = str(row["key"] or "").strip().lower()
+    return key in {"closed", "archive", "archived", "zakryt", "zakryto"} or "закры" in title or "архив" in title
+
+
+def _canonical_workflow_status_conn(conn, status_value: str | None) -> str:
+    raw = str(status_value or "").strip()
+    if _is_closed_status_key_conn(conn, raw):
+        return "closed"
+    return raw
+
+
 def _decorate_chat_sla(chat: dict[str, Any]) -> dict[str, Any]:
     """Add simple SLA flags and repair visible last-message fields for UI."""
     actual_text = chat.get("actual_last_message_text")
@@ -156,10 +208,57 @@ def _ozon_notification_tokens() -> tuple[str, ...]:
     )
 
 
+def _normalize_system_sender(value: Any) -> str:
+    return re.sub(r"[\s_\-]+", "", str(value or "").strip().lower())
+
+
+def _system_sender_matches(value: Any, markers: tuple[str, ...]) -> bool:
+    normalized = _normalize_system_sender(value)
+    if not normalized:
+        return False
+    normalized_markers = {_normalize_system_sender(marker) for marker in markers if marker}
+    return normalized in normalized_markers
+
+
+def _extract_sender_designations(value: Any, depth: int = 0) -> list[str]:
+    if depth > 4 or value in (None, ""):
+        return []
+    values: list[str] = []
+    name_keys = {
+        "name", "login", "username", "user_name", "display_name", "displayname",
+        "nickname", "author_name", "authorname", "sender_name", "sendername",
+        "from_name", "fromname", "system_name", "systemname",
+    }
+    container_keys = {"user", "author", "sender", "from", "participant", "profile"}
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            key_l = str(key).lower()
+            if key_l in name_keys and isinstance(nested, (str, int, float)):
+                values.append(str(nested))
+            elif key_l in container_keys:
+                if isinstance(nested, (str, int, float)):
+                    values.append(str(nested))
+                elif isinstance(nested, dict):
+                    values.extend(_extract_sender_designations(nested, depth + 1))
+    elif isinstance(value, list):
+        for item in value[:20]:
+            values.extend(_extract_sender_designations(item, depth + 1))
+    return values
+
+
 def _metadata_looks_like_ozon_notification_user(metadata: dict[str, Any]) -> bool:
     if __import__("os").getenv("OZON_EXCLUDE_NOTIFICATIONUSER_CHATS", "1").strip().lower() in {"0", "false", "no", "off", "нет"}:
         return False
-    return _payload_contains_token(metadata, _ozon_notification_tokens())
+    markers = _ozon_notification_tokens()
+    return any(_system_sender_matches(value, markers) for value in _extract_sender_designations(metadata))
+
+
+def _raw_json_sender_matches(raw_json: str | None, markers: tuple[str, ...]) -> bool:
+    try:
+        payload = json.loads(raw_json or "{}")
+    except Exception:
+        payload = {}
+    return any(_system_sender_matches(value, markers) for value in _extract_sender_designations(payload))
 
 
 def delete_chats_by_ids(chat_ids: list[int]) -> int:
@@ -256,15 +355,24 @@ def _metadata_looks_like_ozon_support(metadata: dict[str, Any]) -> bool:
 
 
 def delete_ozon_support_chats() -> int:
-    """Conservative cleanup for Ozon service chats.
+    """Cleanup exact Ozon system dialogs from local DB.
 
-    v81: disabled by default. Backfill showed that Ozon list payloads can contain
-    technical markers in normal customer dialogs, so automatic deletion is unsafe.
-    To enable the old cleanup manually, set OZON_DELETE_SUPPORT_CHATS=1.
+    Exact rules:
+    - notificationuser/systemuser: any saved message/list sender name;
+    - chatbot: first saved message sender name only.
+    No broad raw_json text search is used.
     """
-    if os.getenv("OZON_DELETE_SUPPORT_CHATS", "0").strip().lower() not in {"1", "true", "yes", "on", "да"}:
+    if os.getenv("OZON_DELETE_SUPPORT_CHATS", "1").strip().lower() in {"0", "false", "no", "off", "нет"}:
         return 0
+
     to_delete: list[int] = []
+    system_markers = _ozon_notification_tokens()
+    chatbot_markers = tuple(
+        token.strip().lower()
+        for token in os.getenv("OZON_FIRST_MESSAGE_SYSTEM_USER_MARKERS", "chatbot").split(",")
+        if token.strip()
+    )
+
     with get_connection() as conn:
         rows = conn.execute(
             """
@@ -278,35 +386,70 @@ def delete_ozon_support_chats() -> int:
                 metadata = json.loads(row["metadata_json"] or "{}")
             except Exception:
                 metadata = {}
-            if _metadata_looks_like_ozon_support(metadata):
+            if _metadata_looks_like_ozon_notification_user(metadata):
                 to_delete.append(int(row["id"]))
 
-        # Keep this legacy cleanup exact and narrow. Do not search for generic
-        # "system" / "notification" because they appear in normal API payloads.
         msg_rows = conn.execute(
             """
-            SELECT DISTINCT c.id
+            SELECT c.id, m.author, m.raw_json
             FROM chats c
             JOIN messages m ON m.chat_id = c.id
             WHERE c.marketplace='ozon'
-              AND (
-                lower(COALESCE(m.author,'')) IN ('notificationuser','notification_user','systemuser','system_user')
-                OR lower(COALESCE(m.raw_json,'')) LIKE '%notificationuser%'
-                OR lower(COALESCE(m.raw_json,'')) LIKE '%notification_user%'
-                OR lower(COALESCE(m.raw_json,'')) LIKE '%systemuser%'
-                OR lower(COALESCE(m.raw_json,'')) LIKE '%system_user%'
-              )
             """
         ).fetchall()
         for row in msg_rows:
             cid = int(row["id"])
-            if cid not in to_delete:
+            if cid in to_delete:
+                continue
+            if _system_sender_matches(row["author"], system_markers) or _raw_json_sender_matches(row["raw_json"], system_markers):
+                to_delete.append(cid)
+
+        first_rows = conn.execute(
+            """
+            SELECT c.id, m.author, m.raw_json
+            FROM chats c
+            JOIN messages m ON m.chat_id = c.id
+            WHERE c.marketplace='ozon'
+              AND m.id = (
+                SELECT m2.id
+                FROM messages m2
+                WHERE m2.chat_id = c.id
+                ORDER BY datetime(m2.created_at) ASC, m2.id ASC
+                LIMIT 1
+              )
+            """
+        ).fetchall()
+        for row in first_rows:
+            cid = int(row["id"])
+            if cid in to_delete:
+                continue
+            if _system_sender_matches(row["author"], chatbot_markers) or _raw_json_sender_matches(row["raw_json"], chatbot_markers):
                 to_delete.append(cid)
 
     return delete_chats_by_ids(to_delete)
 
 def upsert_chat(chat: ChatCreate) -> int:
     with get_connection() as conn:
+        incoming_metadata = dict(chat.metadata or {})
+        existing = conn.execute(
+            "SELECT status, metadata_json FROM chats WHERE marketplace=? AND external_chat_id=?",
+            (chat.marketplace, chat.external_chat_id),
+        ).fetchone()
+        if existing:
+            try:
+                existing_metadata = json.loads(existing["metadata_json"] or "{}")
+            except Exception:
+                existing_metadata = {}
+            # Marketplace sync brings fresh raw metadata, but must not erase CRM
+            # workflow markers. Losing _crm_status_manual caused closed chats to
+            # return to the active inbox after the next background sync.
+            for key, value in existing_metadata.items():
+                if str(key).startswith("_crm_"):
+                    incoming_metadata[key] = value
+            if _is_closed_status_key_conn(conn, existing["status"]):
+                incoming_metadata["_crm_status_manual"] = True
+                incoming_metadata.setdefault("_crm_status_manual_value", "closed")
+                incoming_metadata.setdefault("_crm_status_manual_source_value", existing["status"])
         conn.execute(
             """
             INSERT INTO chats (
@@ -324,10 +467,21 @@ def upsert_chat(chat: ChatCreate) -> int:
                 -- when a marketplace explicitly reports unread activity. In that case
                 -- a previously archived/closed chat must return to the active inbox.
                 status=CASE
-                    -- Manual CRM status has priority over marketplace sync.
-                    -- Without this, background sync could reset a custom status
-                    -- back to "new" when marketplace metadata contains unread flags.
+                    -- Manual CRM status and closed-like workflow statuses have priority
+                    -- over marketplace sync. Without this, background sync could reset
+                    -- closed dialogs back to "new" when marketplace metadata contains
+                    -- unread flags from an already imported message.
                     WHEN chats.metadata_json LIKE '%"_crm_status_manual": true%' THEN chats.status
+                    WHEN chats.status='closed' THEN chats.status
+                    WHEN lower(chats.status) IN ('closed', 'archive', 'archived', 'zakryt', 'zakryto') THEN chats.status
+                    WHEN chats.status LIKE '%Закры%' OR chats.status LIKE '%закры%' THEN chats.status
+                    WHEN chats.status IN (
+                        SELECT key FROM chat_statuses
+                        WHERE key='closed'
+                           OR lower(key) IN ('closed', 'archive', 'archived', 'zakryt', 'zakryto')
+                           OR title LIKE '%Закры%'
+                           OR title LIKE '%закры%'
+                    ) THEN chats.status
                     -- Custom statuses are not known to marketplace sync, so never
                     -- overwrite them from unread_count / first_unread_message_id.
                     WHEN chats.status NOT IN ('new', 'in_progress', 'waiting_customer', 'closed') THEN chats.status
@@ -348,7 +502,7 @@ def upsert_chat(chat: ChatCreate) -> int:
                 chat.order_id,
                 chat.status,
                 chat.assigned_to,
-                json.dumps(chat.metadata, ensure_ascii=False),
+                json.dumps(incoming_metadata, ensure_ascii=False),
             ),
         )
         row = conn.execute(
@@ -1214,12 +1368,14 @@ def _chats_select_sql(where: str) -> str:
 def list_chats(status: str | None = None, marketplace: str | None = None, archived: bool = False, assigned_user_id: int | None = None, funnel_id: int | None = None) -> list[dict[str, Any]]:
     clauses = ["c.marketplace != 'mock'"]
     params: list[Any] = []
+    closed_condition = _closed_status_condition_sql()
 
-    # Main list shows active chats only. Closed chats live in Archive.
+    # Main list shows active chats only. Closed-like statuses live in Archive.
+    # This covers both built-in "closed" and custom statuses named "Закрыт".
     if archived:
-        clauses.append("c.status = 'closed'")
+        clauses.append(closed_condition)
     else:
-        clauses.append("c.status != 'closed'")
+        clauses.append(f"NOT {closed_condition}")
         if status and status != "closed":
             clauses.append("c.status = ?")
             params.append(status)
@@ -1250,6 +1406,20 @@ def get_chat_by_external(marketplace: str, external_chat_id: str) -> dict[str, A
         row = conn.execute(
             _chats_select_sql("WHERE c.marketplace=? AND c.external_chat_id=? AND c.marketplace != 'mock'"),
             (marketplace, external_chat_id),
+        ).fetchone()
+        return _decorate_chat_sla(row_to_dict(row)) if row else None
+
+
+def get_chat_summary(chat_id: int) -> dict[str, Any] | None:
+    """Return a chat row without loading full message history.
+
+    Used by quick UI updates such as status/assignee changes. Loading the whole
+    dialog here makes mobile status edits feel slow and can race with navigation.
+    """
+    with get_connection() as conn:
+        row = conn.execute(
+            _chats_select_sql("WHERE c.id=? AND c.marketplace != 'mock'"),
+            (int(chat_id),),
         ).fetchone()
         return _decorate_chat_sla(row_to_dict(row)) if row else None
 
@@ -1290,7 +1460,7 @@ def update_chat(chat_id: int, payload: ChatUpdate) -> dict[str, Any] | None:
     # model_fields_set lets us distinguish "not sent" from "sent as null/empty".
     fields = payload.model_dump(exclude_unset=True)
     if not fields:
-        return get_chat(chat_id)
+        return get_chat_summary(chat_id)
 
     with get_connection() as conn:
         current = conn.execute("SELECT metadata_json FROM chats WHERE id=?", (chat_id,)).fetchone()
@@ -1316,9 +1486,11 @@ def update_chat(chat_id: int, payload: ChatUpdate) -> dict[str, Any] | None:
         if "status" in fields:
             status_value = str(fields.get("status") or "").strip()
             if status_value:
-                fields["status"] = status_value
+                canonical_status = _canonical_workflow_status_conn(conn, status_value)
+                fields["status"] = canonical_status
                 metadata["_crm_status_manual"] = True
-                metadata["_crm_status_manual_value"] = status_value
+                metadata["_crm_status_manual_value"] = canonical_status
+                metadata["_crm_status_manual_source_value"] = status_value
                 metadata["_crm_status_manual_at"] = __import__("datetime").datetime.utcnow().isoformat(timespec="seconds") + "Z"
                 fields["metadata_json"] = json.dumps(metadata, ensure_ascii=False)
 
@@ -1355,7 +1527,7 @@ def update_chat(chat_id: int, payload: ChatUpdate) -> dict[str, Any] | None:
             f"UPDATE chats SET {assignments}, updated_at=CURRENT_TIMESTAMP WHERE id=?",
             params,
         )
-    return get_chat(chat_id)
+    return get_chat_summary(chat_id)
 
 
 

@@ -40,30 +40,75 @@ let lastBrowserNotificationAt = 0;
 let mobileChatClosedByUser = false;
 
 let currentChatMetaSaveTimer = null;
+let openChatRequestSeq = 0;
+
+function mergeChatSummary(updated) {
+  if (!updated || !updated.id) return;
+  chats = (chats || []).map((chat) => Number(chat.id) === Number(updated.id) ? { ...chat, ...updated } : chat);
+  if (currentChat && Number(currentChat.id) === Number(updated.id)) {
+    currentChat = { ...currentChat, ...updated };
+  }
+}
+
+function refreshChatListInBackground() {
+  loadChats().catch(err => console.warn('background chat list refresh failed', err));
+}
+
 async function persistCurrentChatMeta() {
   if (!currentChatId) return;
+  const chatId = Number(currentChatId);
   const newStatus = $('chatStatus')?.value;
-  await api(`/api/chats/${currentChatId}`, {
-    method: 'PATCH',
-    body: JSON.stringify({
-      status: newStatus,
-      assigned_user_id: $('assignedUserSelect')?.value ? Number($('assignedUserSelect').value) : null,
-    }),
-  });
-  if (newStatus === 'closed' && chatScope !== 'archive') {
-    currentChatId = null;
-    currentChat = null;
-    selectedAiMessageId = null;
-    mobileChatClosedByUser = false;
-    setMobileChatOpen(false);
-    $('chatPanel')?.classList.add('hidden');
-    $('emptyState')?.classList.remove('hidden');
-    if ($('emptyState')) $('emptyState').textContent = 'Чат закрыт и перенесён в Архив.';
-    await loadChats();
-    return;
+  const assignedUserId = $('assignedUserSelect')?.value ? Number($('assignedUserSelect').value) : null;
+
+  // Optimistic UI update: the list should reflect the selected status immediately,
+  // without waiting for a full chat reload.
+  const statusMeta = (chatSettings.statuses || []).find(s => String(s.key) === String(newStatus));
+  const assigneeOption = $('assignedUserSelect')?.selectedOptions?.[0];
+  const optimistic = {
+    id: chatId,
+    status: newStatus,
+    status_label: statusMeta?.title || statusNames[newStatus] || newStatus,
+    status_color: statusMeta?.color || '',
+    assigned_user_id: assignedUserId,
+    assigned_to: assignedUserId ? (assigneeOption?.textContent || '').trim() : null,
+  };
+  mergeChatSummary(optimistic);
+  renderChatList();
+
+  try {
+    const updated = await api(`/api/chats/${chatId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        status: newStatus,
+        assigned_user_id: assignedUserId,
+      }),
+    });
+    mergeChatSummary(updated);
+    if (isClosedWorkflowStatus(updated.status || newStatus, updated.status_label || optimistic.status_label) && chatScope !== 'archive') {
+      chats = (chats || []).filter((chat) => Number(chat.id) !== Number(chatId));
+    }
+    renderChatList();
+
+    if (isClosedWorkflowStatus(updated?.status || newStatus, updated?.status_label || optimistic.status_label) && chatScope !== 'archive') {
+      currentChatId = null;
+      currentChat = null;
+      selectedAiMessageId = null;
+      mobileChatClosedByUser = false;
+      setMobileChatOpen(false);
+      $('chatPanel')?.classList.add('hidden');
+      $('emptyState')?.classList.remove('hidden');
+      if ($('emptyState')) $('emptyState').textContent = 'Чат закрыт и перенесён в Архив.';
+      await loadChats();
+      return;
+    }
+
+    // Refresh list data in the background, but do not reopen the dialog.
+    // Reopening here caused slow mobile transitions and stale status display.
+    refreshChatListInBackground();
+  } catch (err) {
+    notify('Не удалось сохранить статус чата', String(err.message || err));
+    refreshChatListInBackground();
   }
-  await loadChats();
-  await openChat(currentChatId);
 }
 function scheduleCurrentChatMetaSave() {
   if (currentChatMetaSaveTimer) clearTimeout(currentChatMetaSaveTimer);
@@ -335,6 +380,12 @@ async function api(path, options = {}) {
     try {
       const parsed = JSON.parse(body);
       detail = parsed.detail || parsed.error || body;
+      if (Array.isArray(parsed.detail)) {
+        detail = parsed.detail.map((item) => {
+          const field = Array.isArray(item.loc) ? item.loc.filter(part => part !== 'body').join('.') : '';
+          return `${field ? field + ': ' : ''}${item.msg || 'Ошибка заполнения'}`;
+        }).join('; ');
+      }
     } catch (_) {}
     if (response.status === 401) showLogin();
     throw new Error(`${response.status}: ${detail}`);
@@ -446,6 +497,16 @@ function isWaitingResponseBlockedStatus(chat) {
     || status === 'waiting_customer'
     || label.includes('закры')
     || label.includes('ждем клиент');
+}
+
+function isClosedWorkflowStatus(status, label = '') {
+  const rawStatus = String(status || '').toLowerCase();
+  const rawLabel = String(label || statusNames[rawStatus] || '').toLowerCase().replace('ё', 'е');
+  return rawStatus === 'closed'
+    || rawStatus === 'archived'
+    || rawStatus === 'zakryt'
+    || rawLabel.includes('закры')
+    || rawLabel.includes('архив');
 }
 
 function shouldShowWaitingMarker(chat) {
@@ -731,7 +792,9 @@ function backToChatListMobile() {
   // Do not clear currentChatId, otherwise the selected item and draft context are lost,
   // but prevent auto-refresh from opening the chat again by itself.
   mobileChatClosedByUser = true;
+  openChatRequestSeq += 1;
   setMobileChatOpen(false);
+  renderChatList();
 }
 
 function scrollMessagesToBottom(reason = '') {
@@ -956,7 +1019,8 @@ function renderChatList() {
     list.innerHTML = `<div class="chat-item empty-chat-item"><p>${chatScope === 'archive' ? 'В архиве пока нет закрытых чатов.' : 'Активных чатов пока нет. Маркетплейсы обновляются автоматически в фоне.'}</p></div>`;
     return;
   }
-  for (const chat of chats) {
+  const visibleChats = (chats || []).filter(chat => chatScope === 'archive' || !isClosedWorkflowStatus(chat.status, chat.status_label));
+  for (const chat of visibleChats) {
     const item = document.createElement('div');
     const showWaitingMarker = shouldShowWaitingMarker(chat);
     item.className = `chat-item ${chat.id === currentChatId ? 'active' : ''} ${showWaitingMarker ? 'needs-response' : ''}`;
@@ -982,21 +1046,45 @@ function renderChatList() {
 }
 
 async function openChat(chatId, options = {}) {
+  const requestSeq = ++openChatRequestSeq;
   mobileChatClosedByUser = false;
   const previousChatId = currentChatId;
-  currentChatId = chatId;
-  if (previousChatId !== chatId) selectedAiMessageId = null;
+  currentChatId = Number(chatId);
+  if (previousChatId !== currentChatId) selectedAiMessageId = null;
   const messagesBox = $('messages');
   const wasNearBottom = messagesBox ? (messagesBox.scrollHeight - messagesBox.scrollTop - messagesBox.clientHeight < 80) : true;
 
-  const chat = await api(`/api/chats/${chatId}`);
-  currentChat = chat;
-  if (selectedAiMessageId && !(chat.messages || []).some(m => Number(m.id) === Number(selectedAiMessageId))) {
-    selectedAiMessageId = null;
-  }
+  // Make the tap feel instant: show the chat screen and active row before the API responds.
   $('emptyState')?.classList.add('hidden');
   $('chatPanel')?.classList.remove('hidden');
   setMobileChatOpen(true);
+  renderChatList();
+
+  if (messagesBox && previousChatId !== currentChatId) {
+    messagesBox.innerHTML = '<div class="empty-card chat-loading-card">Загружаю диалог…</div>';
+  }
+
+  let chat;
+  try {
+    chat = await api(`/api/chats/${chatId}`);
+  } catch (err) {
+    if (requestSeq === openChatRequestSeq) {
+      notify('Не удалось открыть чат', String(err.message || err));
+      setMobileChatOpen(false);
+    }
+    return;
+  }
+
+  // Ignore stale responses when the operator taps another chat quickly or returns to the list.
+  if (requestSeq !== openChatRequestSeq || Number(currentChatId) !== Number(chatId)) {
+    return;
+  }
+
+  currentChat = chat;
+  mergeChatSummary(chat);
+  if (selectedAiMessageId && !(chat.messages || []).some(m => Number(m.id) === Number(selectedAiMessageId))) {
+    selectedAiMessageId = null;
+  }
 
   if ($('chatTitle')) $('chatTitle').textContent = `${customerLabel(chat)}`;
   const chatMarketplaceBadge = $('chatMarketplaceBadge');
@@ -1025,7 +1113,7 @@ async function openChat(chatId, options = {}) {
   renderAiSelectionBar();
   renderChatList();
 
-  const shouldPreserveScroll = options.keepScroll && messagesBox && !wasNearBottom && previousChatId === chatId;
+  const shouldPreserveScroll = options.keepScroll && messagesBox && !wasNearBottom && previousChatId === Number(chatId);
   if (shouldPreserveScroll) {
     return;
   }
@@ -2761,14 +2849,31 @@ async function loadUsers() {
   `).join('');
 }
 
+function userCreateValidationError(payload) {
+  if (!payload.username || payload.username.length < 2) {
+    return { message: 'Логин должен быть не короче 2 символов.', fieldId: 'newUserUsername' };
+  }
+  if (!payload.password || payload.password.length < 6) {
+    return { message: 'Пароль должен быть не короче 6 символов.', fieldId: 'newUserPassword' };
+  }
+  return null;
+}
+
+
 async function submitUserCreate(event) {
   event.preventDefault();
   const payload = {
     username: $('newUserUsername')?.value?.trim() || '',
-    display_name: $('newUserDisplayName')?.value?.trim() || '',
+    display_name: $('newUserDisplayName')?.value?.trim() || null,
     password: $('newUserPassword')?.value || '',
     role: $('newUserRole')?.value || 'manager',
   };
+  const validation = userCreateValidationError(payload);
+  if (validation) {
+    notify('Проверьте данные сотрудника', validation.message);
+    $(validation.fieldId)?.focus();
+    return;
+  }
   try {
     await api('/api/users', { method: 'POST', body: JSON.stringify(payload) });
     ['newUserUsername', 'newUserDisplayName', 'newUserPassword'].forEach(id => { if ($(id)) $(id).value = ''; });
@@ -2777,7 +2882,8 @@ async function submitUserCreate(event) {
     await loadAssignees();
     notify('Готово', 'Сотрудник создан.');
   } catch (err) {
-    notify('Не удалось создать сотрудника', String(err.message || err));
+    const message = String(err.message || err).replace(/^422:\s*/,'');
+    notify('Не удалось создать сотрудника', message || 'Проверьте логин, пароль и роль.');
   }
 }
 

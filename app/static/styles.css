@@ -6993,3 +6993,25 @@ button#saveChatSettingsBottomBtn.crm-light-btn {
     min-height: 42px !important;
   }
 }
+
+
+/* v103 patch 19 — employee create validation */
+.user-create-form input:invalid {
+  box-shadow: none;
+}
+
+.user-create-form input:invalid:focus {
+  border-color: rgba(255, 122, 61, 0.38);
+  box-shadow: 0 0 0 4px rgba(255, 122, 61, 0.08);
+}
+
+
+/* v103 patch 20 — faster chat open and stable status edits */
+.chat-loading-card {
+  margin: 16px;
+  text-align: center;
+  color: #7b8494;
+  background: rgba(255,255,255,0.72);
+  border: 1px solid rgba(32,41,57,0.06);
+  box-shadow: none;
+}

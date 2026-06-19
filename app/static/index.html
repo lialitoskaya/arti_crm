@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Arti CRM</title>
-  <link rel="stylesheet" href="/static/styles.css?v=103p18" />
+  <link rel="stylesheet" href="/static/styles.css?v=103p24" />
   <style id="arti-crm-inline-style">
 /* Inline fallback v43: responsive CSS is embedded so narrow screens never open unstyled. */
 :root {
@@ -2454,9 +2454,9 @@ html, body { max-width: 100%; }
               <button id="userCreateModalCloseBtn" class="user-create-modal-close" type="button" aria-label="Закрыть">×</button>
             </div>
             <form id="userCreateForm" class="settings-form user-create-form">
-              <input id="newUserUsername" autocomplete="off" placeholder="Логин" required />
+              <input id="newUserUsername" autocomplete="off" placeholder="Логин" minlength="2" required />
               <input id="newUserDisplayName" autocomplete="off" placeholder="Имя сотрудника" />
-              <input id="newUserPassword" autocomplete="new-password" type="password" placeholder="Пароль" required />
+              <input id="newUserPassword" autocomplete="new-password" type="password" placeholder="Пароль, минимум 6 символов" minlength="6" required />
               <select id="newUserRole">
                 <option value="manager">Менеджер</option>
                 <option value="viewer">Наблюдатель</option>
@@ -2604,6 +2604,6 @@ html, body { max-width: 100%; }
 
   <div id="notificationToasts" class="notification-toast-stack" aria-live="polite"></div>
 
-  <script src="/static/app.js?v=103p18"></script>
+  <script src="/static/app.js?v=103p24"></script>
 </body>
 </html>
