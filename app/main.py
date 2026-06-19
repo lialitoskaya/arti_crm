@@ -858,6 +858,9 @@ async def _sync_marketplace_unlocked(marketplace: str, *, background: bool = Fal
     chat_refs: list[tuple[int, Any, dict[str, Any] | None]] = []
     for unified_chat in unified_chats:
         existing_chat = repo.get_chat_by_external(unified_chat.marketplace, unified_chat.external_chat_id)
+        if repo.chat_is_excluded_as_system(existing_chat):
+            histories_skipped += 1
+            continue
         should_fetch = _should_fetch_messages(marketplace, existing_chat, unified_chat, background=background)
         chat_id = repo.upsert_chat(
             ChatCreate(
@@ -918,14 +921,13 @@ async def _sync_marketplace_unlocked(marketplace: str, *, background: bool = Fal
 
         messages = messages or []
         if marketplace == "ozon" and _messages_are_ozon_system_dialog(messages):
-            # Explicit system dialogs are not customer chats. Delete local copies by
-            # default so they do not appear in the inbox or trigger future history loads.
-            repo.mark_ozon_chat_as_system(chat_id, reason="history_system_marker")
-            if _env_bool("OZON_DELETE_SYSTEM_HISTORY_CHATS", True):
+            # Explicit system dialogs are not customer chats. Hide and remember them
+            # instead of deleting by default; otherwise the next chat-list sync can
+            # recreate them and show them again before history is fetched.
+            repo.hide_ozon_system_chat_ids([chat_id], reason="history_system_marker")
+            if _env_bool("OZON_DELETE_SYSTEM_HISTORY_CHATS", False):
                 repo.delete_chats_by_ids([chat_id])
-                continue
-            if not _env_bool("OZON_MARK_SYSTEM_HISTORY_CHATS", True):
-                continue
+            continue
 
         # Если список чатов не содержит имени покупателя, пробуем взять его из истории.
         if not _is_real_customer_name(unified_chat.customer_name):

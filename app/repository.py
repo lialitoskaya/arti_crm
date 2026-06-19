@@ -302,6 +302,52 @@ def mark_ozon_chat_as_system(chat_id: int, reason: str = "system_dialog") -> Non
         return
 
 
+def _metadata_is_excluded_as_system(metadata: dict[str, Any] | None) -> bool:
+    if not isinstance(metadata, dict):
+        return False
+    return bool(metadata.get("_crm_excluded_as_system") or metadata.get("crm_excluded_as_system"))
+
+
+def chat_is_excluded_as_system(chat: dict[str, Any] | None) -> bool:
+    if not isinstance(chat, dict):
+        return False
+    metadata = chat.get("metadata") if isinstance(chat.get("metadata"), dict) else None
+    if metadata is None and "metadata_json" in chat:
+        try:
+            metadata = json.loads(chat.get("metadata_json") or "{}")
+        except Exception:
+            metadata = {}
+    return _metadata_is_excluded_as_system(metadata)
+
+
+def _system_excluded_condition_sql(alias: str = "c") -> str:
+    return (
+        f"COALESCE({alias}.metadata_json, '{{}}') LIKE '%\"_crm_excluded_as_system\": true%' "
+        f"OR COALESCE({alias}.metadata_json, '{{}}') LIKE '%\"_crm_excluded_as_system\":true%'"
+    )
+
+
+def hide_ozon_system_chat_ids(chat_ids: list[int], reason: str = "system_dialog") -> int:
+    ids = [int(i) for i in chat_ids if i]
+    if not ids:
+        return 0
+    placeholders = ",".join("?" for _ in ids)
+    with get_connection() as conn:
+        rows = conn.execute(f"SELECT id, metadata_json FROM chats WHERE id IN ({placeholders})", ids).fetchall()
+        for row in rows:
+            try:
+                metadata = json.loads(row["metadata_json"] or "{}")
+            except Exception:
+                metadata = {}
+            metadata["_crm_excluded_as_system"] = True
+            metadata["_crm_excluded_reason"] = reason
+            conn.execute(
+                "UPDATE chats SET metadata_json=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (json.dumps(metadata, ensure_ascii=False), int(row["id"])),
+            )
+        return len(rows)
+
+
 def _metadata_looks_like_ozon_support(metadata: dict[str, Any]) -> bool:
     if not isinstance(metadata, dict):
         return False
@@ -355,17 +401,16 @@ def _metadata_looks_like_ozon_support(metadata: dict[str, Any]) -> bool:
 
 
 def delete_ozon_support_chats() -> int:
-    """Cleanup exact Ozon system dialogs from local DB.
+    """Hide exact Ozon system dialogs from CRM.
 
-    Exact rules:
-    - notificationuser/systemuser: any saved message/list sender name;
-    - chatbot: first saved message sender name only.
-    No broad raw_json text search is used.
+    Important: by default this function no longer deletes rows. It marks them as
+    _crm_excluded_as_system so future syncs remember the dialog and do not show
+    or reload it again. Set OZON_PURGE_SYSTEM_CHATS=1 only for manual cleanup.
     """
     if os.getenv("OZON_DELETE_SUPPORT_CHATS", "1").strip().lower() in {"0", "false", "no", "off", "нет"}:
         return 0
 
-    to_delete: list[int] = []
+    to_hide: list[int] = []
     system_markers = _ozon_notification_tokens()
     chatbot_markers = tuple(
         token.strip().lower()
@@ -387,8 +432,9 @@ def delete_ozon_support_chats() -> int:
             except Exception:
                 metadata = {}
             if _metadata_looks_like_ozon_notification_user(metadata):
-                to_delete.append(int(row["id"]))
+                to_hide.append(int(row["id"]))
 
+        # notificationuser/systemuser: exact sender/user names anywhere.
         msg_rows = conn.execute(
             """
             SELECT c.id, m.author, m.raw_json
@@ -399,11 +445,12 @@ def delete_ozon_support_chats() -> int:
         ).fetchall()
         for row in msg_rows:
             cid = int(row["id"])
-            if cid in to_delete:
+            if cid in to_hide:
                 continue
             if _system_sender_matches(row["author"], system_markers) or _raw_json_sender_matches(row["raw_json"], system_markers):
-                to_delete.append(cid)
+                to_hide.append(cid)
 
+        # chatbot: only first message sender/user name.
         first_rows = conn.execute(
             """
             SELECT c.id, m.author, m.raw_json
@@ -421,12 +468,15 @@ def delete_ozon_support_chats() -> int:
         ).fetchall()
         for row in first_rows:
             cid = int(row["id"])
-            if cid in to_delete:
+            if cid in to_hide:
                 continue
             if _system_sender_matches(row["author"], chatbot_markers) or _raw_json_sender_matches(row["raw_json"], chatbot_markers):
-                to_delete.append(cid)
+                to_hide.append(cid)
 
-    return delete_chats_by_ids(to_delete)
+    hidden = hide_ozon_system_chat_ids(to_hide, reason="startup_system_sender")
+    if os.getenv("OZON_PURGE_SYSTEM_CHATS", "0").strip().lower() in {"1", "true", "yes", "on", "да"}:
+        return delete_chats_by_ids(to_hide)
+    return hidden
 
 def upsert_chat(chat: ChatCreate) -> int:
     with get_connection() as conn:
@@ -1366,7 +1416,7 @@ def _chats_select_sql(where: str) -> str:
 
 
 def list_chats(status: str | None = None, marketplace: str | None = None, archived: bool = False, assigned_user_id: int | None = None, funnel_id: int | None = None) -> list[dict[str, Any]]:
-    clauses = ["c.marketplace != 'mock'"]
+    clauses = ["c.marketplace != 'mock'", f"NOT ({_system_excluded_condition_sql('c')})"]
     params: list[Any] = []
     closed_condition = _closed_status_condition_sql()
 
