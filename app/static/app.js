@@ -17,6 +17,7 @@ let currentQuestion = null;
 let questionAnswerDrafts = {};
 let currentUser = null;
 let assignees = [];
+let usersCache = [];
 let chatOwnerScope = 'all';
 let knowledgeCategories = [];
 let knowledgeArticles = [];
@@ -581,10 +582,17 @@ function bindTaskCardActions(item, options = {}) {
   });
 }
 
+function chatStatusColor(status, fallbackColor = '') {
+  if (fallbackColor) return fallbackColor;
+  const found = (chatSettings.statuses || []).find((item) => String(item.key) === String(status));
+  return found?.color || '';
+}
+
 function statusBadge(status, labelOverride = '', color = '') {
   const label = labelOverride || statusNames[status] || status || '—';
-  const colorClass = color ? ` status-color-${String(color).replace(/[^a-z0-9_-]/gi, '')}` : '';
-  return `<span class="status-badge status-${escapeHtml(status || 'unknown')}${colorClass}">${escapeHtml(label)}</span>`;
+  const resolvedColor = chatStatusColor(status, color);
+  const colorClass = resolvedColor ? ` status-color-${String(resolvedColor).replace(/[^a-z0-9_-]/gi, '')}` : '';
+  return `<span class="status-badge status-${escapeHtml(status || 'unknown')}${colorClass}" data-status-color="${escapeHtml(resolvedColor || '')}">${escapeHtml(label)}</span>`;
 }
 
 function activeChatStatuses(includeClosed = false) {
@@ -625,13 +633,7 @@ const chatStatusColors = {
 
 function statusColorChoices(selected = 'orange') {
   return Object.entries(chatStatusColors).map(([key, meta]) => `
-    <button type="button"
-      class="status-color-choice status-color-${key} ${String(selected || 'orange') === key ? 'selected' : ''}"
-      data-status-color-choice="${key}"
-      title="${escapeHtml(meta.label)}"
-      aria-label="${escapeHtml(meta.label)}">
-      <span>${meta.dot}</span>
-    </button>
+    <option value="${escapeHtml(key)}" ${String(selected || 'orange') === key ? 'selected' : ''}>${escapeHtml(meta.dot)} ${escapeHtml(meta.label)}</option>
   `).join('');
 }
 
@@ -670,10 +672,9 @@ function renderChatSettingsLists() {
         <span class="status-key-hint">${escapeHtml(s.key || '')}</span>
       </div>
 
-      <div class="status-color-picker" role="group" aria-label="Цвет статуса">
+      <select class="status-color-select" data-status-color aria-label="Цвет статуса">
         ${statusColorChoices(s.color || 'orange')}
-        <input data-status-color type="hidden" value="${escapeHtml(s.color || 'orange')}" />
-      </div>
+      </select>
 
       <input class="status-sort-input" data-status-sort type="number" value="${Number(s.sort_order || 0)}" aria-label="Порядок" />
 
@@ -682,7 +683,7 @@ function renderChatSettingsLists() {
         <span>активен</span>
       </label>
 
-      <button type="button" class="secondary status-delete-btn" data-status-action="delete">Удалить</button>
+      <button type="button" class="crm-light-btn status-delete-btn" data-status-action="delete">Удалить</button>
     </article>
   `).join('') : '<p class="muted">Статусов пока нет.</p>';
 }
@@ -877,15 +878,38 @@ async function refreshVisibleData() {
   }
 }
 
+function currentChatScopeSelectValue() {
+  if (chatScope === 'archive') return 'archive';
+  if (chatOwnerScope === 'mine') return 'mine';
+  return 'active';
+}
+
 function renderScopeTabs() {
   $('activeChatsTab')?.classList.toggle('active', chatScope === 'active');
   $('archiveChatsTab')?.classList.toggle('active', chatScope === 'archive');
   $('myChatsTab')?.classList.toggle('active', chatOwnerScope === 'mine' && chatScope !== 'archive');
+  const scopeSelect = $('chatScopeSelect');
+  if (scopeSelect) scopeSelect.value = currentChatScopeSelectValue();
   const statusFilter = $('statusFilter');
   if (statusFilter) {
     statusFilter.disabled = chatScope === 'archive';
     statusFilter.title = chatScope === 'archive' ? 'В архиве показываются только закрытые чаты' : '';
   }
+}
+
+function handleChatScopeSelectChange(event) {
+  const value = event.target?.value || 'active';
+  if (value === 'archive') {
+    switchChatScope('archive');
+    return;
+  }
+  if (value === 'mine') {
+    chatOwnerScope = 'all';
+    switchChatOwnerScope('mine');
+    return;
+  }
+  chatOwnerScope = 'all';
+  switchChatScope('active');
 }
 
 function switchChatScope(scope) {
@@ -2622,31 +2646,117 @@ async function submitProfile(event) {
   }
 }
 
+
+function openUserCreateModal() {
+  const modal = $('userCreateModal');
+  if (!modal) return;
+  modal.classList.remove('hidden');
+  modal.setAttribute('aria-hidden', 'false');
+  setTimeout(() => $('newUserUsername')?.focus(), 30);
+}
+
+function closeUserCreateModal() {
+  const modal = $('userCreateModal');
+  if (!modal) return;
+  modal.classList.add('hidden');
+  modal.setAttribute('aria-hidden', 'true');
+}
+
+function handleUserCreateModalBackdropClick(event) {
+  if (event.target?.matches?.('[data-user-create-close]')) {
+    closeUserCreateModal();
+  }
+}
+
+function roleLabel(role) {
+  return role === 'admin' ? 'Админ' : role === 'viewer' ? 'Наблюдатель' : 'Менеджер';
+}
+
+function openUserEditModal(userId) {
+  const user = usersCache.find((item) => Number(item.id) === Number(userId));
+  if (!user) return;
+  const modal = $('userEditModal');
+  if (!modal) return;
+  modal.dataset.userId = String(user.id);
+  if ($('editUserUsername')) $('editUserUsername').value = user.username || '';
+  if ($('editUserDisplayName')) $('editUserDisplayName').value = user.display_name || '';
+  if ($('editUserRole')) $('editUserRole').value = user.role || 'manager';
+  if ($('editUserPassword')) $('editUserPassword').value = '';
+  if ($('editUserActive')) $('editUserActive').checked = Boolean(user.is_active);
+  if ($('userEditModalSubtitle')) {
+    $('userEditModalSubtitle').textContent = `@${user.username || 'user'} · ${roleLabel(user.role)} · ${user.is_active ? 'активен' : 'отключён'}`;
+  }
+  modal.classList.remove('hidden');
+  modal.setAttribute('aria-hidden', 'false');
+  setTimeout(() => $('editUserDisplayName')?.focus(), 30);
+}
+
+function closeUserEditModal() {
+  const modal = $('userEditModal');
+  if (!modal) return;
+  modal.classList.add('hidden');
+  modal.setAttribute('aria-hidden', 'true');
+  delete modal.dataset.userId;
+}
+
+function handleUserEditModalBackdropClick(event) {
+  if (event.target?.matches?.('[data-user-edit-close]')) {
+    closeUserEditModal();
+  }
+}
+
+async function submitUserEdit(event) {
+  event.preventDefault();
+  const modal = $('userEditModal');
+  const userId = Number(modal?.dataset.userId || 0);
+  if (!userId) return;
+  const payload = {
+    display_name: $('editUserDisplayName')?.value?.trim() || '',
+    role: $('editUserRole')?.value || 'manager',
+    is_active: Boolean($('editUserActive')?.checked),
+  };
+  const password = $('editUserPassword')?.value || '';
+  try {
+    await api(`/api/users/${userId}`, { method: 'PATCH', body: JSON.stringify(payload) });
+    if (password) {
+      await api(`/api/users/${userId}/password`, { method: 'POST', body: JSON.stringify({ password }) });
+    }
+    closeUserEditModal();
+    await loadUsers();
+    await loadAssignees();
+    notify('Готово', 'Данные сотрудника сохранены.');
+  } catch (err) {
+    notify('Не удалось сохранить сотрудника', String(err.message || err));
+  }
+}
+
+
 async function loadUsers() {
   if (!currentUser || currentUser.role !== 'admin') {
     showView('profile');
     return;
   }
   const users = await api('/api/users');
+  usersCache = Array.isArray(users) ? users : [];
   const list = $('usersList');
   if (!list) return;
-  if (!users.length) { list.innerHTML = '<p class="muted">Сотрудников пока нет.</p>'; return; }
-  list.innerHTML = users.map((u) => `
-    <article class="user-row" data-user-id="${u.id}">
-      <div>
+  if (!usersCache.length) {
+    list.innerHTML = '<p class="muted">Сотрудников пока нет.</p>';
+    return;
+  }
+  list.innerHTML = usersCache.map((u) => `
+    <article class="user-row user-row-compact" data-user-id="${u.id}">
+      <div class="user-summary">
         <strong>${escapeHtml(u.display_name || u.username)}</strong>
-        <p>@${escapeHtml(u.username)} · ${escapeHtml(u.role)} · ${u.is_active ? 'активен' : 'отключён'}</p>
+        <p>@${escapeHtml(u.username)} · ${escapeHtml(roleLabel(u.role))}</p>
+        <div class="user-chip-row">
+          <span class="user-status-chip ${u.is_active ? 'is-active' : 'is-disabled'}">${u.is_active ? 'Активен' : 'Отключён'}</span>
+        </div>
       </div>
-      <div class="user-actions">
-        <select data-user-role>
-          <option value="manager" ${u.role === 'manager' ? 'selected' : ''}>Менеджер</option>
-          <option value="viewer" ${u.role === 'viewer' ? 'selected' : ''}>Наблюдатель</option>
-          <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Админ</option>
-        </select>
-        <button class="secondary small" type="button" data-user-toggle>${u.is_active ? 'Отключить' : 'Включить'}</button>
-        <input data-user-password type="password" placeholder="Новый пароль" />
-        <button class="small" type="button" data-user-save>Сохранить</button>
-      </div>
+      <button class="user-light-btn user-edit-btn" type="button" data-user-edit="${u.id}" aria-label="Редактировать сотрудника">
+        <span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 20h4l11-11a2.8 2.8 0 0 0-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></svg></span>
+        <span>Редактировать</span>
+      </button>
     </article>
   `).join('');
 }
@@ -2662,6 +2772,7 @@ async function submitUserCreate(event) {
   try {
     await api('/api/users', { method: 'POST', body: JSON.stringify(payload) });
     ['newUserUsername', 'newUserDisplayName', 'newUserPassword'].forEach(id => { if ($(id)) $(id).value = ''; });
+    closeUserCreateModal();
     await loadUsers();
     await loadAssignees();
     notify('Готово', 'Сотрудник создан.');
@@ -2671,27 +2782,11 @@ async function submitUserCreate(event) {
 }
 
 async function handleUsersListClick(event) {
-  const row = event.target.closest?.('.user-row');
-  if (!row) return;
-  const userId = Number(row.dataset.userId);
-  const users = await api('/api/users');
-  const user = users.find(u => Number(u.id) === userId);
-  if (!user) return;
-  if (event.target.matches('[data-user-toggle]')) {
-    await api(`/api/users/${userId}`, { method: 'PATCH', body: JSON.stringify({ is_active: !user.is_active }) });
-    await loadUsers();
-  }
-  if (event.target.matches('[data-user-save]')) {
-    const role = row.querySelector('[data-user-role]')?.value || user.role;
-    const password = row.querySelector('[data-user-password]')?.value || '';
-    await api(`/api/users/${userId}`, { method: 'PATCH', body: JSON.stringify({ role }) });
-    if (password) await api(`/api/users/${userId}/password`, { method: 'POST', body: JSON.stringify({ password }) });
-    await loadUsers();
-    await loadAssignees();
-    notify('Готово', 'Данные сотрудника сохранены.');
-  }
+  const editBtn = event.target.closest?.('[data-user-edit]');
+  if (!editBtn) return;
+  event.preventDefault();
+  openUserEditModal(Number(editBtn.dataset.userEdit));
 }
-
 
 async function handleChatFunnelListClick(event) {
   // Воронки временно скрыты из интерфейса. Оставлено для совместимости старых DOM.
@@ -2783,9 +2878,7 @@ function init() {
   bind('marketplaceFilter', 'change', loadChats);
   bind('statusFilter', 'change', loadChats);
   if ($('funnelFilter')) bind('funnelFilter', 'change', () => { renderChatSettingsControls({ keepValues: true }); loadChats(); });
-  bind('activeChatsTab', 'click', () => { chatOwnerScope = 'all'; switchChatScope('active'); });
-  bind('archiveChatsTab', 'click', () => switchChatScope('archive'));
-  bind('myChatsTab', 'click', () => switchChatOwnerScope('mine'));
+  bind('chatScopeSelect', 'change', handleChatScopeSelectChange);
   bind('taskStatusFilter', 'change', loadAllTasks);
   bind('taskBucketFilter', 'change', loadAllTasks);
   bind('navChats', 'click', () => showView('chats'));
@@ -2853,10 +2946,19 @@ function init() {
   bind('startChatFromReviewBtn', 'click', startChatFromReview);
   const userCreateForm = $('userCreateForm');
   if (userCreateForm && !userCreateForm.dataset.bound) { userCreateForm.dataset.bound = '1'; userCreateForm.addEventListener('submit', submitUserCreate); }
+  bind('openUserCreateModalBtn', 'click', openUserCreateModal);
+  bind('userCreateModalCloseBtn', 'click', closeUserCreateModal);
+  bind('cancelUserCreateBtn', 'click', closeUserCreateModal);
+  bind('userCreateModal', 'click', handleUserCreateModalBackdropClick);
   const profileForm = $('profileForm');
   if (profileForm && !profileForm.dataset.bound) { profileForm.dataset.bound = '1'; profileForm.addEventListener('submit', submitProfile); }
   const usersList = $('usersList');
   if (usersList && !usersList.dataset.bound) { usersList.dataset.bound = '1'; usersList.addEventListener('click', handleUsersListClick); }
+  const userEditForm = $('userEditForm');
+  if (userEditForm && !userEditForm.dataset.bound) { userEditForm.dataset.bound = '1'; userEditForm.addEventListener('submit', submitUserEdit); }
+  bind('userEditModalCloseBtn', 'click', closeUserEditModal);
+  bind('cancelUserEditBtn', 'click', closeUserEditModal);
+  bind('userEditModal', 'click', handleUserEditModalBackdropClick);
 
   const funnelForm = $('chatFunnelForm');
   if (funnelForm && !funnelForm.dataset.bound) {
@@ -3149,5 +3251,19 @@ document.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
     toggleMobileMoreSheet(true);
+  }
+});
+
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !$('userCreateModal')?.classList.contains('hidden')) {
+    closeUserCreateModal();
+  }
+});
+
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    if (!$('userEditModal')?.classList.contains('hidden')) closeUserEditModal();
   }
 });

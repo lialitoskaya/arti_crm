@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Arti CRM</title>
-  <link rel="stylesheet" href="/static/styles.css?v=103p6" />
+  <link rel="stylesheet" href="/static/styles.css?v=103p18" />
   <style id="arti-crm-inline-style">
 /* Inline fallback v43: responsive CSS is embedded so narrow screens never open unstyled. */
 :root {
@@ -1983,7 +1983,6 @@ html, body { max-width: 100%; }
           <div class="section-title-row">
             <div>
               <h2>Чаты</h2>
-              <p>Активные диалоги клиентов</p>
             </div>
             <span class="soft-counter" id="chatCountLabel">—</span>
           </div>
@@ -1997,11 +1996,13 @@ html, body { max-width: 100%; }
             <select id="statusFilter" aria-label="Фильтр статуса">
               <option value="">Все активные</option>
             </select>
-          </div>
-          <div class="chat-scope-tabs" role="tablist" aria-label="Раздел чатов">
-            <button id="activeChatsTab" class="scope-tab active" type="button"><span class="btn-label">Активные</span></button>
-            <button id="myChatsTab" class="scope-tab" type="button"><span class="btn-label">Мои чаты</span></button>
-            <button id="archiveChatsTab" class="scope-tab" type="button"><span class="btn-label">Архив</span></button>
+            <div class="chat-scope-select-row">
+              <select id="chatScopeSelect" class="chat-scope-select" aria-label="Раздел чатов">
+                <option value="active">Активные</option>
+                <option value="mine">Мои чаты</option>
+                <option value="archive">Архив</option>
+              </select>
+            </div>
           </div>
           <div id="stats" class="stats"></div>
           <div id="chatList" class="chat-list"></div>
@@ -2105,7 +2106,10 @@ html, body { max-width: 100%; }
             <p>Первые обращения клиентов по дням, скорость ответа, закрытия и пиковые часы.</p>
           </div>
           <div class="analytics-toolbar-actions">
-            <button id="analyticsRefreshBtn" class="secondary small" type="button">Обновить</button>
+            <button id="analyticsRefreshBtn" class="analytics-refresh-btn" type="button" aria-label="Обновить аналитику">
+              <span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M18.5 9.2A7 7 0 1 0 19 13"/><path d="M18.5 4.5v4.7h-4.7"/></svg></span>
+              <span class="btn-label">Обновить</span>
+            </button>
           </div>
         </section>
 
@@ -2122,7 +2126,6 @@ html, body { max-width: 100%; }
           </label>
           <label>Час с<input id="analyticsHourFrom" type="number" min="0" max="23" placeholder="0" /></label>
           <label>Час по<input id="analyticsHourTo" type="number" min="0" max="23" placeholder="23" /></label>
-          <button id="analyticsWorkHoursBtn" class="secondary small" type="button">10–19</button>
           <button id="analyticsClearHoursBtn" class="ghost small" type="button">Все часы</button>
         </section>
 
@@ -2425,10 +2428,32 @@ html, body { max-width: 100%; }
             <p>Создание сотрудников и управление доступом.</p>
           </div>
         </section>
-        <section class="settings-grid">
-          <div class="settings-card panel-card">
-            <h3>Добавить сотрудника</h3>
-            <form id="userCreateForm" class="settings-form">
+        <section class="settings-grid one-col users-settings-grid">
+          <div class="settings-card panel-card users-manage-card">
+            <div class="users-manage-head">
+              <div>
+                <h3>Список сотрудников</h3>
+                <p class="muted">Управляйте ролями, доступом и паролями сотрудников.</p>
+              </div>
+            </div>
+            <div id="usersList" class="users-list"></div>
+            <div class="users-manage-footer">
+              <button id="openUserCreateModalBtn" class="user-light-btn user-create-open-btn" type="button">Добавить сотрудника</button>
+            </div>
+          </div>
+        </section>
+
+        <div id="userCreateModal" class="user-create-modal hidden" aria-hidden="true">
+          <div class="user-create-modal-backdrop" data-user-create-close></div>
+          <div class="user-create-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="userCreateModalTitle">
+            <div class="user-create-modal-topbar">
+              <div>
+                <strong id="userCreateModalTitle">Новый сотрудник</strong>
+                <p>Заполните данные для создания нового пользователя CRM.</p>
+              </div>
+              <button id="userCreateModalCloseBtn" class="user-create-modal-close" type="button" aria-label="Закрыть">×</button>
+            </div>
+            <form id="userCreateForm" class="settings-form user-create-form">
               <input id="newUserUsername" autocomplete="off" placeholder="Логин" required />
               <input id="newUserDisplayName" autocomplete="off" placeholder="Имя сотрудника" />
               <input id="newUserPassword" autocomplete="new-password" type="password" placeholder="Пароль" required />
@@ -2437,14 +2462,46 @@ html, body { max-width: 100%; }
                 <option value="viewer">Наблюдатель</option>
                 <option value="admin">Администратор</option>
               </select>
-              <button type="submit">Создать сотрудника</button>
+              <div class="user-create-form-actions">
+                <button id="cancelUserCreateBtn" class="user-light-btn" type="button">Отмена</button>
+                <button class="user-light-btn user-light-btn-primary" type="submit">Создать сотрудника</button>
+              </div>
             </form>
           </div>
-          <div class="settings-card panel-card">
-            <h3>Список сотрудников</h3>
-            <div id="usersList" class="users-list"></div>
+        </div>
+
+        <div id="userEditModal" class="user-create-modal user-edit-modal hidden" aria-hidden="true">
+          <div class="user-create-modal-backdrop" data-user-edit-close></div>
+          <div class="user-create-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="userEditModalTitle">
+            <div class="user-create-modal-topbar">
+              <div>
+                <strong id="userEditModalTitle">Редактировать сотрудника</strong>
+                <p id="userEditModalSubtitle">Измените роль, активность или пароль сотрудника.</p>
+              </div>
+              <button id="userEditModalCloseBtn" class="user-create-modal-close" type="button" aria-label="Закрыть">×</button>
+            </div>
+            <form id="userEditForm" class="settings-form user-create-form">
+              <label>Логин<input id="editUserUsername" autocomplete="off" readonly /></label>
+              <label>Имя сотрудника<input id="editUserDisplayName" autocomplete="off" placeholder="Имя сотрудника" /></label>
+              <label>Роль
+                <select id="editUserRole">
+                  <option value="manager">Менеджер</option>
+                  <option value="viewer">Наблюдатель</option>
+                  <option value="admin">Администратор</option>
+                </select>
+              </label>
+              <label>Новый пароль<input id="editUserPassword" autocomplete="new-password" type="password" placeholder="Оставьте пустым, если пароль не меняется" /></label>
+              <label class="user-edit-active-row">
+                <input id="editUserActive" type="checkbox" />
+                <span>Сотрудник активен</span>
+              </label>
+              <div class="user-create-form-actions">
+                <button id="cancelUserEditBtn" class="user-light-btn" type="button">Отмена</button>
+                <button class="user-light-btn user-light-btn-primary" type="submit">Сохранить</button>
+              </div>
+            </form>
           </div>
-        </section>
+        </div>
       </main>
 
 
@@ -2454,7 +2511,6 @@ html, body { max-width: 100%; }
             <h2>Технические настройки</h2>
             <p>Статусы чатов для фильтрации и работы менеджеров.</p>
           </div>
-          <button id="saveChatSettingsBtn" type="button">Сохранить все изменения</button>
         </section>
 
         <section class="tech-settings-page">
@@ -2477,7 +2533,7 @@ html, body { max-width: 100%; }
                 <option value="gray">⚪ Серый</option>
               </select>
               <input id="chatStatusSort" type="number" placeholder="Порядок" value="0" />
-              <button type="submit">Добавить статус</button>
+              <button class="crm-light-btn" type="submit">Добавить статус</button>
             </form>
 
             <div class="status-settings-header" aria-hidden="true">
@@ -2490,7 +2546,7 @@ html, body { max-width: 100%; }
             <div id="chatStatusesList" class="status-settings-list"></div>
 
             <div class="settings-actions-bottom">
-              <button id="saveChatSettingsBottomBtn" type="button">Сохранить все изменения</button>
+              <button id="saveChatSettingsBottomBtn" class="crm-light-btn" type="button">Сохранить</button>
               <p class="muted">Кнопка сохранит сразу все изменённые статусы. Удаление статуса применяется сразу после подтверждения.</p>
             </div>
           </div>
@@ -2548,6 +2604,6 @@ html, body { max-width: 100%; }
 
   <div id="notificationToasts" class="notification-toast-stack" aria-live="polite"></div>
 
-  <script src="/static/app.js?v=103p6"></script>
+  <script src="/static/app.js?v=103p18"></script>
 </body>
 </html>

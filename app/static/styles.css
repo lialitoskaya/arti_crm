@@ -5824,3 +5824,1172 @@ button:not(.nav-btn):not(.scope-tab):not(.icon-btn):not(.mobile-back-btn):not(#c
     display: none !important;
   }
 }
+
+
+/* v103 patch 7 — mobile analytics filters layout polish */
+.analytics-toolbar {
+  position: relative;
+}
+
+.analytics-refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.analytics-filters > * {
+  min-width: 0;
+}
+
+.analytics-filters label {
+  min-width: 0;
+}
+
+.analytics-filters input,
+.analytics-filters select,
+.analytics-filters button {
+  min-width: 0;
+}
+
+.analytics-filters input[type="date"],
+.analytics-filters input[type="number"],
+.analytics-filters select {
+  height: 46px;
+}
+
+@media (max-width: 760px) {
+  .analytics-toolbar {
+    align-items: flex-start !important;
+    padding-right: 56px;
+  }
+
+  .analytics-toolbar-actions {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    margin: 0;
+  }
+
+  .analytics-refresh-btn {
+    width: 38px;
+    height: 38px;
+    min-width: 38px;
+    padding: 0 !important;
+    border-radius: 12px !important;
+    justify-content: center;
+    box-shadow: none !important;
+  }
+
+  .analytics-refresh-btn .btn-label {
+    display: none !important;
+  }
+
+  .analytics-refresh-btn .btn-icon {
+    margin: 0;
+  }
+
+  .analytics-refresh-btn .btn-icon svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .analytics-filters {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas:
+      "dateFrom dateTo"
+      "hourFrom hourTo"
+      "preset preset"
+      "market market";
+    gap: 10px !important;
+    padding: 14px !important;
+    align-items: end;
+  }
+
+  .analytics-filters label:nth-of-type(1) { grid-area: dateFrom; }
+  .analytics-filters label:nth-of-type(2) { grid-area: dateTo; }
+  .analytics-filters label:nth-of-type(3) { grid-area: market; }
+  .analytics-filters label:nth-of-type(4) { grid-area: hourFrom; }
+  .analytics-filters label:nth-of-type(5) { grid-area: hourTo; }
+  .analytics-filters #analyticsWorkHoursBtn { grid-area: preset; }
+  .analytics-filters #analyticsClearHoursBtn { display: none !important; }
+
+  .analytics-filters label {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .analytics-filters input,
+  .analytics-filters select,
+  .analytics-filters button {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    box-sizing: border-box;
+    font-size: 16px;
+  }
+
+  .analytics-filters input[type="date"] {
+    padding-right: 12px !important;
+  }
+
+  .analytics-filters input[type="number"],
+  .analytics-filters select {
+    text-align: left;
+  }
+
+  .analytics-filters #analyticsWorkHoursBtn {
+    justify-self: start;
+    width: auto !important;
+    min-width: 92px;
+    padding-inline: 14px !important;
+  }
+}
+
+
+/* v103 patch 8 — remove 10-19 preset and refine refresh button */
+#analyticsWorkHoursBtn {
+  display: none !important;
+}
+
+.analytics-refresh-btn {
+  background: rgba(255, 255, 255, 0.96) !important;
+  color: #273246 !important;
+  border: 1px solid rgba(32, 41, 57, 0.10) !important;
+  box-shadow: 0 4px 12px rgba(27, 35, 53, 0.04) !important;
+}
+
+.analytics-refresh-btn:hover {
+  background: #ffffff !important;
+  color: #1f2937 !important;
+  border-color: rgba(32, 41, 57, 0.14) !important;
+}
+
+.analytics-refresh-btn .btn-icon {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+}
+
+.analytics-refresh-btn .btn-icon svg {
+  width: 20px !important;
+  height: 20px !important;
+  overflow: visible;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+@media (max-width: 760px) {
+  .analytics-toolbar-actions {
+    top: 12px !important;
+    right: 12px !important;
+  }
+
+  .analytics-refresh-btn {
+    width: 42px !important;
+    height: 42px !important;
+    min-width: 42px !important;
+    min-height: 42px !important;
+    padding: 0 !important;
+    border-radius: 12px !important;
+    background: rgba(255, 255, 255, 0.98) !important;
+    color: #202939 !important;
+  }
+
+  .analytics-refresh-btn .btn-icon {
+    width: 22px !important;
+    height: 22px !important;
+  }
+
+  .analytics-refresh-btn .btn-icon svg {
+    width: 22px !important;
+    height: 22px !important;
+  }
+
+  .analytics-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas:
+      "dateFrom dateTo"
+      "hourFrom hourTo"
+      "market market" !important;
+  }
+
+  .analytics-filters #analyticsClearHoursBtn {
+    display: none !important;
+  }
+}
+
+
+/* v103 patch 9 — mobile More sheet light theme */
+.mobile-more-card {
+  background: rgba(255, 255, 255, 0.96) !important;
+  border: 1px solid rgba(32, 41, 57, 0.06) !important;
+  box-shadow: 0 18px 48px rgba(27, 35, 53, 0.12) !important;
+}
+
+.mobile-more-head strong {
+  color: #273246 !important;
+  font-weight: 700 !important;
+}
+
+.mobile-more-head p {
+  color: #7b8494 !important;
+}
+
+.mobile-more-close {
+  background: #ffffff !important;
+  color: #5f6878 !important;
+  border: 1px solid rgba(32, 41, 57, 0.08) !important;
+  box-shadow: none !important;
+}
+
+.mobile-more-close:hover {
+  background: #f8fafc !important;
+  color: #273246 !important;
+}
+
+.mobile-more-item {
+  background: rgba(255, 250, 247, 0.98) !important;
+  border: 1px solid rgba(32, 41, 57, 0.08) !important;
+  color: #273246 !important;
+}
+
+.mobile-more-item:hover,
+.mobile-more-item:active {
+  background: #ffffff !important;
+}
+
+.mobile-more-item .btn-icon {
+  color: #273246 !important;
+}
+
+.mobile-more-item .btn-icon:last-child {
+  color: #8d98a8 !important;
+}
+
+.mobile-more-copy strong {
+  color: #273246 !important;
+  font-weight: 700 !important;
+}
+
+.mobile-more-copy small {
+  color: #7b8494 !important;
+}
+
+.mobile-more-item-danger {
+  background: rgba(255, 250, 247, 0.98) !important;
+  color: #c65a55 !important;
+}
+
+.mobile-more-item-danger .btn-icon,
+.mobile-more-item-danger .mobile-more-copy strong {
+  color: #c65a55 !important;
+}
+
+.mobile-more-item-danger .mobile-more-copy small {
+  color: #8b6a68 !important;
+}
+
+.mobile-nav-backdrop {
+  background: rgba(25, 31, 41, 0.14) !important;
+  backdrop-filter: blur(3px) !important;
+}
+
+
+/* v103 patch 10 — forbidden dark refresh color removed */
+#analyticsRefreshBtn,
+.analytics-page #analyticsRefreshBtn,
+.analytics-toolbar #analyticsRefreshBtn,
+button#analyticsRefreshBtn.analytics-refresh-btn {
+  width: 44px !important;
+  height: 44px !important;
+  min-width: 44px !important;
+  min-height: 44px !important;
+  max-width: 44px !important;
+  max-height: 44px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border-radius: 14px !important;
+  background: #ffffff !important;
+  background-image: none !important;
+  color: #273246 !important;
+  border: 1px solid rgba(32, 41, 57, 0.10) !important;
+  box-shadow: 0 6px 18px rgba(27, 35, 53, 0.06) !important;
+  overflow: visible !important;
+  transform: none !important;
+}
+
+#analyticsRefreshBtn:hover,
+#analyticsRefreshBtn:active,
+#analyticsRefreshBtn:focus {
+  background: #ffffff !important;
+  background-image: none !important;
+  color: #1f2937 !important;
+  border-color: rgba(32, 41, 57, 0.14) !important;
+  box-shadow: 0 6px 18px rgba(27, 35, 53, 0.08) !important;
+}
+
+#analyticsRefreshBtn .btn-label {
+  display: none !important;
+}
+
+#analyticsRefreshBtn .btn-icon {
+  width: 24px !important;
+  height: 24px !important;
+  min-width: 24px !important;
+  min-height: 24px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  color: currentColor !important;
+  overflow: visible !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+#analyticsRefreshBtn .btn-icon svg {
+  width: 22px !important;
+  height: 22px !important;
+  min-width: 22px !important;
+  min-height: 22px !important;
+  display: block !important;
+  overflow: visible !important;
+  stroke: currentColor !important;
+  fill: none !important;
+  stroke-width: 1.85 !important;
+  stroke-linecap: round !important;
+  stroke-linejoin: round !important;
+}
+
+/* Do not use the old dark slate button background in Analytics controls. */
+.analytics-page .secondary,
+.analytics-page button.secondary,
+.analytics-page .small.secondary {
+  background-image: none !important;
+}
+
+@media (max-width: 760px) {
+  .analytics-toolbar-actions {
+    top: 12px !important;
+    right: 12px !important;
+  }
+
+  #analyticsRefreshBtn {
+    width: 42px !important;
+    height: 42px !important;
+    min-width: 42px !important;
+    min-height: 42px !important;
+    max-width: 42px !important;
+    max-height: 42px !important;
+    border-radius: 13px !important;
+  }
+}
+
+
+/* v103 patch 11 — employees section cleanup */
+.users-settings-grid {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+
+.users-manage-card {
+  display: grid;
+  gap: 14px;
+}
+
+.users-manage-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.users-manage-head h3 {
+  margin-bottom: 6px;
+}
+
+.users-manage-footer {
+  display: flex;
+  justify-content: flex-start;
+  padding-top: 4px;
+}
+
+.user-light-btn,
+.user-actions button,
+#openUserCreateModalBtn,
+#cancelUserCreateBtn,
+.user-create-form-actions button {
+  min-height: 42px;
+  padding: 0 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(32, 41, 57, 0.10) !important;
+  background: rgba(255, 255, 255, 0.96) !important;
+  color: #273246 !important;
+  box-shadow: none !important;
+  font-weight: 600;
+}
+
+.user-light-btn:hover,
+.user-actions button:hover,
+#openUserCreateModalBtn:hover,
+#cancelUserCreateBtn:hover,
+.user-create-form-actions button:hover {
+  background: #ffffff !important;
+  border-color: rgba(32, 41, 57, 0.14) !important;
+}
+
+.user-light-btn-primary {
+  border-color: rgba(246, 167, 122, 0.45) !important;
+  background: rgba(255, 250, 247, 0.98) !important;
+}
+
+.user-light-btn-primary:hover {
+  background: rgba(255, 255, 255, 1) !important;
+}
+
+.users-list {
+  gap: 12px;
+  max-height: calc(100vh - 270px);
+}
+
+.user-row {
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(32, 41, 57, 0.08);
+  background: rgba(255,255,255,.76);
+}
+
+.user-actions {
+  gap: 8px;
+}
+
+.user-actions select,
+.user-actions input {
+  min-height: 42px;
+  font-size: 13px;
+  max-width: 170px;
+  border-radius: 14px;
+  background: rgba(255,255,255,.94);
+  border: 1px solid rgba(32,41,57,.10);
+  box-shadow: none;
+}
+
+.user-actions button {
+  min-width: 116px;
+}
+
+.user-create-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  display: grid;
+  place-items: center;
+}
+
+.user-create-modal.hidden {
+  display: none !important;
+}
+
+.user-create-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(28, 35, 47, 0.12);
+  backdrop-filter: blur(6px);
+}
+
+.user-create-modal-dialog {
+  position: relative;
+  z-index: 1;
+  width: min(520px, calc(100vw - 24px));
+  background: rgba(255,255,255,.98);
+  border: 1px solid rgba(32,41,57,.08);
+  border-radius: 24px;
+  box-shadow: 0 24px 64px rgba(27,35,53,.14);
+  padding: 18px;
+  display: grid;
+  gap: 16px;
+}
+
+.user-create-modal-topbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.user-create-modal-topbar strong {
+  display: block;
+  color: #273246;
+  font-size: 18px;
+  letter-spacing: -0.02em;
+}
+
+.user-create-modal-topbar p {
+  margin: 6px 0 0;
+  color: #7b8494;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.user-create-modal-close {
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  padding: 0;
+  border-radius: 14px;
+  border: 1px solid rgba(32,41,57,.10);
+  background: rgba(255,255,255,.96);
+  color: #6d7686;
+  box-shadow: none;
+}
+
+.user-create-form {
+  gap: 12px;
+}
+
+.user-create-form input,
+.user-create-form select {
+  min-height: 46px;
+  border-radius: 14px;
+}
+
+.user-create-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+@media (max-width: 900px) {
+  .users-list {
+    max-height: none;
+  }
+
+  .user-actions {
+    justify-content: stretch;
+  }
+
+  .user-actions > * {
+    flex: 1 1 140px;
+    max-width: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .users-manage-card {
+    padding: 16px;
+  }
+
+  .users-manage-footer {
+    justify-content: stretch;
+  }
+
+  .users-manage-footer .user-create-open-btn {
+    width: 100%;
+  }
+
+  .user-row {
+    grid-template-columns: 1fr;
+  }
+
+  .user-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .user-actions select,
+  .user-actions input,
+  .user-actions button {
+    width: 100%;
+    max-width: none;
+  }
+
+  .user-create-modal {
+    place-items: end center;
+  }
+
+  .user-create-modal-dialog {
+    width: 100%;
+    max-width: none;
+    border-radius: 24px 24px 0 0;
+    padding: 16px;
+  }
+
+  .user-create-form-actions {
+    flex-direction: column-reverse;
+  }
+
+  .user-create-form-actions button {
+    width: 100%;
+  }
+}
+
+
+/* v103 patch 12 — technical settings light controls and mobile route fix */
+.crm-light-btn,
+button.crm-light-btn,
+.tech-settings-page button,
+.tech-settings-hero button,
+.chat-status-create-form button,
+.settings-actions-bottom button,
+.status-delete-btn {
+  min-height: 42px;
+  padding: 0 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(32, 41, 57, 0.10) !important;
+  background: rgba(255, 255, 255, 0.96) !important;
+  background-image: none !important;
+  color: #273246 !important;
+  box-shadow: none !important;
+  font-weight: 600;
+}
+
+.crm-light-btn:hover,
+button.crm-light-btn:hover,
+.tech-settings-page button:hover,
+.tech-settings-hero button:hover,
+.chat-status-create-form button:hover,
+.settings-actions-bottom button:hover,
+.status-delete-btn:hover {
+  background: #ffffff !important;
+  border-color: rgba(32, 41, 57, 0.14) !important;
+  color: #1f2937 !important;
+  box-shadow: none !important;
+}
+
+#saveChatSettingsBtn {
+  display: none !important;
+}
+
+.chat-status-create-form {
+  grid-template-columns: minmax(220px, 1fr) minmax(170px, 220px) minmax(90px, 130px) auto;
+}
+
+.status-settings-header {
+  grid-template-columns: minmax(220px, 1.4fr) minmax(170px, 220px) minmax(90px, 130px) minmax(110px, 130px) auto !important;
+}
+
+.status-settings-row {
+  grid-template-columns: minmax(220px, 1.4fr) minmax(170px, 220px) minmax(90px, 130px) minmax(110px, 130px) auto !important;
+}
+
+.status-color-picker {
+  display: none !important;
+}
+
+.status-color-select {
+  width: 100%;
+  min-height: 42px;
+  border-radius: 14px;
+  border: 1px solid rgba(32, 41, 57, 0.10);
+  background: rgba(255,255,255,.96);
+  color: #273246;
+  box-shadow: none;
+  padding: 0 12px;
+}
+
+.status-delete-btn {
+  min-width: 104px;
+}
+
+.tech-settings-hero {
+  padding-right: 18px !important;
+}
+
+.tech-settings-hero .tasks-toolbar-controls,
+.tech-settings-hero > button {
+  display: none !important;
+}
+
+@media (max-width: 980px), ((hover: none) and (pointer: coarse) and (max-width: 1180px)) {
+  body[data-active-view="techSettings"] #chatsView,
+  body[data-active-view="techSettings"] #analyticsView,
+  body[data-active-view="techSettings"] #tasksView,
+  body[data-active-view="techSettings"] #reviewsView,
+  body[data-active-view="techSettings"] #questionsView,
+  body[data-active-view="techSettings"] #knowledgeView,
+  body[data-active-view="techSettings"] #usersView,
+  body[data-active-view="techSettings"] #profileView {
+    display: none !important;
+  }
+
+  body[data-active-view="techSettings"] #techSettingsView,
+  #techSettingsView.active-view {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    overflow: auto !important;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 94px !important;
+  }
+
+  .chat-status-create-form {
+    grid-template-columns: 1fr !important;
+  }
+
+  .status-settings-header {
+    display: none !important;
+  }
+
+  .status-settings-row {
+    grid-template-columns: 1fr !important;
+    gap: 10px !important;
+  }
+
+  .status-delete-btn,
+  .settings-actions-bottom button,
+  .chat-status-create-form button {
+    width: 100%;
+  }
+}
+
+
+/* v103 patch 13 — force Technical Settings save button to light style */
+#saveChatSettingsBottomBtn,
+.settings-actions-bottom #saveChatSettingsBottomBtn,
+.tech-settings-page #saveChatSettingsBottomBtn,
+button#saveChatSettingsBottomBtn.crm-light-btn {
+  min-height: 42px !important;
+  padding: 0 18px !important;
+  border-radius: 14px !important;
+  border: 1px solid rgba(32, 41, 57, 0.10) !important;
+  background: #ffffff !important;
+  background-image: none !important;
+  color: #273246 !important;
+  box-shadow: none !important;
+  font-weight: 600 !important;
+}
+
+#saveChatSettingsBottomBtn:hover,
+.settings-actions-bottom #saveChatSettingsBottomBtn:hover,
+.tech-settings-page #saveChatSettingsBottomBtn:hover {
+  background: #ffffff !important;
+  background-image: none !important;
+  border-color: rgba(32, 41, 57, 0.14) !important;
+  color: #1f2937 !important;
+  box-shadow: none !important;
+}
+
+#saveChatSettingsBottomBtn:disabled {
+  opacity: 0.55 !important;
+  background: #ffffff !important;
+  color: #7b8494 !important;
+}
+
+
+/* v103 patch 14 — employee edit modal and compact employee list */
+.user-row-compact {
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  align-items: center !important;
+  gap: 12px !important;
+}
+
+.user-summary {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.user-chip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.user-status-chip {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  min-height: 24px;
+  padding: 0 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(32, 41, 57, 0.08);
+  background: rgba(248, 250, 252, 0.92);
+  color: #6d7686;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.user-status-chip.is-active {
+  background: rgba(239, 250, 244, 0.95);
+  color: #2f7d52;
+  border-color: rgba(47, 125, 82, 0.12);
+}
+
+.user-status-chip.is-disabled {
+  background: rgba(252, 242, 240, 0.95);
+  color: #b65b55;
+  border-color: rgba(182, 91, 85, 0.12);
+}
+
+.user-edit-btn {
+  min-width: 148px;
+  justify-content: center;
+  gap: 8px;
+}
+
+.user-edit-btn .btn-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.user-edit-modal .user-create-modal-dialog {
+  width: min(560px, calc(100vw - 24px));
+}
+
+.user-edit-active-row {
+  min-height: 44px;
+  display: flex !important;
+  align-items: center;
+  gap: 10px !important;
+  padding: 0 12px;
+  border: 1px solid rgba(32, 41, 57, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.82);
+  color: #273246 !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+}
+
+.user-edit-active-row input {
+  width: 18px !important;
+  height: 18px;
+}
+
+#editUserUsername[readonly] {
+  background: rgba(248, 250, 252, 0.92);
+  color: #7b8494;
+}
+
+@media (max-width: 900px) {
+  .user-row-compact {
+    grid-template-columns: minmax(0, 1fr) auto !important;
+  }
+
+  .user-edit-btn {
+    min-width: 44px;
+    width: 44px;
+    height: 44px;
+    padding: 0 !important;
+  }
+
+  .user-edit-btn span:not(.btn-icon) {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .user-row-compact {
+    grid-template-columns: minmax(0, 1fr) 44px !important;
+    align-items: start !important;
+  }
+
+  .user-edit-modal {
+    place-items: end center;
+  }
+
+  .user-edit-modal .user-create-modal-dialog {
+    width: 100%;
+    max-width: none;
+    border-radius: 24px 24px 0 0;
+    padding: 16px;
+  }
+}
+
+
+/* v103 patch 15 — mobile Analytics date fields fit screen */
+@media (max-width: 760px) {
+  .analytics-filters {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
+    grid-template-areas:
+      "dateFrom dateFrom"
+      "dateTo dateTo"
+      "hourFrom hourTo"
+      "market market" !important;
+    gap: 10px !important;
+    overflow: hidden !important;
+  }
+
+  .analytics-filters label:nth-of-type(1) { grid-area: dateFrom !important; }
+  .analytics-filters label:nth-of-type(2) { grid-area: dateTo !important; }
+  .analytics-filters label:nth-of-type(3) { grid-area: market !important; }
+  .analytics-filters label:nth-of-type(4) { grid-area: hourFrom !important; }
+  .analytics-filters label:nth-of-type(5) { grid-area: hourTo !important; }
+
+  .analytics-filters label,
+  .analytics-filters input,
+  .analytics-filters select {
+    min-width: 0 !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+  }
+
+  .analytics-filters input[type="date"] {
+    appearance: auto !important;
+    -webkit-appearance: none !important;
+    height: 46px !important;
+    min-height: 46px !important;
+    padding: 0 42px 0 14px !important;
+    font-size: 15px !important;
+    font-weight: 650 !important;
+    line-height: 46px !important;
+    text-align: left !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+  }
+
+  .analytics-filters input[type="date"]::-webkit-date-and-time-value {
+    text-align: left;
+    min-height: 46px;
+    line-height: 46px;
+  }
+
+  .analytics-filters input[type="date"]::-webkit-calendar-picker-indicator {
+    margin-right: 2px;
+  }
+
+  .analytics-filters input[type="number"] {
+    height: 46px !important;
+    min-height: 46px !important;
+    font-size: 15px !important;
+    font-weight: 600 !important;
+  }
+
+  .analytics-filters select {
+    height: 46px !important;
+    min-height: 46px !important;
+    font-size: 15px !important;
+    font-weight: 650 !important;
+  }
+}
+
+/* On very narrow screens even the time row can be cramped; keep only time fields in two columns. */
+@media (max-width: 390px) {
+  .analytics-filters {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
+    padding-inline: 12px !important;
+  }
+
+  .analytics-filters input[type="date"] {
+    font-size: 14px !important;
+  }
+}
+
+
+/* v103 patch 16 — replace chat scope tabs with dropdown */
+#chatsView .section-title-row p {
+  display: none !important;
+}
+
+.chat-scope-tabs {
+  display: none !important;
+}
+
+.chat-scope-select-row {
+  padding: 0 14px 12px;
+}
+
+.chat-scope-select {
+  width: 100%;
+  min-height: 44px;
+  border-radius: 16px;
+  border: 1px solid rgba(32, 41, 57, 0.10);
+  background: rgba(255, 255, 255, 0.92);
+  color: #273246;
+  font-size: 14px;
+  font-weight: 600;
+  box-shadow: none;
+}
+
+.chat-scope-select:focus {
+  border-color: rgba(255, 122, 61, 0.30);
+  box-shadow: 0 0 0 4px rgba(255, 122, 61, 0.08);
+}
+
+@media (max-width: 980px), ((hover: none) and (pointer: coarse) and (max-width: 1180px)) {
+  .chat-scope-tabs {
+    display: none !important;
+  }
+
+  .chat-scope-select-row {
+    padding: 0 14px 10px !important;
+  }
+
+  .chat-scope-select {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    min-height: 46px !important;
+    font-size: 16px !important;
+    border-radius: 16px !important;
+  }
+
+  #chatsView .section-title-row {
+    padding-bottom: 8px !important;
+  }
+}
+
+
+/* v103 patch 17 — place chat scope dropdown inside filters */
+#chatsView .filters {
+  align-items: stretch;
+}
+
+#chatsView .filters > select,
+#chatsView .filters > .chat-scope-select-row {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+#chatsView .filters > .chat-scope-select-row {
+  display: flex;
+  padding: 0 !important;
+}
+
+#chatsView .filters .chat-scope-select {
+  width: 100%;
+  height: 100%;
+  min-height: 42px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.75);
+  color: var(--text);
+  box-shadow: none;
+  font-size: 13px;
+  padding: 0 12px;
+}
+
+#chatsView .filters .chat-scope-select:focus {
+  border-color: rgba(255, 122, 61, 0.50);
+  box-shadow: 0 0 0 4px rgba(255, 122, 61, 0.10);
+}
+
+.chat-scope-tabs {
+  display: none !important;
+}
+
+/* Override older standalone dropdown spacing now that the control lives inside .filters */
+#chatsView > .sidebar > .chat-scope-select-row {
+  display: none !important;
+}
+
+@media (max-width: 980px), ((hover: none) and (pointer: coarse) and (max-width: 1180px)) {
+  #chatsView .filters {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 8px !important;
+    padding: 0 14px 10px !important;
+  }
+
+  #chatsView .filters > select,
+  #chatsView .filters > .chat-scope-select-row,
+  #chatsView .filters .chat-scope-select {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  #chatsView .filters .chat-scope-select {
+    min-height: 42px !important;
+    font-size: 13px !important;
+    border-radius: 16px !important;
+  }
+}
+
+
+/* v103 patch 18 — chat filters as rows, single unread marker, status colors */
+#chatsView .filters {
+  display: grid !important;
+  grid-template-columns: 1fr !important;
+  gap: 8px !important;
+  width: 100% !important;
+  padding: 0 14px 10px !important;
+  align-items: stretch !important;
+}
+
+#chatsView .filters > select,
+#chatsView .filters > .chat-scope-select-row,
+#chatsView .filters .chat-scope-select {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  flex: none !important;
+  min-height: 42px !important;
+}
+
+#chatsView .filters select,
+#chatsView .filters .chat-scope-select {
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+  font-size: 13px !important;
+}
+
+.chat-item.needs-response::before,
+.chat-item[data-needs-response="true"]::before {
+  content: none !important;
+  display: none !important;
+}
+
+.chat-item.needs-response,
+.chat-item[data-needs-response="true"] {
+  border-left: 3px solid rgba(255, 122, 61, 0.62) !important;
+  box-shadow: none !important;
+}
+
+/* Status badges use the color selected in Technical Settings. */
+.status-badge.status-color-orange {
+  background: #fff2e7 !important;
+  color: #c65a21 !important;
+}
+
+.status-badge.status-color-blue {
+  background: #edf3ff !important;
+  color: #2f68d8 !important;
+}
+
+.status-badge.status-color-purple {
+  background: #f3edff !important;
+  color: #7853c8 !important;
+}
+
+.status-badge.status-color-green {
+  background: #ecf8f1 !important;
+  color: #2f7d52 !important;
+}
+
+.status-badge.status-color-red {
+  background: #fff0ef !important;
+  color: #c65a55 !important;
+}
+
+.status-badge.status-color-gray {
+  background: #f2f4f7 !important;
+  color: #687386 !important;
+}
+
+@media (max-width: 980px), ((hover: none) and (pointer: coarse) and (max-width: 1180px)) {
+  #chatsView .filters {
+    grid-template-columns: 1fr !important;
+    gap: 8px !important;
+  }
+
+  #chatsView .filters select,
+  #chatsView .filters .chat-scope-select {
+    font-size: 13px !important;
+    min-height: 42px !important;
+  }
+}
