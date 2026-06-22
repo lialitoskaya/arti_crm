@@ -20,8 +20,8 @@ crm.sqlite3-*
 
 # Secrets
 .env
-.env.local
-.env.*.local
+.env.*
+.env.txt
 
 # Marketplace sync state
 .wb_rate_limit_until

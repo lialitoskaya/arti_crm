@@ -1480,16 +1480,31 @@ def chat_has_messages(chat_id: int) -> bool:
         return bool(row)
 
 
-def get_chat(chat_id: int) -> dict[str, Any] | None:
+def get_chat(chat_id: int, messages_limit: int | None = None) -> dict[str, Any] | None:
     with get_connection() as conn:
         chat = conn.execute(_chats_select_sql("WHERE c.id=? AND c.marketplace != 'mock'"), (chat_id,)).fetchone()
         if not chat:
             return None
         chat_dict = row_to_dict(chat)
-        messages = conn.execute(
-            "SELECT * FROM messages WHERE chat_id=? ORDER BY datetime(created_at) ASC, id ASC",
-            (chat_id,),
-        ).fetchall()
+        if messages_limit and messages_limit > 0:
+            messages = conn.execute(
+                """
+                SELECT * FROM (
+                    SELECT *
+                    FROM messages
+                    WHERE chat_id=?
+                    ORDER BY datetime(created_at) DESC, id DESC
+                    LIMIT ?
+                )
+                ORDER BY datetime(created_at) ASC, id ASC
+                """,
+                (chat_id, int(messages_limit)),
+            ).fetchall()
+        else:
+            messages = conn.execute(
+                "SELECT * FROM messages WHERE chat_id=? ORDER BY datetime(created_at) ASC, id ASC",
+                (chat_id,),
+            ).fetchall()
         tasks = conn.execute(
             """
             SELECT t.*, u.display_name AS assignee_user_display_name, u.username AS assignee_user_username

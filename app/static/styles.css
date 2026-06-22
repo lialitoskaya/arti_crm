@@ -7632,3 +7632,11 @@ button#saveChatSettingsBottomBtn.crm-light-btn {
     aspect-ratio: 4 / 3 !important;
   }
 }
+
+.message-images .image-card img.chat-image-lazy {
+  opacity: 0;
+}
+.message-images .image-card img:not(.chat-image-lazy) {
+  opacity: 1;
+  transition: opacity .12s ease;
+}

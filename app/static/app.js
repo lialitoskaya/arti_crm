@@ -3,7 +3,48 @@ let currentChat = null;
 let chats = [];
 let refreshTimer = null;
 let statusTimer = null;
+let frontendSyncTimer = null;
+let frontendSyncInFlight = false;
+let frontendSyncLastStartedAt = 0;
+let frontendSyncLastSuccessAt = 0;
+let chatOpenInFlight = false;
+let chatImageLazyObserver = null;
+let chatImageLazyObserverRoot = null;
 let activeView = 'chats';
+const ROUTE_STORAGE_KEY = 'artiCrm.activeView';
+const VALID_VIEWS = ['chats', 'analytics', 'tasks', 'reviews', 'questions', 'knowledge', 'users', 'techSettings', 'profile'];
+const VIEW_ROUTES = {
+  chats: 'chats',
+  analytics: 'analytics',
+  tasks: 'tasks',
+  reviews: 'reviews',
+  questions: 'questions',
+  knowledge: 'knowledge',
+  users: 'users',
+  techSettings: 'settings',
+  profile: 'profile',
+};
+const ROUTE_VIEWS = {
+  chats: 'chats',
+  chat: 'chats',
+  analytics: 'analytics',
+  analytic: 'analytics',
+  tasks: 'tasks',
+  task: 'tasks',
+  reviews: 'reviews',
+  review: 'reviews',
+  questions: 'questions',
+  question: 'questions',
+  knowledge: 'knowledge',
+  kb: 'knowledge',
+  users: 'users',
+  employees: 'users',
+  staff: 'users',
+  settings: 'techSettings',
+  techsettings: 'techSettings',
+  techSettings: 'techSettings',
+  profile: 'profile',
+};
 let activeExtraPanel = '';
 let chatScope = 'active';
 let selectedAiMessageId = null;
@@ -927,6 +968,78 @@ async function loadSyncStatus() {
   }
 }
 
+
+const FRONTEND_OZON_SYNC_INTERVAL_MS = 30000;
+const FRONTEND_OZON_SYNC_MIN_GAP_MS = 25000;
+
+function isFrontendSyncAllowed() {
+  if (!appInitialized || !currentUser) return false;
+  if (document.hidden) return false;
+  if (chatOpenInFlight) return false;
+  // On shared hosting the backend process may not keep background loops alive.
+  // While an operator has CRM open, the browser safely triggers a lightweight
+  // Ozon inbox sync so new buyer messages appear without opening /docs manually.
+  return true;
+}
+
+async function runFrontendOzonFastSync(options = {}) {
+  const { silent = true, force = false } = options;
+  if (!isFrontendSyncAllowed()) return null;
+  if (frontendSyncInFlight) return null;
+  const now = Date.now();
+  if (!force && now - frontendSyncLastStartedAt < FRONTEND_OZON_SYNC_MIN_GAP_MS) return null;
+
+  frontendSyncInFlight = true;
+  frontendSyncLastStartedAt = now;
+  try {
+    if (!silent) setStatus('Обновляем чаты Ozon...');
+    const result = await api('/api/debug/ozon/fast-sync', { method: 'POST' });
+    frontendSyncLastSuccessAt = Date.now();
+
+    const chatsCount = Number(result?.count || 0);
+    const messagesCount = Number(result?.messages_count || 0);
+    const changed = chatsCount > 0 || messagesCount > 0 || Number(result?.reopened_closed_chats || 0) > 0;
+
+    if (activeView === 'chats') {
+      await loadChats();
+      // Do not re-open the selected dialog on every polling tick: on shared
+      // hosting that forces the whole message history and image previews to
+      // reload, making chat opening feel slow. Refresh the open dialog only
+      // when the sync actually imported new messages.
+      if (messagesCount > 0 && currentChatId && !chatOpenInFlight && !(isMobileChatLayout() && mobileChatClosedByUser)) {
+        await openChat(currentChatId, { keepScroll: true, silent: true });
+      }
+    } else if (changed) {
+      await loadStats();
+    }
+
+    if (!silent || changed) {
+      setStatus(`Ozon обновлён: чатов ${chatsCount}, сообщений ${messagesCount}`);
+    }
+    return result;
+  } catch (err) {
+    console.warn('frontend Ozon fast sync failed', err);
+    if (!silent) notify('Автосинхронизация Ozon', String(err.message || err));
+    setStatus('Автосинхронизация Ozon: ошибка');
+    return null;
+  } finally {
+    frontendSyncInFlight = false;
+  }
+}
+
+function startFrontendAutoSync() {
+  if (frontendSyncTimer) clearInterval(frontendSyncTimer);
+  frontendSyncTimer = setInterval(() => {
+    runFrontendOzonFastSync({ silent: true }).catch(err => console.warn('frontend sync timer failed', err));
+  }, FRONTEND_OZON_SYNC_INTERVAL_MS);
+}
+
+function runFrontendSyncSoon(reason = '') {
+  window.setTimeout(() => {
+    runFrontendOzonFastSync({ silent: true, force: reason === 'startup' }).catch(err => console.warn('frontend sync failed', err));
+  }, 250);
+}
+
 async function loadStats() {
   const stats = await api('/api/stats');
   const el = $('stats');
@@ -1127,15 +1240,18 @@ async function openChat(chatId, options = {}) {
   }
 
   let chat;
+  chatOpenInFlight = true;
   try {
-    chat = await api(`/api/chats/${chatId}`);
+    chat = await api(`/api/chats/${chatId}?messages_limit=120`);
   } catch (err) {
     if (requestSeq === openChatRequestSeq) {
       notify('Не удалось открыть чат', String(err.message || err));
       setMobileChatOpen(false);
     }
+    chatOpenInFlight = false;
     return;
   }
+  chatOpenInFlight = false;
 
   // Ignore stale responses when the operator taps another chat quickly or returns to the list.
   if (requestSeq !== openChatRequestSeq || Number(currentChatId) !== Number(chatId)) {
@@ -1180,6 +1296,39 @@ async function openChat(chatId, options = {}) {
     return;
   }
   scrollMessagesToBottom('open-chat');
+}
+
+
+function ensureChatImageLazyObserver() {
+  const root = $('messages') || null;
+  if (!('IntersectionObserver' in window)) return null;
+  if (chatImageLazyObserver && chatImageLazyObserverRoot === root) return chatImageLazyObserver;
+  if (chatImageLazyObserver) chatImageLazyObserver.disconnect();
+  chatImageLazyObserverRoot = root;
+  chatImageLazyObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const img = entry.target;
+      chatImageLazyObserver.unobserve(img);
+      const src = img.dataset.src;
+      if (src && img.src !== src) {
+        img.src = src;
+        img.classList.remove('chat-image-lazy');
+      }
+    }
+  }, { root, rootMargin: '900px 0px', threshold: 0.01 });
+  return chatImageLazyObserver;
+}
+
+function prepareLazyChatImage(img, src) {
+  img.dataset.src = src;
+  img.classList.add('chat-image-lazy');
+  const observer = ensureChatImageLazyObserver();
+  if (observer) {
+    observer.observe(img);
+  } else {
+    img.src = src;
+  }
 }
 
 function renderMessages(messages) {
@@ -1260,7 +1409,6 @@ function renderMessages(messages) {
         card.title = 'Открыть изображение в полном размере';
 
         const img = document.createElement('img');
-        img.src = safeImageUrl;
         img.alt = 'Изображение из сообщения';
         img.loading = 'lazy';
         img.decoding = 'async';
@@ -1268,6 +1416,7 @@ function renderMessages(messages) {
         img.height = 480;
         img.referrerPolicy = 'no-referrer';
         img.onerror = () => card.classList.add('image-error');
+        prepareLazyChatImage(img, safeImageUrl);
 
         const fallback = document.createElement('span');
         fallback.textContent = 'Открыть в полном размере';
@@ -2707,10 +2856,71 @@ function handleMobileMoreAction(action, view) {
   }
 }
 
-function showView(view) {
-  const normalizedView = ['chats', 'analytics', 'tasks', 'reviews', 'questions', 'knowledge', 'users', 'techSettings', 'profile'].includes(view) ? view : 'chats';
+function normalizeViewName(view) {
+  return VALID_VIEWS.includes(view) ? view : 'chats';
+}
+
+function viewFromRouteValue(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const clean = raw
+    .replace(/^#/, '')
+    .replace(/^\/?/, '')
+    .split(/[/?&]/)[0]
+    .trim();
+  return ROUTE_VIEWS[clean] || normalizeViewName(clean);
+}
+
+function getViewFromLocationHash() {
+  return viewFromRouteValue(window.location.hash || '');
+}
+
+function getInitialRouteView() {
+  const hashView = getViewFromLocationHash();
+  if (hashView) return hashView;
+  try {
+    const saved = localStorage.getItem(ROUTE_STORAGE_KEY);
+    if (saved) return viewFromRouteValue(saved);
+  } catch (_) {}
+  return 'chats';
+}
+
+function routeForView(view) {
+  return VIEW_ROUTES[normalizeViewName(view)] || 'chats';
+}
+
+function rememberRouteView(view) {
+  try {
+    localStorage.setItem(ROUTE_STORAGE_KEY, normalizeViewName(view));
+  } catch (_) {}
+}
+
+function syncRouteForView(view, { replace = false } = {}) {
+  const normalizedView = normalizeViewName(view);
+  rememberRouteView(normalizedView);
+  const targetHash = `#/${routeForView(normalizedView)}`;
+  if (window.location.hash === targetHash) return;
+  const targetUrl = `${window.location.pathname}${window.location.search}${targetHash}`;
+  if (replace && window.history?.replaceState) {
+    window.history.replaceState(null, '', targetUrl);
+    return;
+  }
+  if (window.history?.pushState) {
+    window.history.pushState(null, '', targetUrl);
+    return;
+  }
+  window.location.hash = targetHash;
+}
+
+function showView(view, options = {}) {
+  const normalizedView = normalizeViewName(view);
   activeView = normalizedView;
   document.body.dataset.activeView = normalizedView;
+  if (options.syncRoute !== false) {
+    syncRouteForView(normalizedView, { replace: Boolean(options.replaceRoute) });
+  } else {
+    rememberRouteView(normalizedView);
+  }
   if (normalizedView !== 'chats') {
     mobileChatClosedByUser = false;
     setMobileChatOpen(false);
@@ -2769,6 +2979,7 @@ function showView(view) {
   if (normalizedView === 'users') loadUsers().catch(err => notify('Ошибка загрузки сотрудников', String(err.message || err)));
   if (normalizedView === 'techSettings') loadChatSettings({ keepValues: true }).catch(err => notify('Ошибка загрузки тех. настроек', String(err.message || err)));
   if (normalizedView === 'profile') fillProfileForm();
+  if (normalizedView === 'chats') runFrontendSyncSoon('show-chats');
 }
 
 function escapeHtml(value) {
@@ -3074,6 +3285,9 @@ function setupAuthUi() {
     if (refreshTimer) clearInterval(refreshTimer);
     if (statusTimer) clearInterval(statusTimer);
     if (notificationsTimer) clearInterval(notificationsTimer);
+    if (frontendSyncTimer) clearInterval(frontendSyncTimer);
+    frontendSyncTimer = null;
+    frontendSyncInFlight = false;
     document.body.classList.remove('mobile-chat-open');
     showLogin('');
   };
@@ -3096,9 +3310,13 @@ async function bootstrap() {
 function init() {
   if (appInitialized) return;
   appInitialized = true;
+  activeView = getInitialRouteView();
   document.body.dataset.activeView = activeView || 'chats';
   loadChatSettings({ keepValues: true }).catch(err => console.warn('chat settings init failed', err));
-  bind('refreshBtn', 'click', refreshVisibleData);
+  bind('refreshBtn', 'click', async () => {
+    await runFrontendOzonFastSync({ silent: false, force: true });
+    await refreshVisibleData();
+  });
   bind('mobileBackBtn', 'click', backToChatListMobile);
   bind('marketplaceFilter', 'change', loadChats);
   bind('statusFilter', 'change', loadChats);
@@ -3446,6 +3664,8 @@ function init() {
     });
   }
 
+  showView(activeView, { replaceRoute: true });
+
   loadAssignees()
     .then(() => Promise.allSettled([loadChats(), loadAllTasks()]))
     .catch(err => console.warn('initial assignees load failed', err));
@@ -3454,12 +3674,26 @@ function init() {
   loadSyncStatus();
   loadNotifications().catch(err => console.warn('notifications initial load failed', err));
 
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) runFrontendSyncSoon('visible');
+  });
+  window.addEventListener('focus', () => runFrontendSyncSoon('focus'));
+
+  startFrontendAutoSync();
+  runFrontendSyncSoon('startup');
+
   refreshTimer = setInterval(refreshVisibleData, 5000);
   statusTimer = setInterval(loadSyncStatus, 10000);
   notificationsTimer = setInterval(loadNotifications, 10000);
 }
 
 document.addEventListener('DOMContentLoaded', bootstrap);
+
+window.addEventListener('hashchange', () => {
+  const routeView = getViewFromLocationHash();
+  if (!routeView || routeView === activeView) return;
+  showView(routeView, { syncRoute: false });
+});
 
 
 

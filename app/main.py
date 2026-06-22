@@ -2866,8 +2866,9 @@ def list_chats(request: Request, status: str | None = None, marketplace: str | N
 
 
 @app.get("/api/chats/{chat_id}")
-def get_chat(chat_id: int) -> dict[str, Any]:
-    chat = repo.get_chat(chat_id)
+def get_chat(chat_id: int, messages_limit: int = 120) -> dict[str, Any]:
+    safe_limit = max(20, min(int(messages_limit or 120), 500))
+    chat = repo.get_chat(chat_id, messages_limit=safe_limit)
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
     return chat
