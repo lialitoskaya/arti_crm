@@ -4,6 +4,7 @@ import asyncio
 import ipaddress
 import json
 import os
+import re
 import time
 import uuid
 from contextlib import suppress
@@ -116,6 +117,7 @@ _GENERIC_AUTHOR_NAMES = {
     "customer", "buyer", "client", "user", "покупатель", "клиент",
     "seller", "operator", "admin", "manager", "support", "продавец",
     "notificationuser", "notification_user", "systemuser", "system_user",
+    "chatbot", "chat_bot", "chat bot",
 }
 
 
@@ -165,7 +167,15 @@ def _ozon_system_dialog_markers() -> tuple[str, ...]:
 def _ozon_chatbot_first_message_markers() -> tuple[str, ...]:
     return tuple(
         token.strip().lower()
-        for token in os.getenv("OZON_FIRST_MESSAGE_SYSTEM_USER_MARKERS", "chatbot").split(",")
+        for token in os.getenv("OZON_FIRST_MESSAGE_SYSTEM_USER_MARKERS", os.getenv("OZON_CHATBOT_MARKERS", "chatbot")).split(",")
+        if token.strip()
+    )
+
+
+def _ozon_chatbot_message_markers() -> tuple[str, ...]:
+    return tuple(
+        token.strip().lower()
+        for token in os.getenv("OZON_CHATBOT_MARKERS", os.getenv("OZON_FIRST_MESSAGE_SYSTEM_USER_MARKERS", "chatbot")).split(",")
         if token.strip()
     )
 
@@ -219,12 +229,29 @@ def _message_system_designations(message: Any) -> list[str]:
     return [item.strip().lower() for item in indicators if str(item or "").strip()]
 
 
+def _message_sender_matches_markers(message: Any, markers: tuple[str, ...]) -> bool:
+    indicators = _message_system_designations(message)
+    return any(_system_sender_matches(indicator, markers) for indicator in indicators)
+
+
+def _message_is_ozon_chatbot_message(message: Any) -> bool:
+    if os.getenv("OZON_EXCLUDE_CHATBOT_MESSAGES", "1").strip().lower() in {"0", "false", "no", "off", "нет"}:
+        return False
+    return _message_sender_matches_markers(message, _ozon_chatbot_message_markers())
+
+
+def _filter_ozon_chatbot_messages(messages: list[Any]) -> list[Any]:
+    return [message for message in messages if not _message_is_ozon_chatbot_message(message)]
+
+
 def _messages_are_ozon_system_dialog(messages: list[Any]) -> bool:
-    """Return True only for exact Ozon technical sender names.
+    """Return True for explicit Ozon non-customer/system dialogs.
 
     Rules:
     - notificationuser/systemuser are blocked on any message;
-    - chatbot blocks only when it is the first message sender/user name.
+    - chatbot blocks the whole dialog when it is the first message sender;
+    - dialogs made only of chatbot/system messages are hidden;
+    - in mixed customer dialogs, chatbot messages are removed individually.
     """
     if os.getenv("OZON_EXCLUDE_SYSTEM_HISTORY_CHATS", "1").strip().lower() in {"0", "false", "no", "off", "нет"}:
         return False
@@ -232,14 +259,22 @@ def _messages_are_ozon_system_dialog(messages: list[Any]) -> bool:
         return False
 
     technical_markers = _ozon_system_dialog_markers()
+    chatbot_markers = _ozon_chatbot_message_markers()
+
     for message in messages:
-        indicators = _message_system_designations(message)
-        if any(_system_sender_matches(indicator, technical_markers) for indicator in indicators):
+        if _message_sender_matches_markers(message, technical_markers):
             return True
 
     first_indicators = _message_system_designations(messages[0])
     first_markers = _ozon_chatbot_first_message_markers()
     if any(_system_sender_matches(indicator, first_markers) for indicator in first_indicators):
+        return True
+
+    messages_with_sender = [message for message in messages if _message_system_designations(message)]
+    if messages_with_sender and all(
+        _message_sender_matches_markers(message, chatbot_markers) or _message_sender_matches_markers(message, technical_markers)
+        for message in messages_with_sender
+    ):
         return True
 
     return False
@@ -760,12 +795,13 @@ async def _sync_ozon_fast_inbox_unlocked(*, background: bool = True) -> dict[str
 
         messages = messages or []
 
-        # Keep Ozon chats by default. Do not delete uncertain dialogs during fast sync.
-        if os.getenv("OZON_DELETE_SYSTEM_HISTORY_CHATS", "0").strip().lower() in {"1", "true", "yes", "on", "да"}:
-            if _messages_are_ozon_system_dialog(messages):
-                repo.mark_ozon_chat_as_system(chat_id, reason="history_system_marker")
+        if _messages_are_ozon_system_dialog(messages):
+            repo.hide_ozon_system_chat_ids([chat_id], reason="fast_sync_system_or_chatbot_sender")
+            if _env_bool("OZON_DELETE_SYSTEM_HISTORY_CHATS", False):
                 repo.delete_chats_by_ids([chat_id])
-                continue
+            continue
+
+        messages_to_store = _filter_ozon_chatbot_messages(messages)
 
         if not _is_real_customer_name(unified_chat.customer_name):
             fallback_name, fallback_public_id = _customer_info_from_messages(messages)
@@ -773,7 +809,7 @@ async def _sync_ozon_fast_inbox_unlocked(*, background: bool = True) -> dict[str
                 repo.update_chat_customer_info(chat_id, fallback_name, fallback_public_id)
 
         previous_last_at = (existing_chat or {}).get("last_message_at")
-        for message in messages:
+        for message in messages_to_store:
             repo.add_message(
                 chat_id=chat_id,
                 direction=message.direction,
@@ -942,10 +978,12 @@ async def _sync_marketplace_unlocked(marketplace: str, *, background: bool = Fal
             # Explicit system dialogs are not customer chats. Hide and remember them
             # instead of deleting by default; otherwise the next chat-list sync can
             # recreate them and show them again before history is fetched.
-            repo.hide_ozon_system_chat_ids([chat_id], reason="history_system_marker")
+            repo.hide_ozon_system_chat_ids([chat_id], reason="history_system_or_chatbot_sender")
             if _env_bool("OZON_DELETE_SYSTEM_HISTORY_CHATS", False):
                 repo.delete_chats_by_ids([chat_id])
             continue
+
+        messages_to_store = _filter_ozon_chatbot_messages(messages) if marketplace == "ozon" else messages
 
         # Если список чатов не содержит имени покупателя, пробуем взять его из истории.
         if not _is_real_customer_name(unified_chat.customer_name):
@@ -954,7 +992,7 @@ async def _sync_marketplace_unlocked(marketplace: str, *, background: bool = Fal
                 repo.update_chat_customer_info(chat_id, fallback_name, fallback_public_id)
 
         previous_last_at = (existing_chat or {}).get("last_message_at")
-        for message in messages:
+        for message in messages_to_store:
             repo.add_message(
                 chat_id=chat_id,
                 direction=message.direction,
@@ -1064,6 +1102,130 @@ async def _sync_marketplace_locked(marketplace: str) -> dict[str, Any]:
         result = await _sync_marketplace_unlocked(marketplace)
         app.state.last_sync = result
         return result
+
+
+def _connector_is_configured_for_sync(marketplace: str, connector: Any) -> bool:
+    if marketplace == "ozon":
+        return bool(getattr(connector, "client_id", "") and getattr(connector, "api_key", ""))
+    if marketplace == "yandex":
+        return bool(getattr(connector, "token", "") and getattr(connector, "business_id", ""))
+    if marketplace == "wildberries":
+        return bool(getattr(connector, "token", ""))
+    return True
+
+
+def _frontend_sync_enabled_for_marketplace(marketplace: str) -> bool:
+    if marketplace == "ozon":
+        return _env_bool("OZON_FRONTEND_SYNC", True)
+    if marketplace == "yandex":
+        return _env_bool("YANDEX_FRONTEND_SYNC", True)
+    if marketplace == "wildberries":
+        return _env_bool("WB_FRONTEND_SYNC", True)
+    return _env_bool(f"{marketplace.upper()}_FRONTEND_SYNC", True)
+
+
+async def _sync_operator_frontend_unlocked() -> dict[str, Any]:
+    """Lightweight operator-triggered sync for shared hosting.
+
+    Fastfox/Fox Start does not guarantee a permanently running background worker,
+    so the opened CRM tab periodically calls this endpoint. Ozon uses the fast
+    inbox sync; WB and Yandex use their background sync profiles with the same
+    per-marketplace throttles as the server background loop to avoid API spam.
+    """
+    now = time.time()
+    last_poll_at: dict[str, float] = getattr(app.state, "frontend_operator_sync_last_poll_at", {})
+    if not isinstance(last_poll_at, dict):
+        last_poll_at = {}
+        app.state.frontend_operator_sync_last_poll_at = last_poll_at
+
+    per_marketplace: dict[str, Any] = {}
+    total_chats = 0
+    total_messages = 0
+    total_errors = 0
+
+    for marketplace in ("ozon", "yandex", "wildberries"):
+        connector = connectors.get(marketplace)
+        if connector is None:
+            per_marketplace[marketplace] = {"enabled": False, "status": "missing_connector"}
+            continue
+
+        if not _frontend_sync_enabled_for_marketplace(marketplace):
+            per_marketplace[marketplace] = {"enabled": False}
+            continue
+
+        if not _connector_is_configured_for_sync(marketplace, connector):
+            per_marketplace[marketplace] = {"enabled": True, "configured": False, "status": "skipped"}
+            continue
+
+        if marketplace == "wildberries":
+            cooldown_remaining = 0
+            if hasattr(connector, "_cooldown_remaining"):
+                try:
+                    cooldown_remaining = int(connector._cooldown_remaining())
+                except Exception:
+                    cooldown_remaining = 0
+            if cooldown_remaining > 0:
+                per_marketplace[marketplace] = {
+                    "enabled": True,
+                    "configured": True,
+                    "status": "cooldown",
+                    "retry_after_seconds": cooldown_remaining,
+                    "reason": "WB 429 Too Many Requests",
+                }
+                continue
+
+        min_interval = _background_min_interval_for_marketplace(marketplace)
+        last_poll = float(last_poll_at.get(marketplace, 0.0) or 0.0)
+        wait_seconds = int(max(0.0, min_interval - (now - last_poll)))
+        if wait_seconds > 0:
+            per_marketplace[marketplace] = {
+                "enabled": True,
+                "configured": True,
+                "status": "throttled",
+                "retry_after_seconds": wait_seconds,
+                "min_interval_seconds": min_interval,
+            }
+            continue
+
+        last_poll_at[marketplace] = now
+        try:
+            if marketplace == "ozon" and _env_bool("OZON_FAST_INBOX_SYNC_ENABLED", True):
+                result = await _sync_ozon_fast_inbox_unlocked(background=True)
+            else:
+                result = await _sync_marketplace_unlocked(marketplace, background=True)
+
+            total_chats += int(result.get("count") or 0)
+            total_messages += int(result.get("messages_count") or 0)
+            total_errors += int(result.get("errors_count") or 0)
+            per_marketplace[marketplace] = {
+                "enabled": True,
+                "configured": result.get("configured", True),
+                "status": "ok" if result.get("ok", True) else "partial_error",
+                "result": result,
+            }
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            total_errors += 1
+            per_marketplace[marketplace] = {
+                "enabled": True,
+                "configured": True,
+                "status": "error",
+                "error": str(exc),
+            }
+
+    ok_statuses = {"ok", "skipped", "throttled", "cooldown", "missing_connector"}
+    payload = {
+        "ok": all((not value.get("enabled", True)) or value.get("status") in ok_statuses for value in per_marketplace.values()),
+        "mode": "operator_frontend",
+        "marketplaces": per_marketplace,
+        "count": total_chats,
+        "messages_count": total_messages,
+        "errors_count": total_errors,
+        "background": True,
+    }
+    app.state.last_frontend_operator_sync = payload
+    return payload
 
 
 
@@ -1251,6 +1413,9 @@ async def on_startup() -> None:
     app.state.last_background_sync = {}
     app.state.last_reviews_sync = {}
     app.state.last_questions_sync = {}
+    app.state.frontend_operator_sync_lock = asyncio.Lock()
+    app.state.frontend_operator_sync_last_poll_at = {}
+    app.state.last_frontend_operator_sync = {}
     _ensure_wb_events_auto_plan_from_env()
     app.state.background_sync_task = asyncio.create_task(_background_sync_loop())
     app.state.wb_events_import_planner_task = asyncio.create_task(_wb_events_import_planner_loop())
@@ -2403,6 +2568,8 @@ def sync_status() -> dict[str, Any]:
         "last_sync": getattr(app.state, "last_sync", {}),
         "background": getattr(app.state, "last_background_sync", {}),
         "reviews": getattr(app.state, "last_reviews_sync", {}),
+        "questions": getattr(app.state, "last_questions_sync", {}),
+        "frontend_operator_sync": getattr(app.state, "last_frontend_operator_sync", {}),
     }
 
 
@@ -3329,6 +3496,16 @@ def api_update_knowledge_article(article_id: int, payload: KnowledgeArticleUpdat
     if not article:
         raise HTTPException(status_code=404, detail="Article not found")
     return article
+
+
+@app.post("/api/sync/operator")
+async def sync_operator_frontend() -> dict[str, Any]:
+    lock: asyncio.Lock = getattr(app.state, "frontend_operator_sync_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        app.state.frontend_operator_sync_lock = lock
+    async with lock:
+        return await _sync_operator_frontend_unlocked()
 
 
 @app.post("/api/sync/{marketplace}")

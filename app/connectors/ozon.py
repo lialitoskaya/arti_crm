@@ -460,6 +460,8 @@ class OzonConnector(MarketplaceConnector):
         if os.getenv("OZON_EXCLUDE_NOTIFICATIONUSER_CHATS", "1").strip().lower() in {"0", "false", "no", "off", "нет"}:
             return False
         tokens_raw = os.getenv("OZON_NOTIFICATION_USER_MARKERS", "notificationuser,notification_user,systemuser,system_user")
+        if os.getenv("OZON_EXCLUDE_CHATBOT_CHATS", "1").strip().lower() not in {"0", "false", "no", "off", "нет"}:
+            tokens_raw = tokens_raw + "," + os.getenv("OZON_CHATBOT_MARKERS", os.getenv("OZON_FIRST_MESSAGE_SYSTEM_USER_MARKERS", "chatbot"))
         markers = tuple(t.strip().lower() for t in tokens_raw.split(",") if t.strip())
         return any(cls._system_sender_matches(value, markers) for value in cls._exact_sender_designations_from_payload(item))
 

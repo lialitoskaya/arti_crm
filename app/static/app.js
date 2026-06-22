@@ -76,6 +76,12 @@ let notificationToastIds = [];
 let notificationSeenUnreadIds = new Set();
 let notificationsBootstrapDone = false;
 let lastBrowserNotificationAt = 0;
+let notificationsLoadPromise = null;
+let chatsLoadPromise = null;
+let statsLoadPromise = null;
+let syncStatusLoadPromise = null;
+let questionsSyncPromise = null;
+let questionsSyncLastStartedAt = 0;
 // Mobile navigation: when an operator taps 'back to chat list', keep the selected
 // chat in memory but do not auto-open it again during background refresh.
 let mobileChatClosedByUser = false;
@@ -324,8 +330,10 @@ function renderNotifications() {
 }
 
 async function loadNotifications({ silent = true } = {}) {
-  try {
-    const data = await api('/api/notifications?limit=30');
+  if (notificationsLoadPromise) return notificationsLoadPromise;
+  notificationsLoadPromise = (async () => {
+    try {
+      const data = await api('/api/notifications?limit=30');
     const previousUnread = notificationsUnreadCount || 0;
     notifications = data.items || [];
     notificationsUnreadCount = Number(data.unread_count || 0);
@@ -359,9 +367,15 @@ async function loadNotifications({ silent = true } = {}) {
         new Notification(newest.title || 'Новое уведомление', { body: newest.body || 'Arti CRM' });
       }
     }
-  } catch (err) {
-    if (!silent) notify('Ошибка загрузки уведомлений', String(err.message || err));
-    console.warn('notifications load failed', err);
+    } catch (err) {
+      if (!silent) notify('Ошибка загрузки уведомлений', String(err.message || err));
+      console.warn('notifications load failed', err);
+    }
+  })();
+  try {
+    return await notificationsLoadPromise;
+  } finally {
+    notificationsLoadPromise = null;
   }
 }
 
@@ -928,8 +942,10 @@ function scrollMessagesToBottom(reason = '') {
 }
 
 async function loadSyncStatus() {
-  try {
-    const data = await api('/api/sync/status');
+  if (syncStatusLoadPromise) return syncStatusLoadPromise;
+  syncStatusLoadPromise = (async () => {
+    try {
+      const data = await api('/api/sync/status');
     const bg = data.background || {};
     if (bg.enabled === false) {
       setStatus('Автообновление выключено');
@@ -963,14 +979,25 @@ async function loadSyncStatus() {
     } else {
       setStatus('Фоновое обновление активно');
     }
-  } catch (err) {
-    console.warn('sync status failed', err);
+    } catch (err) {
+      console.warn('sync status failed', err);
+    }
+  })();
+  try {
+    return await syncStatusLoadPromise;
+  } finally {
+    syncStatusLoadPromise = null;
   }
 }
 
 
+// On Fastfox the opened CRM tab is also the reliable "worker".
+// Ozon sync runs every 30s; WB/Yandex are included by /api/sync/operator
+// but server-side throttles protect them from rate limits.
 const FRONTEND_OZON_SYNC_INTERVAL_MS = 30000;
 const FRONTEND_OZON_SYNC_MIN_GAP_MS = 25000;
+const FRONTEND_OZON_QUESTIONS_SYNC_INTERVAL_MS = 60000;
+const FRONTEND_OZON_QUESTIONS_SYNC_MIN_GAP_MS = 45000;
 
 function isFrontendSyncAllowed() {
   if (!appInitialized || !currentUser) return false;
@@ -993,7 +1020,7 @@ async function runFrontendOzonFastSync(options = {}) {
   frontendSyncLastStartedAt = now;
   try {
     if (!silent) setStatus('Обновляем чаты Ozon...');
-    const result = await api('/api/debug/ozon/fast-sync', { method: 'POST' });
+    const result = await api('/api/sync/operator', { method: 'POST' });
     frontendSyncLastSuccessAt = Date.now();
 
     const chatsCount = Number(result?.count || 0);
@@ -1001,36 +1028,82 @@ async function runFrontendOzonFastSync(options = {}) {
     const changed = chatsCount > 0 || messagesCount > 0 || Number(result?.reopened_closed_chats || 0) > 0;
 
     if (activeView === 'chats') {
-      await loadChats();
-      // Do not re-open the selected dialog on every polling tick: on shared
-      // hosting that forces the whole message history and image previews to
-      // reload, making chat opening feel slow. Refresh the open dialog only
-      // when the sync actually imported new messages.
-      if (messagesCount > 0 && currentChatId && !chatOpenInFlight && !(isMobileChatLayout() && mobileChatClosedByUser)) {
-        await openChat(currentChatId, { keepScroll: true, silent: true });
+      // On shared hosting each chat-list request can take seconds. Do not reload
+      // chats on every polling tick; only refresh when the sync reports a real
+      // update. This keeps opening a dialog from waiting behind background polls.
+      if (changed) {
+        await loadChats();
+        if (messagesCount > 0 && currentChatId && !chatOpenInFlight && !(isMobileChatLayout() && mobileChatClosedByUser)) {
+          await openChat(currentChatId, { keepScroll: true, silent: true });
+        }
       }
     } else if (changed) {
       await loadStats();
     }
 
     if (!silent || changed) {
-      setStatus(`Ozon обновлён: чатов ${chatsCount}, сообщений ${messagesCount}`);
+      setStatus(`Маркетплейсы обновлены: чатов ${chatsCount}, сообщений ${messagesCount}`);
     }
     return result;
   } catch (err) {
-    console.warn('frontend Ozon fast sync failed', err);
-    if (!silent) notify('Автосинхронизация Ozon', String(err.message || err));
-    setStatus('Автосинхронизация Ozon: ошибка');
+    console.warn('frontend marketplace sync failed', err);
+    if (!silent) notify('Автосинхронизация маркетплейсов', String(err.message || err));
+    setStatus('Автосинхронизация маркетплейсов: ошибка');
     return null;
   } finally {
     frontendSyncInFlight = false;
   }
 }
 
+async function runFrontendOzonQuestionsSync(options = {}) {
+  const { silent = true, force = false } = options;
+  if (!appInitialized || !currentUser) return null;
+  if (document.hidden) return null;
+  if (activeView !== 'questions' && !force) return null;
+  if (questionsSyncPromise) return questionsSyncPromise;
+  const now = Date.now();
+  if (!force && now - questionsSyncLastStartedAt < FRONTEND_OZON_QUESTIONS_SYNC_MIN_GAP_MS) return null;
+
+  questionsSyncLastStartedAt = now;
+  questionsSyncPromise = (async () => {
+    try {
+      if (!silent) setStatus('Загружаю вопросы Ozon…');
+      const result = await api('/api/questions/sync/ozon', { method: 'POST' });
+      const count = Number(result?.count || 0);
+      if (activeView === 'questions') {
+        await loadQuestions();
+        if (currentQuestionId) await openQuestion(currentQuestionId, { silent: true });
+      }
+      await loadStats();
+      if (!silent || count > 0) setStatus(`Вопросы Ozon: загружено ${count}`);
+      return result;
+    } catch (err) {
+      console.warn('frontend Ozon questions sync failed', err);
+      if (!silent) notify('Вопросы не загрузились', String(err.message || err));
+      return null;
+    }
+  })();
+  try {
+    return await questionsSyncPromise;
+  } finally {
+    questionsSyncPromise = null;
+  }
+}
+
+function runFrontendQuestionsSyncSoon(reason = '') {
+  window.setTimeout(() => {
+    runFrontendOzonQuestionsSync({ silent: true, force: reason === 'show-questions' || reason === 'startup-questions' })
+      .catch(err => console.warn('frontend questions sync failed', err));
+  }, 400);
+}
+
 function startFrontendAutoSync() {
   if (frontendSyncTimer) clearInterval(frontendSyncTimer);
   frontendSyncTimer = setInterval(() => {
     runFrontendOzonFastSync({ silent: true }).catch(err => console.warn('frontend sync timer failed', err));
+    if (activeView === 'questions') {
+      runFrontendOzonQuestionsSync({ silent: true }).catch(err => console.warn('frontend questions sync timer failed', err));
+    }
   }, FRONTEND_OZON_SYNC_INTERVAL_MS);
 }
 
@@ -1041,15 +1114,26 @@ function runFrontendSyncSoon(reason = '') {
 }
 
 async function loadStats() {
-  const stats = await api('/api/stats');
-  const el = $('stats');
-  if (el) {
-    el.textContent = `Ждут ответа: ${stats.waiting_response || 0} · Задачи: ${stats.tasks_open || 0} · Отзывы: ${stats.reviews_unanswered || 0} · Вопросы: ${stats.questions_unanswered || 0} · Архив: ${stats.archived_chats || 0}`;
+  if (statsLoadPromise) return statsLoadPromise;
+  statsLoadPromise = (async () => {
+    const stats = await api('/api/stats');
+    const el = $('stats');
+    if (el) {
+      el.textContent = `Ждут ответа: ${stats.waiting_response || 0} · Задачи: ${stats.tasks_open || 0} · Отзывы: ${stats.reviews_unanswered || 0} · Вопросы: ${stats.questions_unanswered || 0} · Архив: ${stats.archived_chats || 0}`;
+    }
+    return stats;
+  })();
+  try {
+    return await statsLoadPromise;
+  } finally {
+    statsLoadPromise = null;
   }
 }
 
 async function loadChats() {
-  const params = new URLSearchParams();
+  if (chatsLoadPromise) return chatsLoadPromise;
+  chatsLoadPromise = (async () => {
+    const params = new URLSearchParams();
   const marketplaceEl = $('marketplaceFilter');
   const statusEl = $('statusFilter');
   const funnelEl = $('funnelFilter');
@@ -1065,15 +1149,24 @@ async function loadChats() {
     if (chatOwnerScope === 'mine') params.set('mine', 'true');
   }
 
-  chats = await api(`/api/chats?${params.toString()}`);
-  const chatCountLabel = $('chatCountLabel');
-  if (chatCountLabel) chatCountLabel.textContent = String(chats.length);
-  renderChatList();
-  renderScopeTabs();
-  await loadStats();
+    chats = await api(`/api/chats?${params.toString()}`);
+    const chatCountLabel = $('chatCountLabel');
+    if (chatCountLabel) chatCountLabel.textContent = String(chats.length);
+    renderChatList();
+    renderScopeTabs();
+    await loadStats();
+    return chats;
+  })();
+  try {
+    return await chatsLoadPromise;
+  } finally {
+    chatsLoadPromise = null;
+  }
 }
 
 async function refreshVisibleData() {
+  if (document.hidden) return;
+  if (frontendSyncInFlight || chatOpenInFlight) return;
   try {
     loadNotifications().catch(err => console.warn('notifications refresh failed', err));
     if (activeView === 'analytics') {
@@ -1100,16 +1193,15 @@ async function refreshVisibleData() {
       return;
     }
     if (activeView === 'questions') {
-      await loadQuestions();
-      if (currentQuestionId) await openQuestion(currentQuestionId, { silent: true });
-      await loadStats();
+      await runFrontendOzonQuestionsSync({ silent: true });
       await loadSyncStatus();
       return;
     }
+
+    // Chat view is the heaviest view on shared hosting. Do not reload the open
+    // dialog on passive timers; frontend fast-sync refreshes it only when new
+    // messages are imported, and the Refresh button still calls this explicitly.
     await loadChats();
-    if (currentChatId && !(isMobileChatLayout() && mobileChatClosedByUser)) {
-      await openChat(currentChatId, { keepScroll: true, silent: true });
-    }
     await loadSyncStatus();
   } catch (err) {
     console.warn('auto refresh failed', err);
@@ -2078,14 +2170,8 @@ async function openQuestion(questionId, options = {}) {
 async function syncQuestions() {
   const btn = $('syncQuestionsBtn');
   if (btn) btn.disabled = true;
-  setStatus('Загружаю вопросы Ozon…');
   try {
-    const result = await api('/api/questions/sync/ozon', { method: 'POST' });
-    setStatus(`Вопросы Ozon: загружено ${result.count || 0}`);
-    await loadQuestions();
-    await loadStats();
-  } catch (err) {
-    notify('Вопросы не загрузились', String(err.message || err));
+    await runFrontendOzonQuestionsSync({ silent: false, force: true });
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -2974,7 +3060,7 @@ function showView(view, options = {}) {
   if (normalizedView === 'analytics') loadAnalytics().catch(err => notify('Ошибка загрузки аналитики', String(err.message || err)));
   if (normalizedView === 'tasks') loadAllTasks().catch(err => notify('Ошибка загрузки задач', String(err.message || err)));
   if (normalizedView === 'reviews') loadReviews().catch(err => notify('Ошибка загрузки отзывов', String(err.message || err)));
-  if (normalizedView === 'questions') loadQuestions().catch(err => notify('Ошибка загрузки вопросов', String(err.message || err)));
+  if (normalizedView === 'questions') { loadQuestions().catch(err => notify('Ошибка загрузки вопросов', String(err.message || err))); runFrontendQuestionsSyncSoon('show-questions'); }
   if (normalizedView === 'knowledge') loadKnowledge().catch(err => notify('Ошибка загрузки базы знаний', String(err.message || err)));
   if (normalizedView === 'users') loadUsers().catch(err => notify('Ошибка загрузки сотрудников', String(err.message || err)));
   if (normalizedView === 'techSettings') loadChatSettings({ keepValues: true }).catch(err => notify('Ошибка загрузки тех. настроек', String(err.message || err)));
@@ -3667,24 +3753,40 @@ function init() {
   showView(activeView, { replaceRoute: true });
 
   loadAssignees()
-    .then(() => Promise.allSettled([loadChats(), loadAllTasks()]))
+    .then(() => {
+      if (activeView === 'chats') return loadChats();
+      return null;
+    })
     .catch(err => console.warn('initial assignees load failed', err));
-  loadReviews().catch(err => console.warn('reviews initial load failed', err));
-  loadQuestions().catch(err => console.warn('questions initial load failed', err));
   loadSyncStatus();
   loadNotifications().catch(err => console.warn('notifications initial load failed', err));
 
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) runFrontendSyncSoon('visible');
+    if (!document.hidden) {
+      runFrontendSyncSoon('visible');
+      if (activeView === 'questions') runFrontendQuestionsSyncSoon('visible-questions');
+    }
   });
-  window.addEventListener('focus', () => runFrontendSyncSoon('focus'));
+  window.addEventListener('focus', () => {
+    runFrontendSyncSoon('focus');
+    if (activeView === 'questions') runFrontendQuestionsSyncSoon('focus-questions');
+  });
 
   startFrontendAutoSync();
   runFrontendSyncSoon('startup');
 
-  refreshTimer = setInterval(refreshVisibleData, 5000);
-  statusTimer = setInterval(loadSyncStatus, 10000);
-  notificationsTimer = setInterval(loadNotifications, 10000);
+  // Fastfox shared hosting is sensitive to many parallel fetches. Avoid the
+  // previous 5-second full-view refresh loop; it made /chats, /notifications and
+  // /sync/status overlap and delayed opening dialogs.
+  refreshTimer = setInterval(() => {
+    if (!document.hidden && activeView !== 'chats') refreshVisibleData();
+  }, 60000);
+  statusTimer = setInterval(() => {
+    if (!document.hidden) loadSyncStatus();
+  }, 60000);
+  notificationsTimer = setInterval(() => {
+    if (!document.hidden) loadNotifications();
+  }, 60000);
 }
 
 document.addEventListener('DOMContentLoaded', bootstrap);

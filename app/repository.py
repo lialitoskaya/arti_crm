@@ -414,9 +414,10 @@ def delete_ozon_support_chats() -> int:
     system_markers = _ozon_notification_tokens()
     chatbot_markers = tuple(
         token.strip().lower()
-        for token in os.getenv("OZON_FIRST_MESSAGE_SYSTEM_USER_MARKERS", "chatbot").split(",")
+        for token in os.getenv("OZON_CHATBOT_MARKERS", os.getenv("OZON_FIRST_MESSAGE_SYSTEM_USER_MARKERS", "chatbot")).split(",")
         if token.strip()
     )
+    exclude_chatbot_messages = os.getenv("OZON_EXCLUDE_CHATBOT_MESSAGES", "1").strip().lower() not in {"0", "false", "no", "off", "нет"}
 
     with get_connection() as conn:
         rows = conn.execute(
@@ -437,7 +438,7 @@ def delete_ozon_support_chats() -> int:
         # notificationuser/systemuser: exact sender/user names anywhere.
         msg_rows = conn.execute(
             """
-            SELECT c.id, m.author, m.raw_json
+            SELECT c.id, m.id AS message_id, m.author, m.raw_json
             FROM chats c
             JOIN messages m ON m.chat_id = c.id
             WHERE c.marketplace='ozon'
@@ -450,7 +451,9 @@ def delete_ozon_support_chats() -> int:
             if _system_sender_matches(row["author"], system_markers) or _raw_json_sender_matches(row["raw_json"], system_markers):
                 to_hide.append(cid)
 
-        # chatbot: only first message sender/user name.
+        # chatbot: hide dialogs whose first sender is chatbot or whose whole
+        # imported history consists only of chatbot/system senders. Mixed buyer
+        # dialogs stay visible; their chatbot messages are removed below.
         first_rows = conn.execute(
             """
             SELECT c.id, m.author, m.raw_json
@@ -472,6 +475,29 @@ def delete_ozon_support_chats() -> int:
                 continue
             if _system_sender_matches(row["author"], chatbot_markers) or _raw_json_sender_matches(row["raw_json"], chatbot_markers):
                 to_hide.append(cid)
+
+        by_chat: dict[int, list[bool]] = {}
+        for row in msg_rows:
+            cid = int(row["id"])
+            is_system_sender = (
+                _system_sender_matches(row["author"], system_markers)
+                or _raw_json_sender_matches(row["raw_json"], system_markers)
+                or _system_sender_matches(row["author"], chatbot_markers)
+                or _raw_json_sender_matches(row["raw_json"], chatbot_markers)
+            )
+            by_chat.setdefault(cid, []).append(is_system_sender)
+        for cid, flags in by_chat.items():
+            if cid not in to_hide and flags and all(flags):
+                to_hide.append(cid)
+
+        if exclude_chatbot_messages:
+            chatbot_message_ids = []
+            for row in msg_rows:
+                if _system_sender_matches(row["author"], chatbot_markers) or _raw_json_sender_matches(row["raw_json"], chatbot_markers):
+                    chatbot_message_ids.append(int(row["message_id"]))
+            if chatbot_message_ids:
+                placeholders = ",".join("?" for _ in chatbot_message_ids)
+                conn.execute(f"DELETE FROM messages WHERE id IN ({placeholders})", chatbot_message_ids)
 
     hidden = hide_ozon_system_chat_ids(to_hide, reason="startup_system_sender")
     if os.getenv("OZON_PURGE_SYSTEM_CHATS", "0").strip().lower() in {"1", "true", "yes", "on", "да"}:
