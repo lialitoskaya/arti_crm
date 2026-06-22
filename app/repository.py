@@ -21,6 +21,32 @@ STATUS_LABELS = {
 
 
 
+
+def _normalize_ozon_question_status(status: Any) -> str:
+    """Normalize Ozon question status values returned by different API variants."""
+    value = str(status or "").strip()
+    value = value.replace("ё", "е").replace("Ё", "Е")
+    value = re.sub(r"\s+", " ", value).strip().lower()
+    return value
+
+
+def _is_ozon_question_processed_status(status: Any) -> bool:
+    token = _normalize_ozon_question_status(status)
+    return token in {
+        "processed",
+        "answered",
+        "done",
+        "closed",
+        "resolved",
+        "обработан",
+        "обработано",
+        "ответ дан",
+        "есть ответ",
+        "отвечен",
+        "отвечено",
+    }
+
+
 def _user_label_from_row(row: dict[str, Any] | None) -> str | None:
     if not row:
         return None
@@ -2319,9 +2345,17 @@ def stats() -> dict[str, Any]:
         reviews_new = conn.execute(
             "SELECT COUNT(*) AS count FROM reviews WHERE marketplace='ozon' AND (reply_text IS NULL OR reply_text='')"
         ).fetchone()
-        questions_new = conn.execute(
-            "SELECT COUNT(*) AS count FROM ozon_questions WHERE answer_text IS NULL OR answer_text=''"
-        ).fetchone()
+        question_rows = conn.execute(
+            """
+            SELECT status
+            FROM ozon_questions
+            WHERE answer_text IS NULL OR answer_text=''
+            """
+        ).fetchall()
+        questions_unanswered_count = sum(
+            1 for row in question_rows
+            if not _is_ozon_question_processed_status(row["status"] if row else None)
+        )
         return {
             "chats_by_status": {r["status"]: r["count"] for r in by_status},
             "chats_by_marketplace": {r["marketplace"]: r["count"] for r in by_marketplace},
@@ -2329,7 +2363,7 @@ def stats() -> dict[str, Any]:
             "waiting_response": waiting["count"] if waiting else 0,
             "archived_chats": archived["count"] if archived else 0,
             "reviews_unanswered": reviews_new["count"] if reviews_new else 0,
-            "questions_unanswered": questions_new["count"] if questions_new else 0,
+            "questions_unanswered": questions_unanswered_count,
         }
 
 
@@ -2490,6 +2524,10 @@ def _question_row_to_dict(row) -> dict[str, Any]:
             data["raw"] = json.loads(data.pop("raw_json") or "{}")
         except Exception:
             data["raw"] = {}
+    is_processed = _is_ozon_question_processed_status(data.get("status"))
+    has_answer = bool(str(data.get("answer_text") or "").strip())
+    data["is_processed"] = is_processed
+    data["needs_answer"] = (not has_answer) and (not is_processed)
     return data
 
 
@@ -2564,7 +2602,10 @@ def list_ozon_questions(status: str | None = None, unanswered: bool = False) -> 
             """,
             params,
         ).fetchall()
-        return [_question_row_to_dict(r) for r in rows]
+        items = [_question_row_to_dict(r) for r in rows]
+        if unanswered:
+            items = [item for item in items if item.get("needs_answer")]
+        return items
 
 
 def get_ozon_question(question_id: int) -> dict[str, Any] | None:

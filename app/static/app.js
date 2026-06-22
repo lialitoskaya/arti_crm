@@ -2082,6 +2082,46 @@ function questionStatusBadge(status) {
   return `<span class="review-status review-status-${escapeHtml(safe)}">${escapeHtml(label)}</span>`;
 }
 
+function normalizeQuestionStatus(value) {
+  return String(value || '').trim().toLowerCase().replaceAll('ё', 'е').replace(/\s+/g, ' ');
+}
+
+function isQuestionProcessed(question) {
+  if (question && typeof question.is_processed === 'boolean') return question.is_processed;
+  const values = [
+    question?.status,
+    question?.status_label,
+    questionStatusNames[question?.status],
+    question?.raw?.status,
+    question?.raw?.state,
+    question?.raw?.question_status,
+    question?.raw?.questionStatus,
+    question?.raw?.question?.status,
+    question?.raw?.question?.state,
+  ];
+  return values.some((value) => {
+    const token = normalizeQuestionStatus(value);
+    return ['processed', 'answered', 'done', 'closed', 'resolved', 'обработан', 'обработано', 'ответ дан', 'есть ответ', 'отвечен', 'отвечено'].includes(token);
+  });
+}
+
+function questionNeedsAnswer(question) {
+  if (!question) return false;
+  if (typeof question.needs_answer === 'boolean') return question.needs_answer;
+  if (String(question.answer_text || '').trim()) return false;
+  return !isQuestionProcessed(question);
+}
+
+function questionAnswerBadge(question) {
+  if (String(question?.answer_text || '').trim()) {
+    return '<span class="review-status review-status-processed">есть ответ</span>';
+  }
+  if (questionNeedsAnswer(question)) {
+    return '<span class="sla-badge">нужен ответ</span>';
+  }
+  return '';
+}
+
 function questionProductName(question) {
   return question.product_name || (question.sku ? `SKU ${question.sku}` : 'Товар не указан');
 }
@@ -2110,7 +2150,7 @@ function renderQuestionsList() {
     item.onclick = () => openQuestion(question.id);
     const title = questionProductName(question);
     const time = formatChatTime(question.published_at || question.updated_at || question.created_at);
-    const answerBadge = question.answer_text ? '<span class="review-status review-status-processed">есть ответ</span>' : '<span class="sla-badge">нужен ответ</span>';
+    const answerBadge = questionAnswerBadge(question);
     item.innerHTML = `
       <div class="review-item-top">
         <strong title="${escapeHtml(title)}">${escapeHtml(title)}</strong>
