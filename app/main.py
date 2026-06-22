@@ -65,6 +65,21 @@ async def require_auth_for_api(request: Request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def add_fastfox_cache_headers(request: Request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path.startswith("/static/"):
+        # Fastfox serves the app through Python; browser caching avoids reloading
+        # the large JS/CSS files on every navigation.
+        response.headers.setdefault("Cache-Control", "public, max-age=3600")
+    elif path.startswith("/api/chat-uploads/"):
+        # Uploaded chat images are immutable filenames. Cache them privately so
+        # opening chats with many images does not download the same files again.
+        response.headers.setdefault("Cache-Control", "private, max-age=86400")
+    return response
+
+
 def _current_user(request: Request) -> dict[str, Any]:
     if AUTH_DISABLED:
         return {"id": 0, "username": "local", "display_name": "Local", "role": "admin", "is_active": True}
