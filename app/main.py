@@ -322,6 +322,43 @@ def _wb_last_message_payload_from_metadata(metadata: dict[str, Any] | None) -> d
     return None
 
 
+def _normalize_wb_synced_message_for_local_outbound(chat_id: int, message: Any) -> tuple[str, str | None, dict[str, Any]]:
+    """Correct WB echo of our own CRM reply when WB omits sender direction.
+
+    WB `lastMessage` may not include a sender flag. The connector must default
+    unknown messages to inbound, but if the same text/time was just saved locally
+    as an outbound CRM reply, keep it outbound so SLA does not show
+    "ждёт ответа" for our own answer.
+    """
+    direction = str(getattr(message, 'direction', None) or 'inbound')
+    author = getattr(message, 'author', None)
+    raw = getattr(message, 'raw', {}) or {}
+    if not isinstance(raw, dict):
+        raw = {'_crm_raw_value': raw}
+    else:
+        raw = dict(raw)
+
+    if direction != 'inbound':
+        return direction, author, raw
+
+    try:
+        match = repo.find_recent_matching_outbound_message(
+            int(chat_id),
+            getattr(message, 'text', '') or '',
+            getattr(message, 'created_at', None),
+            window_seconds=_env_int('WB_OUTBOUND_ECHO_MATCH_WINDOW_SECONDS', 900, minimum=30, maximum=86400),
+        )
+    except Exception:
+        match = None
+
+    if match:
+        raw['_crm_direction_corrected_from_local_outbound'] = True
+        raw['_crm_matched_outbound_message_id'] = match.get('id')
+        direction = 'outbound'
+        author = author if str(author or '').lower() in {'seller', 'manager', 'operator'} else (match.get('author') or 'seller')
+    return direction, author, raw
+
+
 def _import_wb_last_message_from_metadata(
     chat_id: int,
     external_chat_id: str,
@@ -356,13 +393,14 @@ def _import_wb_last_message_from_metadata(
 
     created_at = getattr(message, "created_at", None) or fallback_created_at
     try:
+        direction, author, raw = _normalize_wb_synced_message_for_local_outbound(int(chat_id), message)
         message_id = repo.add_message(
             chat_id=int(chat_id),
-            direction=getattr(message, "direction", "inbound"),
+            direction=direction,
             text=getattr(message, "text", "") or "[сообщение без текста / вложение]",
-            author=getattr(message, "author", None),
+            author=author,
             external_message_id=getattr(message, "external_message_id", None),
-            raw=getattr(message, "raw", {}) or {},
+            raw=raw,
             created_at=created_at,
         )
     except Exception as exc:
@@ -371,7 +409,7 @@ def _import_wb_last_message_from_metadata(
     return {
         "created": True,
         "message_id": message_id,
-        "direction": getattr(message, "direction", None),
+        "direction": direction,
         "created_at": created_at,
         "text_preview": str(getattr(message, "text", "") or "")[:160],
     }
@@ -993,13 +1031,18 @@ async def _sync_marketplace_unlocked(marketplace: str, *, background: bool = Fal
 
         previous_last_at = (existing_chat or {}).get("last_message_at")
         for message in messages_to_store:
+            direction = message.direction
+            author = message.author
+            raw = message.raw
+            if marketplace == "wildberries":
+                direction, author, raw = _normalize_wb_synced_message_for_local_outbound(chat_id, message)
             repo.add_message(
                 chat_id=chat_id,
-                direction=message.direction,
+                direction=direction,
                 text=message.text,
-                author=message.author,
+                author=author,
                 external_message_id=message.external_message_id,
-                raw=message.raw,
+                raw=raw,
                 created_at=message.created_at,
             )
             messages_total += 1
@@ -1009,6 +1052,13 @@ async def _sync_marketplace_unlocked(marketplace: str, *, background: bool = Fal
         if (existing_chat or {}).get("status") == "closed" and latest_at and latest_at != previous_last_at:
             if repo.reopen_closed_chat_for_new_activity(chat_id, (latest_local or {}).get("direction")):
                 reopened_count += 1
+
+    wb_lastmessage_direction_repairs = 0
+    if marketplace == "wildberries":
+        try:
+            wb_lastmessage_direction_repairs = repo.repair_wb_lastmessage_directions()
+        except Exception:
+            wb_lastmessage_direction_repairs = 0
 
     return {
         "ok": not errors,
@@ -1023,6 +1073,7 @@ async def _sync_marketplace_unlocked(marketplace: str, *, background: bool = Fal
         "histories_fetched": len(chat_refs),
         "histories_skipped": histories_skipped,
         "reopened_closed_chats": reopened_count,
+        "wb_lastmessage_direction_repairs": wb_lastmessage_direction_repairs,
         "sync_overrides": overrides,
     }
 
@@ -1408,6 +1459,10 @@ async def on_startup() -> None:
         app.state.last_wb_local_repair = repair_wb_local_messages_from_metadata(limit=2000)
     except Exception as exc:
         app.state.last_wb_local_repair = {"ok": False, "error": str(exc)}
+    try:
+        app.state.last_wb_lastmessage_direction_repair = repo.repair_wb_lastmessage_directions()
+    except Exception as exc:
+        app.state.last_wb_lastmessage_direction_repair = {"ok": False, "error": str(exc)}
     app.state.sync_lock = asyncio.Lock()
     app.state.last_sync = {}
     app.state.last_background_sync = {}
@@ -2388,7 +2443,7 @@ async def debug_ozon_chat(external_chat_id: str) -> dict[str, Any]:
     for message in messages[:10]:
         raw = getattr(message, "raw", {}) or {}
         sample.append({
-            "direction": getattr(message, "direction", None),
+            "direction": direction,
             "author": getattr(message, "author", None),
             "created_at": getattr(message, "created_at", None),
             "text_preview": str(getattr(message, "text", "") or "")[:160],
@@ -2507,7 +2562,7 @@ async def debug_ozon_chat_raw(external_chat_id: str, limit: int = 10) -> dict[st
     result = []
     for message in messages[-safe_limit:]:
         result.append({
-            "direction": getattr(message, "direction", None),
+            "direction": direction,
             "author": getattr(message, "author", None),
             "created_at": getattr(message, "created_at", None),
             "text": getattr(message, "text", None),
@@ -2568,8 +2623,6 @@ def sync_status() -> dict[str, Any]:
         "last_sync": getattr(app.state, "last_sync", {}),
         "background": getattr(app.state, "last_background_sync", {}),
         "reviews": getattr(app.state, "last_reviews_sync", {}),
-        "questions": getattr(app.state, "last_questions_sync", {}),
-        "frontend_operator_sync": getattr(app.state, "last_frontend_operator_sync", {}),
     }
 
 

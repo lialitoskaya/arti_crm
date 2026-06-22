@@ -4,6 +4,7 @@ import os
 
 import json
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 from app.db import get_connection
@@ -163,6 +164,72 @@ def _decorate_chat_sla(chat: dict[str, Any]) -> dict[str, Any]:
     if chat.get("funnel_title"):
         chat["funnel_title"] = chat.get("funnel_title")
     return chat
+
+
+def _parse_message_timestamp(value: Any) -> datetime | None:
+    if value in (None, ''):
+        return None
+    text = str(value).strip()
+    if not text or text.startswith('0000-') or text.startswith('0001-'):
+        return None
+    if text.endswith('Z'):
+        text = text[:-1] + '+00:00'
+    try:
+        dt = datetime.fromisoformat(text)
+    except Exception:
+        try:
+            dt = datetime.fromisoformat(text.replace(' ', 'T'))
+        except Exception:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def find_recent_matching_outbound_message(
+    chat_id: int,
+    text: str | None,
+    created_at: str | None = None,
+    *,
+    window_seconds: int = 600,
+) -> dict[str, Any] | None:
+    """Find a recently saved CRM outbound message matching a marketplace echo.
+
+    WB chat-list `lastMessage` can contain only text/time without reliable sender
+    direction. If WB later echoes our own reply without a sender field, matching it
+    to the local outbound message prevents the chat from being marked as
+    "ждёт ответа".
+    """
+    needle = (text or '').strip()
+    if not needle or needle == '[сообщение без текста / вложение]':
+        return None
+    target_ts = _parse_message_timestamp(created_at)
+    if target_ts is None:
+        return None
+    safe_window = max(30, min(int(window_seconds or 600), 86400))
+
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, external_message_id, direction, author, text, created_at
+            FROM messages
+            WHERE chat_id=?
+              AND direction='outbound'
+              AND TRIM(text)=TRIM(?)
+            ORDER BY id DESC
+            LIMIT 20
+            """,
+            (int(chat_id), needle),
+        ).fetchall()
+
+    for row in rows:
+        row_d = row_to_dict(row)
+        local_ts = _parse_message_timestamp(row_d.get('created_at'))
+        if not local_ts:
+            continue
+        if abs((target_ts - local_ts).total_seconds()) <= safe_window:
+            return row_d
+    return None
 
 
 def delete_mock_chats() -> int:
@@ -940,6 +1007,111 @@ def repair_chat_last_message_cache() -> int:
         return len(rows)
 
 
+
+def _normalized_wb_field_name(key: Any) -> str:
+    return str(key or "").strip().lower().replace("_", "").replace("-", "").replace("с", "c")
+
+
+def _direct_wb_client_name_marker(payload: dict[str, Any] | None) -> tuple[bool, Any, str | None]:
+    """Find a direct WB clientName/client_name key, preserving empty values."""
+    if not isinstance(payload, dict):
+        return False, None, None
+    for key, value in payload.items():
+        if _normalized_wb_field_name(key) == "clientname":
+            return True, value, str(key)
+    return False, None, None
+
+
+def _wb_lastmessage_direction_from_raw(raw: dict[str, Any] | None) -> tuple[str | None, dict[str, Any] | None]:
+    """Return direction for WB chat-list lastMessage from the surrounding chat item.
+
+    WB /seller/chats echoes lastMessage without a stable sender field. In the
+    payloads observed in production, the direct clientName on the surrounding
+    chat item is empty for buyer lastMessage and filled with buyer name for
+    seller lastMessage. This function is intentionally restricted to
+    _crm_source=wb_lastMessage rows so it never affects full WB event history.
+    """
+    if not isinstance(raw, dict):
+        return None, None
+    source = str(raw.get("_crm_source") or "").strip().lower()
+    if source != "wb_lastmessage":
+        return None, None
+
+    candidates: list[tuple[str, dict[str, Any]]] = []
+    chat_item = raw.get("_chat_item")
+    if isinstance(chat_item, dict):
+        candidates.append(("chat_item", chat_item))
+    candidates.append(("lastMessage", raw))
+
+    for scope, obj in candidates:
+        has_marker, value, field = _direct_wb_client_name_marker(obj)
+        if not has_marker:
+            continue
+        direction = "outbound" if str(value or "").strip() else "inbound"
+        marker = {
+            "scope": scope,
+            "field": field,
+            "value_present": bool(str(value or "").strip()),
+            "resolved_direction": direction,
+            "repaired_by": "repository.repair_wb_lastmessage_directions",
+        }
+        return direction, marker
+    return None, None
+
+
+def repair_wb_lastmessage_directions() -> int:
+    """Repair already imported WB lastMessage rows after direction-rule changes.
+
+    Earlier builds could save WB chat-list lastMessage as inbound before the
+    clientName marker was known. Those rows keep chats in "ждёт ответа" until
+    the stored message direction is corrected. This repair is safe to run on
+    startup and after WB sync; it only touches rows explicitly marked as
+    _crm_source=wb_lastMessage.
+    """
+    changed = 0
+    affected_chat_ids: set[int] = set()
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, chat_id, direction, author, raw_json
+            FROM messages
+            WHERE raw_json LIKE '%wb_lastMessage%'
+              AND raw_json LIKE '%_chat_item%'
+            """
+        ).fetchall()
+        for row in rows:
+            try:
+                raw = json.loads(row["raw_json"] or "{}")
+            except Exception:
+                continue
+            direction, marker = _wb_lastmessage_direction_from_raw(raw)
+            if direction not in {"inbound", "outbound"}:
+                continue
+            if marker:
+                raw["_crm_wb_client_name_direction_marker"] = marker
+            current_direction = str(row["direction"] or "")
+            current_raw = row["raw_json"] or ""
+            new_raw = json.dumps(raw, ensure_ascii=False)
+            needs_update = current_direction != direction or new_raw != current_raw
+            if not needs_update:
+                continue
+            author = "seller" if direction == "outbound" else "customer"
+            conn.execute(
+                """
+                UPDATE messages
+                SET direction=?, author=?, raw_json=?
+                WHERE id=?
+                """,
+                (direction, author, new_raw, int(row["id"])),
+            )
+            changed += 1
+            affected_chat_ids.add(int(row["chat_id"]))
+
+        for chat_id in affected_chat_ids:
+            refresh_chat_last_message(conn, chat_id)
+    return changed
+
+
 def reopen_closed_chat_for_new_activity(chat_id: int, latest_direction: str | None = None) -> bool:
     """Move archived chat back to active inbox when a marketplace reports new activity.
 
@@ -1296,25 +1468,56 @@ def add_message(
                     SELECT id
                     FROM messages
                     WHERE chat_id=?
-                      AND direction=?
                       AND TRIM(text)=TRIM(?)
                       AND raw_json LIKE '%wb_lastMessage%'
                     ORDER BY id DESC
                     LIMIT 1
                     """,
-                    (chat_id, direction, text),
+                    (chat_id, text),
                 ).fetchone()
                 if wb_last_duplicate:
                     conn.execute(
                         """
                         UPDATE messages
-                        SET external_message_id=?, author=COALESCE(?, author), raw_json=?,
+                        SET external_message_id=?, direction=?, author=COALESCE(?, author), raw_json=?,
                             created_at=COALESCE(?, created_at)
                         WHERE id=?
                         """,
-                        (clean_external_id, author, raw_json, created_at, wb_last_duplicate["id"]),
+                        (clean_external_id, direction, author, raw_json, created_at, wb_last_duplicate["id"]),
                     )
                     message_id = int(wb_last_duplicate["id"])
+                    refresh_chat_last_message(conn, chat_id)
+                    return message_id
+
+            # If WB direction detection is improved later, a fallback external id
+            # that included the old direction can change. Update the same WB event
+            # row by text/time instead of leaving an old inbound duplicate that keeps
+            # the chat in "ждёт ответа".
+            if str(clean_external_id).startswith("wb:") and "_crm_wb_msg_obj" in raw_json:
+                wb_event_duplicate = conn.execute(
+                    """
+                    SELECT id
+                    FROM messages
+                    WHERE chat_id=?
+                      AND TRIM(text)=TRIM(?)
+                      AND raw_json LIKE '%_crm_wb_msg_obj%'
+                      AND ABS(strftime('%s', COALESCE(?, created_at)) - strftime('%s', created_at)) <= 5
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (chat_id, text, created_at),
+                ).fetchone()
+                if wb_event_duplicate:
+                    conn.execute(
+                        """
+                        UPDATE messages
+                        SET external_message_id=?, direction=?, author=COALESCE(?, author), raw_json=?,
+                            created_at=COALESCE(?, created_at)
+                        WHERE id=?
+                        """,
+                        (clean_external_id, direction, author, raw_json, created_at, wb_event_duplicate["id"]),
+                    )
+                    message_id = int(wb_event_duplicate["id"])
                     refresh_chat_last_message(conn, chat_id)
                     return message_id
 

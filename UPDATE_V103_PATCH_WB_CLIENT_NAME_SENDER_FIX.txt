@@ -1,0 +1,12 @@
+Patch: WB sender detection by client_name marker
+
+What changed:
+- WB message direction now uses the observed message-level client_name/clientName pattern:
+  * explicit empty client_name/clientName => buyer/client inbound message;
+  * explicit non-empty client_name/clientName => seller/operator outbound message echoed by WB.
+- Existing explicit sender/flag fields still have priority when WB provides them.
+- LastMessage direction detection no longer reads chat-level clientName as a sender marker.
+- WB lastMessage/event duplicates are repaired when direction changes after better detection, so old inbound rows can be updated to outbound instead of leaving a stale "waiting response" status.
+- Raw WB messages now store _crm_wb_client_name_direction_marker for debugging.
+
+Install into the site root with file replacement. Keep .env, data/crm.sqlite3 and chat_attachments. Restart Python and Ctrl+F5.

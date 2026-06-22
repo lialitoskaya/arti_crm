@@ -188,6 +188,39 @@ class WildberriesConnector(MarketplaceConnector):
                 return value
         return None
 
+    @staticmethod
+    def _normalize_payload_key(key: Any) -> str:
+        # WB payloads have used clientName/client_name and sometimes copied text
+        # contains the Cyrillic letter "с" instead of Latin "c". Normalize only
+        # for field-name comparison; values are left untouched.
+        return str(key or "").strip().lower().replace("_", "").replace("-", "").replace("с", "c")
+
+    @classmethod
+    def _direct_client_name_marker(cls, obj: dict[str, Any] | None) -> tuple[bool, Any, str | None]:
+        """Return whether a message payload explicitly contains client_name.
+
+        Real WB payloads observed in production use a counter-intuitive pattern:
+        buyer messages contain an explicit empty client_name/clientName field,
+        while seller messages echoed by WB contain the buyer name in that field.
+        This helper must detect blank values too, so _first_value() is not enough.
+        """
+        if not isinstance(obj, dict):
+            return False, None, None
+        for key, value in obj.items():
+            if cls._normalize_payload_key(key) == "clientname":
+                return True, value, str(key)
+        return False, None, None
+
+    @classmethod
+    def _direction_from_client_name_marker(cls, obj: dict[str, Any] | None) -> str | None:
+        has_key, value, _key = cls._direct_client_name_marker(obj)
+        if not has_key:
+            return None
+        text = str(value or "").strip()
+        # Production WB observation: empty explicit client_name => buyer wrote;
+        # non-empty explicit client_name => seller/manager wrote.
+        return "outbound" if text else "inbound"
+
     @classmethod
     def _find_nested_value(cls, value: Any, key_names: set[str], depth: int = 0) -> Any:
         if depth > 8:
@@ -489,15 +522,40 @@ class WildberriesConnector(MarketplaceConnector):
             or self._find_nested_value(obj, {"sender", "senderType", "authorType", "userType", "source", "from"})
             or ""
         ).lower()
-        if sender in {"seller", "продавец", "supplier", "vendor", "manager", "operator", "support", "employee"}:
+        outbound_tokens = ("seller", "продав", "supplier", "vendor", "manager", "operator", "support", "employee", "outbound")
+        inbound_tokens = ("client", "customer", "buyer", "покуп", "user", "inbound")
+        if any(token in sender for token in outbound_tokens):
             return "outbound"
-        if sender in {"client", "customer", "buyer", "покупатель", "user"}:
+        if any(token in sender for token in inbound_tokens):
             return "inbound"
         # WB sometimes uses flags instead of sender names.
-        if self._first_value(obj, "isSeller", "is_seller", "fromSeller", "from_seller", "isSupplier", "is_supplier") is True:
+        outbound_flag = self._first_value(
+            obj,
+            "isSeller", "is_seller", "fromSeller", "from_seller",
+            "isSupplier", "is_supplier", "isOutgoing", "is_outgoing",
+            "fromMe", "from_me", "isMine", "is_mine",
+        )
+        if outbound_flag is True or str(outbound_flag).strip().lower() == "true":
             return "outbound"
-        if self._first_value(obj, "isClient", "is_client", "fromClient", "from_client") is True:
+        inbound_flag = self._first_value(
+            obj,
+            "isClient", "is_client", "fromClient", "from_client",
+            "isIncoming", "is_incoming",
+        )
+        if inbound_flag is True or str(inbound_flag).strip().lower() == "true":
             return "inbound"
+
+        # WB Buyers Chat can omit an explicit sender flag. In the live payloads
+        # inspected for this CRM, message-level clientName/client_name is the
+        # reliable marker: blank means buyer message, non-blank means seller echo.
+        # Prefer the nested message object because the outer event/chat object may
+        # contain general chat customer metadata.
+        hinted = self._direction_from_client_name_marker(nested_message)
+        if hinted:
+            return hinted
+        hinted = self._direction_from_client_name_marker(obj)
+        if hinted:
+            return hinted
         return "inbound"
 
     def _stable_message_id(self, external_chat_id: str, obj: dict[str, Any], text: str, created_at: str | None, direction: str) -> str:
@@ -522,12 +580,39 @@ class WildberriesConnector(MarketplaceConnector):
         if not isinstance(item, dict) or not item:
             return None
         chat_item = item.get("_chat_item") if isinstance(item.get("_chat_item"), dict) else {}
-        direction = self._message_direction(item, chat_item)
+
+        # WB /seller/chats returns lastMessage without a stable explicit sender.
+        # In production payloads we observed the only reliable marker on the chat
+        # object around lastMessage: clientName is empty for buyer lastMessage and
+        # contains the buyer name when the lastMessage is the seller's reply. This
+        # rule is applied only to chat-list lastMessage rows. Full event/history
+        # messages still use their own sender/flag fields first.
+        direction = self._message_direction(item, None)
+        marker_scope = "lastMessage"
+        has_client_marker, client_marker_value, client_marker_key = self._direct_client_name_marker(item)
+        if not has_client_marker:
+            has_chat_marker, chat_marker_value, chat_marker_key = self._direct_client_name_marker(chat_item)
+            if has_chat_marker:
+                hinted_direction = self._direction_from_client_name_marker(chat_item)
+                if hinted_direction:
+                    direction = hinted_direction
+                has_client_marker = True
+                client_marker_value = chat_marker_value
+                client_marker_key = chat_marker_key
+                marker_scope = "chat_item"
+
         created_at = self._message_created_at(item) or self._message_created_at(chat_item)
         text = self._extract_message_text(item)
         # Chat list lastMessage often has no messageID, so use deterministic ID to
         # avoid duplicates on every background sync.
         raw = {**item, "_chat_item": chat_item, "_crm_source": "wb_lastMessage"}
+        if has_client_marker:
+            raw["_crm_wb_client_name_direction_marker"] = {
+                "scope": marker_scope,
+                "field": client_marker_key,
+                "value_present": bool(str(client_marker_value or "").strip()),
+                "resolved_direction": direction,
+            }
         message_id = self._stable_message_id(str(external_chat_id), raw, text, created_at, direction)
         return UnifiedMessage(
             external_message_id=message_id,
@@ -558,10 +643,20 @@ class WildberriesConnector(MarketplaceConnector):
         created_at = self._message_created_at(event) or self._message_created_at(msg_obj)
         message_id = self._stable_message_id(str(external_chat_id), event, text, created_at, direction)
         author = "seller" if direction == "outbound" else (
-            self._first_value(event, "clientName", "buyerName", "customerName")
-            or self._first_value(msg_obj, "clientName", "buyerName", "customerName")
+            self._first_value(event, "clientName", "client_name", "buyerName", "buyer_name", "customerName", "customer_name")
+            or self._first_value(msg_obj, "clientName", "client_name", "buyerName", "buyer_name", "customerName", "customer_name")
             or "customer"
         )
+        raw = {**event, "_crm_wb_msg_obj": msg_obj}
+        has_client_marker, client_marker_value, client_marker_key = self._direct_client_name_marker(msg_obj)
+        if not has_client_marker:
+            has_client_marker, client_marker_value, client_marker_key = self._direct_client_name_marker(event)
+        if has_client_marker:
+            raw["_crm_wb_client_name_direction_marker"] = {
+                "field": client_marker_key,
+                "value_present": bool(str(client_marker_value or "").strip()),
+                "resolved_direction": direction,
+            }
         return UnifiedMessage(
             external_message_id=message_id,
             external_chat_id=str(external_chat_id),
@@ -569,7 +664,7 @@ class WildberriesConnector(MarketplaceConnector):
             text=text,
             author=author,
             created_at=created_at,
-            raw={**event, "_crm_wb_msg_obj": msg_obj},
+            raw=raw,
         )
 
     async def get_messages(self, external_chat_id: str) -> list[UnifiedMessage]:
