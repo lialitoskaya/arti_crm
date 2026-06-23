@@ -4,9 +4,14 @@ let chats = [];
 let refreshTimer = null;
 let statusTimer = null;
 let frontendSyncTimer = null;
+let chatUiRefreshTimer = null;
 let frontendSyncInFlight = false;
+let activeChatRefreshInFlight = false;
+let outboundSendInFlight = false;
+let suppressFrontendSyncUntil = 0;
 let frontendSyncLastStartedAt = 0;
 let frontendSyncLastSuccessAt = 0;
+let activeChatRefreshLastStartedAt = 0;
 let chatOpenInFlight = false;
 let chatImageLazyObserver = null;
 let chatImageLazyObserverRoot = null;
@@ -991,18 +996,23 @@ async function loadSyncStatus() {
 }
 
 
-// On Fastfox the opened CRM tab is also the reliable "worker".
-// Ozon sync runs every 30s; WB/Yandex are included by /api/sync/operator
-// but server-side throttles protect them from rate limits.
-const FRONTEND_OZON_SYNC_INTERVAL_MS = 30000;
-const FRONTEND_OZON_SYNC_MIN_GAP_MS = 25000;
+// On shared hosting the opened CRM tab is also the reliable "worker".
+// The browser polls more often than before so new marketplace messages are
+// imported and shown without a manual page reload. Server-side throttles still
+// protect marketplace APIs from too many requests.
+const FRONTEND_OZON_SYNC_INTERVAL_MS = 15000;
+const FRONTEND_OZON_SYNC_MIN_GAP_MS = 12000;
 const FRONTEND_OZON_QUESTIONS_SYNC_INTERVAL_MS = 60000;
 const FRONTEND_OZON_QUESTIONS_SYNC_MIN_GAP_MS = 45000;
+const ACTIVE_CHAT_UI_REFRESH_INTERVAL_MS = 10000;
+const ACTIVE_CHAT_UI_REFRESH_MIN_GAP_MS = 8000;
 
 function isFrontendSyncAllowed() {
   if (!appInitialized || !currentUser) return false;
   if (document.hidden) return false;
   if (chatOpenInFlight) return false;
+  if (outboundSendInFlight) return false;
+  if (Date.now() < suppressFrontendSyncUntil) return false;
   // On shared hosting the backend process may not keep background loops alive.
   // While an operator has CRM open, the browser safely triggers a lightweight
   // Ozon inbox sync so new buyer messages appear without opening /docs manually.
@@ -1099,18 +1109,64 @@ function runFrontendQuestionsSyncSoon(reason = '') {
 
 function startFrontendAutoSync() {
   if (frontendSyncTimer) clearInterval(frontendSyncTimer);
+  if (chatUiRefreshTimer) clearInterval(chatUiRefreshTimer);
+
   frontendSyncTimer = setInterval(() => {
     runFrontendOzonFastSync({ silent: true }).catch(err => console.warn('frontend sync timer failed', err));
     if (activeView === 'questions') {
       runFrontendOzonQuestionsSync({ silent: true }).catch(err => console.warn('frontend questions sync timer failed', err));
     }
   }, FRONTEND_OZON_SYNC_INTERVAL_MS);
+
+  // A separate lightweight UI poll fixes the case when the backend already
+  // imported messages in the background before this browser sync tick. In that
+  // case /api/sync/operator may return 0 new messages, but the open CRM tab
+  // still needs to re-read chats/messages from the local database.
+  chatUiRefreshTimer = setInterval(() => {
+    refreshActiveChatUi({ silent: true }).catch(err => console.warn('chat UI refresh timer failed', err));
+  }, ACTIVE_CHAT_UI_REFRESH_INTERVAL_MS);
 }
 
 function runFrontendSyncSoon(reason = '') {
   window.setTimeout(() => {
-    runFrontendOzonFastSync({ silent: true, force: reason === 'startup' }).catch(err => console.warn('frontend sync failed', err));
+    if (Date.now() >= suppressFrontendSyncUntil && !outboundSendInFlight) {
+      runFrontendOzonFastSync({ silent: true, force: reason === 'startup' }).catch(err => console.warn('frontend sync failed', err));
+    }
   }, 250);
+}
+
+async function refreshActiveChatUi(options = {}) {
+  const { force = false } = options;
+  if (!appInitialized || !currentUser) return null;
+  if (document.hidden) return null;
+  if (activeView !== 'chats') return null;
+  if (frontendSyncInFlight || chatOpenInFlight || activeChatRefreshInFlight) return null;
+  if (outboundSendInFlight) return null;
+
+  const now = Date.now();
+  if (!force && now - activeChatRefreshLastStartedAt < ACTIVE_CHAT_UI_REFRESH_MIN_GAP_MS) return null;
+
+  activeChatRefreshInFlight = true;
+  activeChatRefreshLastStartedAt = now;
+  try {
+    await loadChats();
+    if (currentChatId && !(isMobileChatLayout() && mobileChatClosedByUser)) {
+      await openChat(currentChatId, { keepScroll: true, silent: true });
+    }
+    return true;
+  } catch (err) {
+    console.warn('active chat UI refresh failed', err);
+    return null;
+  } finally {
+    activeChatRefreshInFlight = false;
+  }
+}
+
+function runActiveChatRefreshSoon(reason = '') {
+  window.setTimeout(() => {
+    refreshActiveChatUi({ force: reason === 'visible' || reason === 'focus' })
+      .catch(err => console.warn('active chat refresh failed', err));
+  }, 300);
 }
 
 async function loadStats() {
@@ -3633,6 +3689,8 @@ function init() {
       const attachBtn = $('attachImageBtn');
       if (sendBtn) sendBtn.disabled = true;
       if (attachBtn) attachBtn.disabled = true;
+      outboundSendInFlight = true;
+      suppressFrontendSyncUntil = Date.now() + 8000;
       try {
         if (imageFiles.length) {
           const formData = new FormData();
@@ -3653,6 +3711,8 @@ function init() {
       } catch (err) {
         notify('Сообщение не отправлено', String(err.message || err));
       } finally {
+        outboundSendInFlight = false;
+        suppressFrontendSyncUntil = Date.now() + 4000;
         if (sendBtn) sendBtn.disabled = false;
         if (attachBtn) attachBtn.disabled = false;
       }
@@ -3804,11 +3864,13 @@ function init() {
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
       runFrontendSyncSoon('visible');
+      if (activeView === 'chats') runActiveChatRefreshSoon('visible');
       if (activeView === 'questions') runFrontendQuestionsSyncSoon('visible-questions');
     }
   });
   window.addEventListener('focus', () => {
     runFrontendSyncSoon('focus');
+    if (activeView === 'chats') runActiveChatRefreshSoon('focus');
     if (activeView === 'questions') runFrontendQuestionsSyncSoon('focus-questions');
   });
 

@@ -305,6 +305,47 @@ def _hint_int(metadata: dict[str, Any] | None, *keys: str) -> int:
 
 
 
+
+
+def _trusted_marketplace_message_id(raw_response: Any) -> str:
+    """Extract only real message ids from marketplace send responses.
+
+    A previous implementation used `result` as a fallback. For APIs that return
+    `{"result": true}` or an object without the final message id, this created a
+    fake external_message_id like "True" or "{'...'}". Later sync imported the
+    real marketplace echo as another outbound message. Returning an empty string
+    here lets repository-level echo matching upgrade the local row correctly.
+    """
+    if not isinstance(raw_response, dict):
+        return ""
+    for key in ("message_id", "messageId", "id", "uuid", "external_message_id", "externalMessageId"):
+        value = raw_response.get(key)
+        if value in (None, "") or isinstance(value, bool) or isinstance(value, (dict, list, tuple, set)):
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    result = raw_response.get("result")
+    if isinstance(result, dict):
+        for key in ("message_id", "messageId", "id", "uuid", "external_message_id", "externalMessageId"):
+            value = result.get(key)
+            if value in (None, "") or isinstance(value, bool) or isinstance(value, (dict, list, tuple, set)):
+                continue
+            text = str(value).strip()
+            if text:
+                return text
+    return ""
+
+
+def _mark_crm_sent_raw(raw_response: Any, *, author: str | None = None, user_id: int | None = None) -> dict[str, Any]:
+    raw = dict(raw_response) if isinstance(raw_response, dict) else {"_crm_marketplace_response": raw_response}
+    raw["_crm_sent_from_crm"] = True
+    if author:
+        raw["_crm_sent_by_label"] = author
+    if user_id:
+        raw["_crm_sent_by_user_id"] = user_id
+    return raw
+
 def _wb_last_message_payload_from_metadata(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
     """Return WB lastMessage saved in chat metadata, if present."""
     if not isinstance(metadata, dict):
@@ -1120,7 +1161,7 @@ async def _sync_ozon_questions_unlocked(*, background: bool = False) -> dict[str
         return {"ok": False, "marketplace": "ozon", "configured": False, "count": 0}
     if not hasattr(connector, "list_questions"):
         return {"ok": False, "marketplace": "ozon", "error": "Ozon connector has no questions API"}
-    limit = _env_int("OZON_QUESTIONS_BACKGROUND_LIMIT" if background else "OZON_QUESTIONS_SYNC_LIMIT", 30 if background else 50, minimum=1, maximum=100)
+    limit = _env_int("OZON_QUESTIONS_BACKGROUND_LIMIT" if background else "OZON_QUESTIONS_SYNC_LIMIT", 50 if background else 50, minimum=1, maximum=100)
     pages = _env_int("OZON_QUESTIONS_BACKGROUND_PAGES" if background else "OZON_QUESTIONS_SYNC_PAGES", 1 if background else 3, minimum=1, maximum=20)
     try:
         questions = await connector.list_questions(limit=limit, pages=pages)  # type: ignore[attr-defined]
@@ -1419,7 +1460,7 @@ async def _background_sync_loop() -> None:
                     per_marketplace["ozon_reviews"] = {"enabled": True, "configured": True, "status": "error", "error": str(exc)}
 
         if _env_bool("OZON_QUESTIONS_BACKGROUND_SYNC", True):
-            questions_min_interval = _env_int("OZON_QUESTIONS_MIN_INTERVAL_SECONDS", 300, minimum=30, maximum=7200)
+            questions_min_interval = _env_int("OZON_QUESTIONS_MIN_INTERVAL_SECONDS", 15, minimum=5, maximum=7200)
             questions_wait_seconds = int(max(0.0, questions_min_interval - (loop_started_at - last_questions_poll_at)))
             if questions_wait_seconds > 0:
                 per_marketplace["ozon_questions"] = {"enabled": True, "configured": True, "status": "throttled", "retry_after_seconds": questions_wait_seconds, "min_interval_seconds": questions_min_interval}
@@ -1463,6 +1504,10 @@ async def on_startup() -> None:
         app.state.last_wb_lastmessage_direction_repair = repo.repair_wb_lastmessage_directions()
     except Exception as exc:
         app.state.last_wb_lastmessage_direction_repair = {"ok": False, "error": str(exc)}
+    try:
+        app.state.last_outbound_echo_repair = repo.repair_outbound_marketplace_echo_duplicates(limit=3000)
+    except Exception as exc:
+        app.state.last_outbound_echo_repair = {"ok": False, "error": str(exc)}
     app.state.sync_lock = asyncio.Lock()
     app.state.last_sync = {}
     app.state.last_background_sync = {}
@@ -3330,11 +3375,11 @@ async def add_chat_attachments(
     image_lines = [f"![Изображение]({item['url']})" for item in attachments]
     text = "\n".join([part for part in [caption_text, *image_lines] if part]).strip() or "[изображение]"
     external_ids = [
-        str((entry.get("response") or {}).get("message_id") or (entry.get("response") or {}).get("id") or (entry.get("response") or {}).get("result") or "")
+        _trusted_marketplace_message_id(entry.get("response"))
         for entry in marketplace_responses
         if isinstance(entry.get("response"), dict)
     ]
-    external_message_id = ";".join([value for value in external_ids if value]) or f"marketplace-image:{uuid.uuid4().hex}"
+    external_message_id = ";".join([value for value in external_ids if value]) or f"local-image:{uuid.uuid4().hex}"
     message_id = repo.add_message(
         chat_id=chat_id,
         direction="outbound",
@@ -3343,6 +3388,9 @@ async def add_chat_attachments(
         external_message_id=external_message_id,
         raw={
             "_crm_marketplace_attachment_sent": True,
+            "_crm_sent_from_crm": True,
+            "_crm_sent_by_label": author,
+            "_crm_sent_by_user_id": current_user_id,
             "attachments": attachments,
             "marketplace_responses": marketplace_responses,
         },
@@ -3393,8 +3441,8 @@ async def send_message(chat_id: int, payload: MessageCreate, request: Request) -
         direction="outbound",
         text=payload.text,
         author=outbound_author,
-        external_message_id=str(raw_response.get("message_id") or raw_response.get("id") or raw_response.get("result") or ""),
-        raw=raw_response,
+        external_message_id=_trusted_marketplace_message_id(raw_response),
+        raw=_mark_crm_sent_raw(raw_response, author=outbound_author, user_id=current_user_id),
     )
     assigned_on_send = False
     if current_user_id and _env_bool("CRM_AUTO_ASSIGN_FIRST_RESPONSE", True):

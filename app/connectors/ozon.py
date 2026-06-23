@@ -1272,8 +1272,34 @@ class OzonConnector(MarketplaceConnector):
     # -----------------------------
 
     def _question_payload_variants(self) -> list[tuple[str, dict[str, Any]]]:
-        raw_statuses = os.getenv("OZON_QUESTIONS_STATUSES", "UNPROCESSED,PROCESSED")
-        statuses = [s.strip() for s in raw_statuses.split(",") if s.strip()]
+        """Return safe payload variants for /v1/question/list.
+
+        Ozon questions can appear in NEW, VIEWED, UNPROCESSED and PROCESSED
+        states. Older CRM builds requested only UNPROCESSED/PROCESSED by
+        default, so a fresh question could be missed until it was opened in
+        Seller UI and moved to another state.
+
+        OZON_QUESTIONS_STATUSES may add extra statuses. Set
+        OZON_QUESTIONS_STRICT_STATUSES=1 only when you intentionally want to
+        use exactly the statuses listed in OZON_QUESTIONS_STATUSES.
+        """
+        strict = os.getenv("OZON_QUESTIONS_STRICT_STATUSES", "0").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+            "да",
+        }
+        raw_statuses = os.getenv("OZON_QUESTIONS_STATUSES", "")
+        env_statuses = [s.strip().upper() for s in raw_statuses.split(",") if s.strip()]
+        default_statuses = ["NEW", "UNPROCESSED", "VIEWED", "PROCESSED", "ALL"]
+        statuses: list[str] = []
+
+        source_statuses = env_statuses if strict and env_statuses else [*default_statuses, *env_statuses]
+        for status in source_statuses:
+            if status and status not in statuses:
+                statuses.append(status)
+
         variants: list[tuple[str, dict[str, Any]]] = [("all_without_status", {})]
         for status in statuses:
             # Ozon has changed question/list examples over time. Try both the

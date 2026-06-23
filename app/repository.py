@@ -258,6 +258,162 @@ def find_recent_matching_outbound_message(
     return None
 
 
+
+
+def _is_provisional_outbound_external_id(value: Any) -> bool:
+    """Return True for local send placeholders that are not real marketplace ids."""
+    if value in (None, ""):
+        return True
+    text = str(value).strip()
+    if not text:
+        return True
+    lowered = text.lower()
+    if lowered in {"true", "false", "none", "null", "ok", "success"}:
+        return True
+    # Older send handlers could stringify an object returned in `result`.
+    if text.startswith("{") or text.startswith("["):
+        return True
+    if text.startswith("local:") or text.startswith("crm:"):
+        return True
+    return False
+
+
+def _raw_marks_crm_sent(raw_json: str | None) -> bool:
+    return bool(raw_json and "_crm_sent_from_crm" in raw_json)
+
+
+def _find_outbound_echo_candidate_conn(conn, *, chat_id: int, text: str, created_at: str | None, window_seconds: int = 900, exclude_id: int | None = None):
+    """Find a local CRM outbound row that should be upgraded by a marketplace echo.
+
+    Some marketplace send endpoints (notably Ozon/WB variants) acknowledge a send
+    without returning the final message id that later appears in history. The CRM
+    creates a local outbound row immediately, then sync imports the marketplace
+    echo as a second outbound row. Match the echo to the local row by chat/text/time
+    and upgrade that row instead of inserting a duplicate.
+    """
+    needle = (text or "").strip()
+    if not needle or needle == "[сообщение без текста / вложение]":
+        return None
+    safe_window = max(30, min(int(window_seconds or 900), 86400))
+    sql = """
+        SELECT id, external_message_id, author, raw_json, created_at
+        FROM messages
+        WHERE chat_id=?
+          AND direction='outbound'
+          AND TRIM(text)=TRIM(?)
+          AND ABS(strftime('%s', COALESCE(?, created_at)) - strftime('%s', created_at)) <= ?
+    """
+    params: list[Any] = [int(chat_id), needle, created_at, safe_window]
+    if exclude_id is not None:
+        sql += " AND id<>?"
+        params.append(int(exclude_id))
+    sql += " ORDER BY id DESC LIMIT 20"
+    rows = conn.execute(sql, params).fetchall()
+    for row in rows:
+        external_id = row["external_message_id"]
+        raw_json = row["raw_json"] or "{}"
+        if _is_provisional_outbound_external_id(external_id) or _raw_marks_crm_sent(raw_json):
+            return row
+    return None
+
+
+
+def _find_existing_marketplace_echo_for_crm_send_conn(conn, *, chat_id: int, text: str, created_at: str | None, window_seconds: int = 900):
+    """Find a marketplace echo that arrived before the CRM local-send row.
+
+    Race this fixes:
+    1. The operator sends a message from CRM.
+    2. Browser autosync / marketplace sync imports the just-sent seller message first.
+    3. The send endpoint then saves the local CRM row with no final marketplace id.
+
+    Without this reverse lookup the UI briefly shows two outbound bubbles until the
+    repair job removes one. Returning the existing echo lets add_message update it
+    immediately, so the duplicate is filtered before it appears.
+    """
+    needle = (text or "").strip()
+    if not needle or needle == "[сообщение без текста / вложение]":
+        return None
+    safe_window = max(30, min(int(window_seconds or 900), 86400))
+    rows = conn.execute(
+        """
+        SELECT id, external_message_id, author, raw_json, created_at
+        FROM messages
+        WHERE chat_id=?
+          AND direction='outbound'
+          AND TRIM(text)=TRIM(?)
+          AND ABS(strftime('%s', COALESCE(?, created_at)) - strftime('%s', created_at)) <= ?
+        ORDER BY id DESC
+        LIMIT 20
+        """,
+        (int(chat_id), needle, created_at, safe_window),
+    ).fetchall()
+    for row in rows:
+        raw_json = row["raw_json"] or "{}"
+        # Existing echo must look like marketplace data, not another CRM local row.
+        if _raw_marks_crm_sent(raw_json):
+            continue
+        if _is_provisional_outbound_external_id(row["external_message_id"]):
+            continue
+        return row
+    return None
+
+def repair_outbound_marketplace_echo_duplicates(limit: int = 1000, window_seconds: int = 900) -> int:
+    """Merge already-created duplicate outbound echoes back into the CRM local row.
+
+    This is a repair for rows created before the echo-upgrade logic existed. It is
+    intentionally conservative: only same chat + same text + close timestamps +
+    outbound direction, and only when one candidate looks like a local/provisional
+    CRM send.
+    """
+    safe_limit = max(1, min(int(limit or 1000), 10000))
+    safe_window = max(30, min(int(window_seconds or 900), 86400))
+    repaired = 0
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, chat_id, external_message_id, author, text, created_at, raw_json
+            FROM messages
+            WHERE direction='outbound'
+              AND TRIM(text)<>''
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+        for row in rows:
+            row_id = int(row["id"])
+            external_id = row["external_message_id"]
+            raw_json = row["raw_json"] or "{}"
+            # We treat a non-provisional, non-CRM-marked row as the marketplace echo.
+            if _is_provisional_outbound_external_id(external_id) or _raw_marks_crm_sent(raw_json):
+                continue
+            local = _find_outbound_echo_candidate_conn(
+                conn,
+                chat_id=int(row["chat_id"]),
+                text=row["text"] or "",
+                created_at=row["created_at"],
+                window_seconds=safe_window,
+                exclude_id=row_id,
+            )
+            if not local:
+                continue
+            local_id = int(local["id"])
+            conn.execute(
+                """
+                UPDATE messages
+                SET external_message_id=?,
+                    author=COALESCE(NULLIF(author, ''), ?),
+                    raw_json=?,
+                    created_at=COALESCE(?, created_at)
+                WHERE id=?
+                """,
+                (external_id, row["author"], raw_json, row["created_at"], local_id),
+            )
+            conn.execute("DELETE FROM messages WHERE id=?", (row_id,))
+            refresh_chat_last_message(conn, int(row["chat_id"]))
+            repaired += 1
+    return repaired
+
 def delete_mock_chats() -> int:
     """Remove historical demo/mock chats from local databases.
 
@@ -1465,6 +1621,68 @@ def add_message(
 
     with get_connection() as conn:
         message_id: int
+        if direction == "outbound" and not clean_external_id and _raw_marks_crm_sent(raw_json):
+            # Reverse race guard: if autosync already imported the marketplace
+            # echo before this send request saved its local row, update that echo
+            # in place instead of inserting a second CRM bubble.
+            existing_echo = _find_existing_marketplace_echo_for_crm_send_conn(
+                conn,
+                chat_id=int(chat_id),
+                text=text,
+                created_at=created_at,
+                window_seconds=int(__import__("os").getenv("CRM_OUTBOUND_ECHO_MATCH_WINDOW_SECONDS", "900") or "900"),
+            )
+            if existing_echo:
+                merged_raw = raw or {}
+                try:
+                    echo_raw = json.loads(existing_echo["raw_json"] or "{}")
+                    if isinstance(echo_raw, dict):
+                        merged_raw = {**echo_raw, **(raw or {})}
+                except Exception:
+                    pass
+                conn.execute(
+                    """
+                    UPDATE messages
+                    SET author=COALESCE(NULLIF(?, ''), author),
+                        raw_json=?,
+                        created_at=COALESCE(created_at, ?)
+                    WHERE id=?
+                    """,
+                    (author, json.dumps(merged_raw, ensure_ascii=False), created_at, existing_echo["id"]),
+                )
+                message_id = int(existing_echo["id"])
+                refresh_chat_last_message(conn, chat_id)
+                return message_id
+
+        if clean_external_id and direction == "outbound":
+            # Root-cause fix for duplicate seller replies: if the marketplace
+            # returns the same CRM-sent message later with its real id, upgrade
+            # the local/provisional outbound row instead of inserting a second
+            # seller bubble. This runs before exact external-id lookup because
+            # old local rows may have placeholder ids like "True" from send ACKs.
+            outbound_echo_duplicate = _find_outbound_echo_candidate_conn(
+                conn,
+                chat_id=int(chat_id),
+                text=text,
+                created_at=created_at,
+                window_seconds=int(__import__("os").getenv("CRM_OUTBOUND_ECHO_MATCH_WINDOW_SECONDS", "900") or "900"),
+            )
+            if outbound_echo_duplicate:
+                conn.execute(
+                    """
+                    UPDATE messages
+                    SET external_message_id=?,
+                        author=COALESCE(NULLIF(author, ''), ?),
+                        raw_json=?,
+                        created_at=COALESCE(?, created_at)
+                    WHERE id=?
+                    """,
+                    (clean_external_id, author, raw_json, created_at, outbound_echo_duplicate["id"]),
+                )
+                message_id = int(outbound_echo_duplicate["id"])
+                refresh_chat_last_message(conn, chat_id)
+                return message_id
+
         if clean_external_id:
             existing = conn.execute(
                 "SELECT id, text FROM messages WHERE chat_id=? AND external_message_id=?",
