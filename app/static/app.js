@@ -202,6 +202,7 @@ const questionStatusNames = {
   PROCESSED: 'обработан',
   PUBLISHED: 'опубликован',
   NEW: 'новый',
+  VIEWED: 'просмотрен',
   ANSWERED: 'есть ответ',
 };
 
@@ -2138,6 +2139,51 @@ function questionStatusBadge(status) {
   return `<span class="review-status review-status-${escapeHtml(safe)}">${escapeHtml(label)}</span>`;
 }
 
+function questionDisplayStatus(question) {
+  // Show exactly one public badge for a question.
+  // Priority:
+  // 1) processed/closed in marketplace or CRM -> "обработан";
+  // 2) answer text exists, but status has not been refreshed yet -> "есть ответ";
+  // 3) waiting for seller response -> "нужен ответ";
+  // 4) fallback to marketplace status.
+  if (isQuestionProcessed(question)) {
+    return {
+      label: questionStatusNames.PROCESSED,
+      className: 'review-status review-status-processed',
+      value: 'processed',
+    };
+  }
+  if (String(question?.answer_text || '').trim()) {
+    return {
+      label: questionStatusNames.ANSWERED,
+      className: 'review-status review-status-answered',
+      value: 'answered',
+    };
+  }
+  if (questionNeedsAnswer(question)) {
+    return {
+      label: 'нужен ответ',
+      className: 'sla-badge',
+      value: 'needs_answer',
+    };
+  }
+  const status = question?.status || '';
+  return {
+    label: questionStatusNames[status] || status || '—',
+    className: `review-status review-status-${String(status || 'unknown').toLowerCase()}`,
+    value: status || 'unknown',
+  };
+}
+
+function questionDisplayStatusBadge(question) {
+  const meta = questionDisplayStatus(question);
+  return `<span class="${escapeHtml(meta.className)}">${escapeHtml(meta.label)}</span>`;
+}
+
+function questionDisplayStatusLabel(question) {
+  return questionDisplayStatus(question).label;
+}
+
 function normalizeQuestionStatus(value) {
   return String(value || '').trim().toLowerCase().replaceAll('ё', 'е').replace(/\s+/g, ' ');
 }
@@ -2169,13 +2215,10 @@ function questionNeedsAnswer(question) {
 }
 
 function questionAnswerBadge(question) {
-  if (String(question?.answer_text || '').trim()) {
-    return '<span class="review-status review-status-processed">есть ответ</span>';
-  }
-  if (questionNeedsAnswer(question)) {
-    return '<span class="sla-badge">нужен ответ</span>';
-  }
-  return '';
+  // Backward-compatible wrapper for older call sites.
+  // New question UI should use questionDisplayStatusBadge(question),
+  // so processed/answered/needs-answer states are not duplicated.
+  return questionDisplayStatusBadge(question);
 }
 
 function questionProductName(question) {
@@ -2206,14 +2249,14 @@ function renderQuestionsList() {
     item.onclick = () => openQuestion(question.id);
     const title = questionProductName(question);
     const time = formatChatTime(question.published_at || question.updated_at || question.created_at);
-    const answerBadge = questionAnswerBadge(question);
+    const statusBadge = questionDisplayStatusBadge(question);
     item.innerHTML = `
       <div class="review-item-top">
         <strong title="${escapeHtml(title)}">${escapeHtml(title)}</strong>
         <span class="chat-time">${escapeHtml(time)}</span>
       </div>
       <p>${escapeHtml(question.text || 'Вопрос без текста')}</p>
-      <div class="chat-badges">${questionStatusBadge(question.status)}${answerBadge}</div>
+      <div class="chat-badges">${statusBadge}</div>
     `;
     box.appendChild(item);
   }
@@ -2228,14 +2271,14 @@ async function openQuestion(questionId, options = {}) {
   $('questionPanel')?.classList.remove('hidden');
   if ($('questionTitle')) $('questionTitle').textContent = questionProductName(question);
   if ($('questionSubtitle')) $('questionSubtitle').textContent = `Ozon · ${formatDateTime(question.published_at) || 'дата не указана'}`;
-  if ($('questionStatusBadge')) $('questionStatusBadge').innerHTML = questionStatusBadge(question.status);
+  if ($('questionStatusBadge')) $('questionStatusBadge').innerHTML = questionDisplayStatusBadge(question);
   if ($('questionText')) $('questionText').textContent = question.text || 'Вопрос без текста';
   const facts = $('questionFacts');
   if (facts) {
     facts.innerHTML = `
       <div class="review-fact"><span>Товар</span><strong title="${escapeHtml(questionProductName(question))}">${escapeHtml(questionProductName(question))}</strong></div>
       <div class="review-fact"><span>SKU</span><strong>${escapeHtml(question.sku || '—')}</strong></div>
-      <div class="review-fact"><span>Статус</span><strong>${escapeHtml(questionStatusNames[question.status] || question.status || '—')}</strong></div>
+      <div class="review-fact"><span>Статус</span><strong>${escapeHtml(questionDisplayStatusLabel(question))}</strong></div>
       <div class="review-fact"><span>Автор</span><strong>${escapeHtml(question.author_name || 'покупатель')}</strong></div>
     `;
   }
@@ -2799,6 +2842,8 @@ function renderAnalytics(data) {
   const outside = Number(summary.outside_hours_requests || summary.outside_hours_messages || 0);
   const before10 = Number(summary.before_10_requests || summary.before_10_messages || 0);
   const after19 = Number(summary.after_19_requests || summary.after_19_messages || 0);
+  const weekendRequests = Number(summary.weekend_requests || 0);
+  const weekendClosed = Number(summary.weekend_closed_requests || summary.weekend_answered_requests || 0);
   const closed = Number(summary.closed_chats || 0);
   const answered = Number(summary.answered_response_blocks || summary.answered_requests || summary.answered_inbound_messages || 0);
   const unanswered = Number(summary.unanswered_response_blocks || summary.unanswered_requests || summary.unanswered_inbound_messages || 0);
@@ -2810,9 +2855,11 @@ function renderAnalytics(data) {
   setAnalyticsText('analyticsUniqueChats', `${uniqueClients} / ${uniqueChats}`);
   setAnalyticsText('analyticsUniqueClientsHint', 'уникальные клиенты / чаты за период');
   setAnalyticsText('analyticsAvgResponse', formatDuration(summary.avg_response_seconds));
-  setAnalyticsText('analyticsAvgResponseHint', `диалоговых ответов ${answered}, ждут ответа ${unanswered}${closedNoResponse ? `, закрыто без ответа ${closedNoResponse}` : ''}`);
+  setAnalyticsText('analyticsAvgResponseHint', `только будни 10:00–19:00 · ответов ${answered}, ждут ${unanswered}${closedNoResponse ? `, закрыто без ответа ${closedNoResponse}` : ''}`);
   setAnalyticsText('analyticsOutsideHours', String(outside));
-  setAnalyticsText('analyticsOutsideHoursHint', `первых до 10:00 — ${before10}, после 19:00 — ${after19}`);
+  setAnalyticsText('analyticsOutsideHoursHint', `только будни: до 10:00 — ${before10}, после 19:00 — ${after19}`);
+  setAnalyticsText('analyticsWeekendRequests', String(weekendRequests));
+  setAnalyticsText('analyticsWeekendRequestsHint', `выходные 00:00–23:59 · закрытых ${weekendClosed}`);
   setAnalyticsText('analyticsClosedChats', String(closed));
   setAnalyticsText('analyticsPeakHour', peak ? hourLabel(peak.hour) : '—');
   setAnalyticsText('analyticsPeakHourHint', peak ? `${Number(peak.requests || peak.inbound_messages || 0)} первых обращений` : 'нет данных');

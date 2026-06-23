@@ -7,7 +7,7 @@ from typing import Any
 from app.db import get_connection
 
 
-# Analytics v102
+# Analytics v103
 # -----------------------------------------------------------------------------
 # Business definition for "обращение": first real client inbound message per chat per
 # local day. Marketplace bot/support/system messages are excluded. If a client writes again on the same day, it is not counted as a new
@@ -70,6 +70,69 @@ def _round_seconds(value: Any) -> int | None:
 
 def _row_dict(row: Any) -> dict[str, Any]:
     return dict(row) if row is not None else {}
+
+
+def _parse_utc_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        dt = datetime.fromisoformat(text)
+    except Exception:
+        try:
+            dt = datetime.strptime(str(value).strip()[:19], "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _business_response_seconds(
+    request_at: Any,
+    response_at: Any,
+    *,
+    tz_offset_minutes: int,
+    start_hour: int = 10,
+    end_hour: int = 19,
+) -> int | None:
+    """Count only Mon-Fri working-window seconds between request and response.
+
+    The dashboard uses a fixed CRM timezone offset. If a client writes outside
+    10:00-19:00, the timer starts at the nearest next working window. Weekend
+    time is not counted. A manager answer outside the working window can produce
+    zero working seconds, which means there was no working-time delay.
+    """
+    start_utc = _parse_utc_datetime(request_at)
+    end_utc = _parse_utc_datetime(response_at)
+    if start_utc is None or end_utc is None or end_utc <= start_utc:
+        return None
+
+    offset = timedelta(minutes=int(tz_offset_minutes))
+    start_local = (start_utc + offset).replace(tzinfo=None)
+    end_local = (end_utc + offset).replace(tzinfo=None)
+    if end_local <= start_local:
+        return None
+
+    total = 0.0
+    day = start_local.date()
+    last_day = end_local.date()
+    one_day = timedelta(days=1)
+    while day <= last_day:
+        # Python weekday(): Monday=0, Sunday=6. Workdays are Mon-Fri.
+        if day.weekday() < 5:
+            window_start = datetime.combine(day, datetime.min.time()).replace(hour=start_hour)
+            window_end = datetime.combine(day, datetime.min.time()).replace(hour=end_hour)
+            chunk_start = max(start_local, window_start)
+            chunk_end = min(end_local, window_end)
+            if chunk_end > chunk_start:
+                total += (chunk_end - chunk_start).total_seconds()
+        day = day + one_day
+    return int(round(max(0.0, total)))
 
 
 def _marketplace_filter_sql(alias: str, marketplace: str | None, params: list[Any]) -> str:
@@ -205,6 +268,7 @@ def _daily_requests_cte_sql(
                 m.created_at,
                 c.marketplace,
                 c.external_chat_id,
+                c.status AS chat_status,
                 COALESCE(NULLIF(c.customer_public_id, ''), c.marketplace || ':' || c.external_chat_id) AS client_key,
                 date(datetime(m.created_at, ?)) AS local_day,
                 CAST(strftime('%H', datetime(m.created_at, ?)) AS INTEGER) AS local_hour,
@@ -413,6 +477,12 @@ def _fetch_hourly(conn: Any, cte_sql: str, params: list[Any]) -> list[dict[str, 
 
 
 def _fetch_outside_hours(conn: Any, cte_sql: str, params: list[Any]) -> dict[str, Any]:
+    """Count outside-hours first requests only on weekdays.
+
+    Weekend requests are shown in a separate KPI and must not inflate
+    before-10:00 / after-19:00 counters. SQLite strftime('%w') returns
+    Sunday=0 and Saturday=6 for the local day string.
+    """
     row = conn.execute(
         cte_sql
         + """
@@ -422,6 +492,26 @@ def _fetch_outside_hours(conn: Any, cte_sql: str, params: list[Any]) -> dict[str
             COUNT(DISTINCT CASE WHEN local_hour < 10 THEN client_key END) AS before_10_clients,
             COUNT(DISTINCT CASE WHEN local_hour >= 19 THEN client_key END) AS after_19_clients
         FROM daily_requests
+        WHERE CAST(strftime('%w', local_day) AS INTEGER) BETWEEN 1 AND 5
+        """,
+        params,
+    ).fetchone()
+    return _row_dict(row)
+
+
+def _fetch_weekend_requests(conn: Any, cte_sql: str, params: list[Any]) -> dict[str, Any]:
+    """Count all weekend requests and how many of them are closed/answered."""
+    row = conn.execute(
+        cte_sql
+        + """
+        SELECT
+            COUNT(*) AS weekend_requests,
+            COUNT(DISTINCT chat_id) AS weekend_unique_chats,
+            COUNT(DISTINCT client_key) AS weekend_unique_clients,
+            SUM(CASE WHEN chat_status = 'closed' THEN 1 ELSE 0 END) AS weekend_closed_requests,
+            COUNT(DISTINCT CASE WHEN chat_status = 'closed' THEN chat_id END) AS weekend_closed_chats
+        FROM daily_requests
+        WHERE CAST(strftime('%w', local_day) AS INTEGER) IN (0, 6)
         """,
         params,
     ).fetchone()
@@ -520,24 +610,62 @@ def _response_blocks_cte_sql(
         )
     """, params
 
-def _fetch_response_stats(conn: Any, cte_sql: str, params: list[Any]) -> dict[str, Any]:
-    row = conn.execute(
+def _fetch_response_stats(conn: Any, cte_sql: str, params: list[Any], *, tz_offset_minutes: int) -> dict[str, Any]:
+    rows = conn.execute(
         cte_sql
         + """
         SELECT
-            COUNT(*) AS response_blocks,
-            SUM(CASE WHEN response_at IS NOT NULL THEN 1 ELSE 0 END) AS answered_response_blocks,
-            SUM(CASE WHEN response_at IS NULL AND chat_status != 'closed' THEN 1 ELSE 0 END) AS unanswered_response_blocks,
-            SUM(CASE WHEN response_at IS NULL AND chat_status = 'closed' THEN 1 ELSE 0 END) AS closed_without_response_blocks,
-            SUM(inbound_messages_in_block) AS inbound_messages_in_response_blocks,
-            AVG(CASE WHEN response_at IS NOT NULL THEN (julianday(response_at) - julianday(request_at)) * 86400.0 END) AS avg_response_seconds,
-            MIN(CASE WHEN response_at IS NOT NULL THEN (julianday(response_at) - julianday(request_at)) * 86400.0 END) AS min_response_seconds,
-            MAX(CASE WHEN response_at IS NOT NULL THEN (julianday(response_at) - julianday(request_at)) * 86400.0 END) AS max_response_seconds
+            chat_id,
+            chat_status,
+            request_at,
+            response_at,
+            inbound_messages_in_block
         FROM response_blocks
         """,
         params,
-    ).fetchone()
-    return _row_dict(row)
+    ).fetchall()
+
+    response_blocks = len(rows)
+    answered_response_blocks = 0
+    unanswered_response_blocks = 0
+    closed_without_response_blocks = 0
+    inbound_messages_in_response_blocks = 0
+    business_seconds_values: list[int] = []
+
+    for row in rows:
+        inbound_messages_in_response_blocks += int(row["inbound_messages_in_block"] or 0)
+        if row["response_at"] is not None:
+            answered_response_blocks += 1
+            seconds = _business_response_seconds(
+                row["request_at"],
+                row["response_at"],
+                tz_offset_minutes=tz_offset_minutes,
+            )
+            if seconds is not None:
+                business_seconds_values.append(seconds)
+        elif row["chat_status"] == "closed":
+            closed_without_response_blocks += 1
+        else:
+            unanswered_response_blocks += 1
+
+    avg_response_seconds = None
+    min_response_seconds = None
+    max_response_seconds = None
+    if business_seconds_values:
+        avg_response_seconds = sum(business_seconds_values) / len(business_seconds_values)
+        min_response_seconds = min(business_seconds_values)
+        max_response_seconds = max(business_seconds_values)
+
+    return {
+        "response_blocks": response_blocks,
+        "answered_response_blocks": answered_response_blocks,
+        "unanswered_response_blocks": unanswered_response_blocks,
+        "closed_without_response_blocks": closed_without_response_blocks,
+        "inbound_messages_in_response_blocks": inbound_messages_in_response_blocks,
+        "avg_response_seconds": avg_response_seconds,
+        "min_response_seconds": min_response_seconds,
+        "max_response_seconds": max_response_seconds,
+    }
 
 
 def _fetch_closed_count(conn: Any, closed_where_sql: str, closed_params: list[Any]) -> int:
@@ -835,6 +963,13 @@ def build_chat_analytics(
         marketplace=market,
         include_hour_filter=False,
     )
+    weekend_cte, weekend_params = _daily_requests_cte_sql(
+        modifier=modifier,
+        start=start,
+        end=end,
+        marketplace=market,
+        include_hour_filter=False,
+    )
     response_cte, response_params = _response_blocks_cte_sql(
         modifier=modifier,
         start=start,
@@ -866,9 +1001,10 @@ def build_chat_analytics(
             hour_from=h_from,
             hour_to=h_to,
         )
-        response = _fetch_response_stats(conn, response_cte, response_params)
+        response = _fetch_response_stats(conn, response_cte, response_params, tz_offset_minutes=offset)
         closed_chats = _fetch_closed_count(conn, closed_where, closed_params)
         outside = _fetch_outside_hours(conn, outside_cte, outside_params)
+        weekend = _fetch_weekend_requests(conn, weekend_cte, weekend_params)
         daily = _fetch_daily(conn, request_cte, request_params, raw_where, raw_params, closed_where, closed_params, modifier)
         hourly = _fetch_hourly(conn, hourly_cte, hourly_params)
         marketplace_breakdown = _fetch_marketplace_breakdown(conn, modifier, start, end)
@@ -876,6 +1012,8 @@ def build_chat_analytics(
     peak_hour, top_hours = _top_hours(hourly)
     before_10_requests = int(outside.get("before_10_requests") or 0)
     after_19_requests = int(outside.get("after_19_requests") or 0)
+    weekend_requests = int(weekend.get("weekend_requests") or 0)
+    weekend_closed_requests = int(weekend.get("weekend_closed_requests") or 0)
     requests_count = int(summary.get("requests") or 0)
     response_blocks = int(response.get("response_blocks") or 0)
     answered_response_blocks = int(response.get("answered_response_blocks") or 0)
@@ -895,11 +1033,13 @@ def build_chat_analytics(
         "definitions": {
             "request": "Первое реальное входящее сообщение клиента в конкретном чате за локальный день; сообщения ботов/поддержки/системы маркетплейсов исключаются",
             "raw_inbound_message": "Любое реальное входящее сообщение клиента; сообщения ботов/поддержки/системы маркетплейсов исключаются",
-            "average_response": "Время от первого входящего сообщения в очередном диалоговом блоке до ближайшего следующего исходящего ответа менеджера",
+            "average_response": "Время от первого входящего сообщения в очередном диалоговом блоке до ближайшего следующего исходящего ответа менеджера; в длительность засчитываются только будние дни 10:00–19:00",
             "response_block": "Цепочка входящих сообщений клиента после предыдущего ответа менеджера; закрывается первым следующим исходящим ответом",
             "unanswered_response_block": "Ожидающий ответа блок считается без ответа только если чат не находится в статусе closed",
             "peak_hour": "Час первого дневного обращения клиента, а не каждое повторное сообщение",
             "closed": "Чаты со статусом closed и последней активностью в выбранном периоде",
+            "outside_hours": "До 10:00 / после 19:00 считаются только по будним дням; выходные вынесены отдельным показателем",
+            "weekend_requests": "Все первые обращения клиентов в субботу и воскресенье с 00:00 до 23:59; закрытые считаются по статусу чата closed",
             "timezone": "Группировка по дням/часам выполняется с фиксированным смещением tz_offset_minutes",
         },
         "summary": {
@@ -914,6 +1054,12 @@ def build_chat_analytics(
             "before_10_requests": before_10_requests,
             "after_19_requests": after_19_requests,
             "outside_hours_requests": before_10_requests + after_19_requests,
+            "weekend_requests": weekend_requests,
+            "weekend_closed_requests": weekend_closed_requests,
+            "weekend_answered_requests": weekend_closed_requests,
+            "weekend_unique_chats": int(weekend.get("weekend_unique_chats") or 0),
+            "weekend_unique_clients": int(weekend.get("weekend_unique_clients") or 0),
+            "weekend_closed_chats": int(weekend.get("weekend_closed_chats") or 0),
             # Backward-compatible aliases for the v85 UI/API shape.
             "before_10_messages": before_10_requests,
             "after_19_messages": after_19_requests,

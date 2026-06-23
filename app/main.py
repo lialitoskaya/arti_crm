@@ -519,6 +519,48 @@ def repair_wb_local_messages_from_metadata(limit: int = 1000) -> dict[str, Any]:
 
 
 
+
+def _recent_external_message_ids(chat_id: int, *, limit: int = 50) -> set[str]:
+    """Return recent marketplace message IDs stored locally for one chat."""
+    try:
+        with get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT external_message_id
+                FROM messages
+                WHERE chat_id = ?
+                  AND external_message_id IS NOT NULL
+                  AND external_message_id != ''
+                  AND external_message_id != 'success'
+                ORDER BY datetime(replace(replace(created_at, 'T', ' '), 'Z', '')) DESC, id DESC
+                LIMIT ?
+                """,
+                (int(chat_id), int(limit)),
+            ).fetchall()
+    except Exception:
+        return set()
+
+    ids: set[str] = set()
+    for row in rows:
+        try:
+            value = row["external_message_id"]
+        except Exception:
+            value = row[0] if row else None
+        if value not in (None, ""):
+            ids.add(str(value))
+    return ids
+
+
+def _ozon_last_message_is_missing_locally(existing_chat: dict[str, Any] | None, last_message_id: str | None) -> bool:
+    """True when Ozon's last_message_id is not present in local messages."""
+    if not existing_chat or not last_message_id:
+        return False
+    try:
+        chat_id = int(existing_chat.get("id"))
+    except Exception:
+        return True
+    return str(last_message_id) not in _recent_external_message_ids(chat_id)
+
 def _should_fetch_messages(marketplace: str, existing_chat: dict[str, Any] | None, unified_chat: Any, *, background: bool) -> bool:
     """Decide whether this sync pass needs full message history for a chat.
 
@@ -556,6 +598,13 @@ def _should_fetch_messages(marketplace: str, existing_chat: dict[str, Any] | Non
         if not repo.chat_has_messages(int(existing_chat.get("id"))):
             return True
     except Exception:
+        return True
+
+    # Ozon can update chat metadata with a new last_message_id before the
+    # corresponding /v3/chat/history messages are saved locally. In that case
+    # metadata-to-metadata comparison would skip the chat forever, while the CRM
+    # still misses the latest messages inside the dialog.
+    if new_last and _ozon_last_message_is_missing_locally(existing_chat, new_last):
         return True
 
     if new_last and old_last and new_last == old_last:
@@ -836,7 +885,7 @@ async def _sync_ozon_fast_inbox_unlocked(*, background: bool = True) -> dict[str
     chat_refs: list[tuple[int, Any, dict[str, Any] | None]] = []
     for unified_chat in unified_chats:
         existing_chat = repo.get_chat_by_external(unified_chat.marketplace, unified_chat.external_chat_id)
-        should_fetch = _should_fetch_messages("ozon", existing_chat, unified_chat, background=True)
+        should_fetch = _should_fetch_messages("ozon", existing_chat, unified_chat, background=background)
         chat_id = repo.upsert_chat(
             ChatCreate(
                 marketplace=unified_chat.marketplace,  # type: ignore[arg-type]

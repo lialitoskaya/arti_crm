@@ -2135,7 +2135,7 @@ html, body { max-width: 100%; }
         </section>
 
         <section id="analyticsDefinition" class="analytics-note panel-card">
-          <strong>Как считаем:</strong> обращение — первое входящее сообщение клиента в конкретном чате за день. Среднее время ответа считается отдельно — по каждому диалоговому блоку клиента до следующего ответа менеджера.
+          <strong>Как считаем:</strong> обращение — первое входящее сообщение клиента в конкретном чате за день. Среднее время ответа считается по каждому диалоговому блоку, но в длительность входит только рабочее время: будни с 10:00 до 19:00. Обращения до 10:00 / после 19:00 считаются только по будням, выходные вынесены отдельно.
         </section>
 
         <section class="analytics-grid">
@@ -2157,7 +2157,12 @@ html, body { max-width: 100%; }
           <article class="analytics-card panel-card">
             <span>До 10:00 / после 19:00</span>
             <strong id="analyticsOutsideHours">—</strong>
-            <small id="analyticsOutsideHoursHint">первые обращения вне окна</small>
+            <small id="analyticsOutsideHoursHint">только будние дни</small>
+          </article>
+          <article class="analytics-card panel-card">
+            <span>Обращений в выходные</span>
+            <strong id="analyticsWeekendRequests">—</strong>
+            <small id="analyticsWeekendRequestsHint">00:00–23:59 · закрытых —</small>
           </article>
           <article class="analytics-card panel-card">
             <span>Закрытых обращений</span>
