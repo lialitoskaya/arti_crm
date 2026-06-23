@@ -2142,9 +2142,31 @@ body.auth-pending .app-shell {
             </div>
 
             <form id="messageForm" class="composer">
+              <section id="replyTemplatesPanel" class="reply-templates-panel hidden" aria-label="Шаблоны ответа">
+                <div class="reply-templates-head">
+                  <div>
+                    <div class="reply-templates-title">Шаблоны ответа</div>
+                    <div class="reply-templates-subtitle">Выберите шаблон — он вставится в поле сообщения.</div>
+                  </div>
+                  <div class="reply-templates-head-actions">
+                    <button id="replyTemplateAddBtn" class="reply-template-add-icon" type="button" aria-label="Добавить шаблон" title="Добавить шаблон">＋</button>
+                    <button id="replyTemplatesCloseBtn" class="reply-templates-close" type="button" aria-label="Скрыть шаблоны" title="Скрыть">×</button>
+                  </div>
+                </div>
+                <div id="replyTemplateCreateBox" class="reply-template-create hidden">
+                  <input id="replyTemplateTitle" type="text" maxlength="160" placeholder="Название шаблона" />
+                  <textarea id="replyTemplateContent" rows="4" maxlength="8000" placeholder="Текст шаблона"></textarea>
+                  <div class="reply-template-create-actions">
+                    <button id="replyTemplateSaveBtn" type="button">Сохранить</button>
+                    <button id="replyTemplateCancelBtn" class="secondary" type="button">Отмена</button>
+                  </div>
+                </div>
+                <div id="replyTemplatesList" class="reply-templates-list"></div>
+              </section>
               <div id="composerAttachmentPreview" class="composer-attachments hidden"></div>
               <div class="composer-main-row">
                 <button id="attachImageBtn" class="composer-attach-btn" type="button" aria-label="Добавить изображение" title="Добавить изображение">＋</button>
+                <button id="replyTemplatesToggleBtn" class="composer-template-btn" type="button" aria-expanded="false" aria-label="Быстрые ответы" title="Быстрые ответы">✦</button>
                 <textarea id="messageText" placeholder="Напишите сообщение клиенту..." rows="2"></textarea>
                 <button class="composer-send-btn" type="submit" aria-label="Отправить">➤</button>
               </div>

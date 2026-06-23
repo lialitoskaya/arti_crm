@@ -164,3 +164,16 @@ class KnowledgeArticleUpdate(BaseModel):
     image_url: str | None = Field(default=None, max_length=2000)
     clear_image: bool | None = None
     is_published: bool | None = None
+
+
+class ReplyTemplateCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=160)
+    content: str = Field(min_length=1, max_length=8000)
+    sort_order: int = 0
+
+
+class ReplyTemplateUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=160)
+    content: str | None = Field(default=None, min_length=1, max_length=8000)
+    sort_order: int | None = None
+    is_active: bool | None = None

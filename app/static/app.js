@@ -87,6 +87,11 @@ let statsLoadPromise = null;
 let syncStatusLoadPromise = null;
 let questionsSyncPromise = null;
 let questionsSyncLastStartedAt = 0;
+let replyTemplates = [];
+let replyTemplatesLoaded = false;
+let replyTemplatesPanelOpen = false;
+let replyTemplateSaving = false;
+const REPLY_TEMPLATES_LOCAL_STORAGE_KEY = 'artiCrm.replyTemplates.fallback';
 // Mobile navigation: when an operator taps 'back to chat list', keep the selected
 // chat in memory but do not auto-open it again during background refresh.
 let mobileChatClosedByUser = false;
@@ -1374,7 +1379,10 @@ async function openChat(chatId, options = {}) {
   mobileChatClosedByUser = false;
   const previousChatId = currentChatId;
   currentChatId = Number(chatId);
-  if (previousChatId !== currentChatId) selectedAiMessageId = null;
+  if (previousChatId !== currentChatId) {
+    selectedAiMessageId = null;
+    setReplyTemplatesPanel(false);
+  }
   const messagesBox = $('messages');
   const wasNearBottom = messagesBox ? (messagesBox.scrollHeight - messagesBox.scrollTop - messagesBox.clientHeight < 80) : true;
 
@@ -3220,6 +3228,180 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
+
+
+function readLocalReplyTemplates() {
+  try {
+    const raw = localStorage.getItem(REPLY_TEMPLATES_LOCAL_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    console.warn('reply templates local read failed', err);
+    return [];
+  }
+}
+
+function writeLocalReplyTemplates(items) {
+  try {
+    localStorage.setItem(REPLY_TEMPLATES_LOCAL_STORAGE_KEY, JSON.stringify(Array.isArray(items) ? items : []));
+  } catch (err) {
+    console.warn('reply templates local write failed', err);
+  }
+}
+
+function makeLocalReplyTemplate(title, content) {
+  const now = new Date().toISOString();
+  return {
+    id: `local-${Date.now()}`,
+    title,
+    content,
+    sort_order: 0,
+    is_active: true,
+    created_at: now,
+    updated_at: now,
+    created_by: 'локально',
+    updated_by: 'локально',
+    _local: true,
+  };
+}
+
+function summarizeReplyTemplate(content) {
+  return String(content || '').replace(/\s+/g, ' ').trim().slice(0, 220);
+}
+
+function setReplyTemplatesPanel(open) {
+  replyTemplatesPanelOpen = !!open;
+  $('replyTemplatesPanel')?.classList.toggle('hidden', !replyTemplatesPanelOpen);
+  const toggleBtn = $('replyTemplatesToggleBtn');
+  if (toggleBtn) {
+    toggleBtn.setAttribute('aria-expanded', replyTemplatesPanelOpen ? 'true' : 'false');
+    toggleBtn.classList.toggle('active', replyTemplatesPanelOpen);
+  }
+  if (!replyTemplatesPanelOpen) {
+    $('replyTemplateCreateBox')?.classList.add('hidden');
+  }
+}
+
+function fillReplyTemplateFormFromComposer() {
+  const draft = $('messageText')?.value?.trim() || '';
+  if (!$('replyTemplateContent')?.value && draft) {
+    $('replyTemplateContent').value = draft;
+  }
+}
+
+function renderReplyTemplates() {
+  const list = $('replyTemplatesList');
+  if (!list) return;
+  const items = Array.isArray(replyTemplates) ? replyTemplates : [];
+  if (!items.length) {
+    list.innerHTML = '<div class="reply-templates-empty">Пока нет сохранённых шаблонов. Нажмите «Добавить шаблон», чтобы сохранить частый ответ.</div>';
+    return;
+  }
+  list.innerHTML = items.map((template) => {
+    const updated = formatDateTime(template.updated_at) || formatDateTime(template.created_at) || '';
+    const metaParts = [];
+    if (template.updated_by || template.created_by) metaParts.push(escapeHtml(template.updated_by || template.created_by));
+    if (updated) metaParts.push(`обновлён ${escapeHtml(updated)}`);
+    const meta = metaParts.join(' · ');
+    return `<button class="reply-template-item" type="button" data-reply-template-id="${template.id}">
+      <span class="reply-template-item-title">${escapeHtml(template.title || 'Без названия')}</span>
+      <span class="reply-template-item-preview">${escapeHtml(summarizeReplyTemplate(template.content || ''))}</span>
+      ${meta ? `<span class="reply-template-item-meta">${meta}</span>` : ''}
+    </button>`;
+  }).join('');
+}
+
+async function loadReplyTemplates(force = false) {
+  if (replyTemplatesLoaded && !force) {
+    renderReplyTemplates();
+    return replyTemplates;
+  }
+  try {
+    const serverTemplates = await api('/api/reply-templates');
+    const localTemplates = readLocalReplyTemplates();
+    replyTemplates = [...(Array.isArray(serverTemplates) ? serverTemplates : []), ...localTemplates];
+  } catch (err) {
+    console.warn('reply templates backend unavailable, using local fallback', err);
+    replyTemplates = readLocalReplyTemplates();
+  }
+  replyTemplatesLoaded = true;
+  renderReplyTemplates();
+  return replyTemplates;
+}
+
+function openReplyTemplateCreateBox() {
+  setReplyTemplatesPanel(true);
+  fillReplyTemplateFormFromComposer();
+  $('replyTemplateCreateBox')?.classList.remove('hidden');
+  setTimeout(() => $('replyTemplateTitle')?.focus(), 30);
+}
+
+function resetReplyTemplateCreateBox() {
+  if ($('replyTemplateTitle')) $('replyTemplateTitle').value = '';
+  if ($('replyTemplateContent')) $('replyTemplateContent').value = '';
+  $('replyTemplateCreateBox')?.classList.add('hidden');
+}
+
+function applyReplyTemplate(templateId) {
+  const template = (replyTemplates || []).find((item) => Number(item.id) === Number(templateId));
+  if (!template) return;
+  const field = $('messageText');
+  if (!field) return;
+  const chunk = String(template.content || '').trim();
+  if (!chunk) return;
+  const current = field.value || '';
+  field.value = current.trim() ? `${current.replace(/\s+$/, '')}
+${chunk}` : chunk;
+  autosizeComposerTextarea(field);
+  field.focus();
+  field.selectionStart = field.selectionEnd = field.value.length;
+  setReplyTemplatesPanel(false);
+}
+
+async function saveReplyTemplateFromComposer() {
+  if (replyTemplateSaving) return;
+  const title = $('replyTemplateTitle')?.value?.trim() || '';
+  const content = $('replyTemplateContent')?.value?.trim() || '';
+  if (!title) {
+    notify('Шаблоны', 'Укажите название шаблона.');
+    $('replyTemplateTitle')?.focus();
+    return;
+  }
+  if (!content) {
+    notify('Шаблоны', 'Заполните текст шаблона.');
+    $('replyTemplateContent')?.focus();
+    return;
+  }
+  replyTemplateSaving = true;
+  const saveBtn = $('replyTemplateSaveBtn');
+  if (saveBtn) saveBtn.disabled = true;
+  try {
+    try {
+      await api('/api/reply-templates', {
+        method: 'POST',
+        body: JSON.stringify({ title, content, sort_order: 0 }),
+      });
+      replyTemplatesLoaded = false;
+      await loadReplyTemplates(true);
+    } catch (backendErr) {
+      console.warn('reply templates backend save failed, saving locally', backendErr);
+      const localTemplates = readLocalReplyTemplates();
+      const localItem = makeLocalReplyTemplate(title, content);
+      localTemplates.unshift(localItem);
+      writeLocalReplyTemplates(localTemplates);
+      replyTemplates = [localItem, ...(replyTemplates || [])];
+      renderReplyTemplates();
+    }
+    resetReplyTemplateCreateBox();
+    setReplyTemplatesPanel(true);
+  } catch (err) {
+    notify('Шаблоны', `Не удалось сохранить шаблон: ${String(err.message || err)}`);
+  } finally {
+    replyTemplateSaving = false;
+    if (saveBtn) saveBtn.disabled = false;
+  }
+}
+
 function bind(id, eventName, handler) {
   const el = $(id);
   if (!el) {
@@ -3728,6 +3910,27 @@ function init() {
   }
 
   const messageForm = $('messageForm');
+  bind('replyTemplatesToggleBtn', 'click', async () => {
+    const next = !replyTemplatesPanelOpen;
+    setReplyTemplatesPanel(next);
+    if (next) {
+      try { await loadReplyTemplates(); } catch (err) { notify('Шаблоны', String(err.message || err)); }
+    }
+  });
+  bind('replyTemplateAddBtn', 'click', async () => {
+    try {
+      await loadReplyTemplates();
+      openReplyTemplateCreateBox();
+    } catch (err) { notify('Шаблоны', String(err.message || err)); }
+  });
+  bind('replyTemplatesCloseBtn', 'click', () => setReplyTemplatesPanel(false));
+  bind('replyTemplateCancelBtn', 'click', resetReplyTemplateCreateBox);
+  bind('replyTemplateSaveBtn', 'click', saveReplyTemplateFromComposer);
+  $('replyTemplatesList')?.addEventListener('click', (event) => {
+    const button = event.target?.closest?.('[data-reply-template-id]');
+    if (!button) return;
+    applyReplyTemplate(button.dataset.replyTemplateId);
+  });
   bind('attachImageBtn', 'click', () => $('chatImageInput')?.click());
   bind('chatImageInput', 'change', handleChatImageSelection);
 

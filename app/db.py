@@ -213,6 +213,24 @@ def init_db() -> None:
 
         conn.executescript(
             """
+            CREATE TABLE IF NOT EXISTS reply_templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_by_user_id INTEGER,
+                updated_by_user_id INTEGER,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(created_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
+                FOREIGN KEY(updated_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+            );
+            """
+        )
+
+        conn.executescript(
+            """
             CREATE TABLE IF NOT EXISTS knowledge_categories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title TEXT NOT NULL,
@@ -240,6 +258,18 @@ def init_db() -> None:
             );
             """
         )
+
+        reply_template_columns = _columns("reply_templates")
+        for column_name, column_sql in {
+            "sort_order": "INTEGER NOT NULL DEFAULT 0",
+            "is_active": "INTEGER NOT NULL DEFAULT 1",
+            "created_by_user_id": "INTEGER",
+            "updated_by_user_id": "INTEGER",
+            "updated_at": "TEXT",
+        }.items():
+            if column_name not in reply_template_columns:
+                conn.execute(f"ALTER TABLE reply_templates ADD COLUMN {column_name} {column_sql}")
+        conn.execute("UPDATE reply_templates SET updated_at=COALESCE(updated_at, created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL OR updated_at=''")
 
         knowledge_article_columns = _columns("knowledge_articles")
         if "image_url" not in knowledge_article_columns:
@@ -307,7 +337,7 @@ def init_db() -> None:
         for column_name, column_sql in {
             "sort_order": "INTEGER NOT NULL DEFAULT 0",
             "is_default": "INTEGER NOT NULL DEFAULT 0",
-            "updated_at": "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
+            "updated_at": "TEXT",
         }.items():
             if column_name not in funnel_columns:
                 conn.execute(f"ALTER TABLE chat_funnels ADD COLUMN {column_name} {column_sql}")
@@ -319,7 +349,7 @@ def init_db() -> None:
             "sort_order": "INTEGER NOT NULL DEFAULT 0",
             "is_system": "INTEGER NOT NULL DEFAULT 0",
             "is_active": "INTEGER NOT NULL DEFAULT 1",
-            "updated_at": "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
+            "updated_at": "TEXT",
         }.items():
             if column_name not in status_columns:
                 conn.execute(f"ALTER TABLE chat_statuses ADD COLUMN {column_name} {column_sql}")
@@ -410,6 +440,8 @@ def init_db() -> None:
                 ON notifications(task_id);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_dedupe
                 ON notifications(dedupe_key) WHERE dedupe_key IS NOT NULL AND dedupe_key != '';
+            CREATE INDEX IF NOT EXISTS idx_reply_templates_active_sort
+                ON reply_templates(is_active, sort_order, updated_at DESC);
             """
         )
 

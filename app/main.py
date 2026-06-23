@@ -24,7 +24,7 @@ from app.connectors.ozon import OzonConnector
 from app.connectors.wildberries import WildberriesConnector
 from app.connectors.yandex_market import YandexMarketConnector
 from app.db import get_connection, init_db
-from app.schemas import AiReplyCreate, ChatCreate, ChatUpdate, InternalNoteCreate, LoginCreate, MessageCreate, ReviewReplyCreate, QuestionAnswerCreate, TaskCreate, TaskUpdate, UserCreate, UserPasswordUpdate, UserUpdate, ProfileUpdate, KnowledgeCategoryCreate, KnowledgeArticleCreate, KnowledgeArticleUpdate, ChatFunnelCreate, ChatFunnelUpdate, ChatStatusCreate, ChatStatusUpdate
+from app.schemas import AiReplyCreate, ChatCreate, ChatUpdate, InternalNoteCreate, LoginCreate, MessageCreate, ReviewReplyCreate, QuestionAnswerCreate, TaskCreate, TaskUpdate, UserCreate, UserPasswordUpdate, UserUpdate, ProfileUpdate, KnowledgeCategoryCreate, KnowledgeArticleCreate, KnowledgeArticleUpdate, ChatFunnelCreate, ChatFunnelUpdate, ChatStatusCreate, ChatStatusUpdate, ReplyTemplateCreate
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -3646,6 +3646,26 @@ def api_update_knowledge_article(article_id: int, payload: KnowledgeArticleUpdat
     if not article:
         raise HTTPException(status_code=404, detail="Article not found")
     return article
+
+
+@app.get("/api/reply-templates")
+def api_list_reply_templates(request: Request, q: str | None = None) -> list[dict[str, Any]]:
+    _current_user(request)
+    return repo.list_reply_templates(q=q)
+
+
+@app.post("/api/reply-templates")
+def api_create_reply_template(payload: ReplyTemplateCreate, request: Request) -> dict[str, Any]:
+    user = _current_user(request)
+    try:
+        return repo.create_reply_template(
+            title=payload.title,
+            content=payload.content,
+            sort_order=payload.sort_order,
+            user_id=int(user["id"]),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.post("/api/sync/operator")
