@@ -3230,15 +3230,25 @@ function bind(id, eventName, handler) {
 }
 
 
+function finishAuthBootstrap() {
+  $('authBootScreen')?.classList.add('hidden');
+  document.body.classList.remove('auth-pending');
+}
+
 function showLogin(errorText = '') {
+  finishAuthBootstrap();
+  currentUser = null;
   $('loginScreen')?.classList.remove('hidden');
   $('appShell')?.classList.add('app-locked');
+  $('appShell')?.classList.add('hidden');
   if ($('loginError')) $('loginError').textContent = errorText;
 }
 
 function showApp(user) {
   currentUser = user || currentUser;
+  finishAuthBootstrap();
   $('loginScreen')?.classList.add('hidden');
+  $('appShell')?.classList.remove('hidden');
   $('appShell')?.classList.remove('app-locked');
   updateAuthUiForUser();
   loadAssignees().catch(err => console.warn('assignees after auth failed', err));
@@ -3246,11 +3256,20 @@ function showApp(user) {
 
 async function checkAuth() {
   try {
-    const data = await api('/api/auth/me');
+    const response = await fetch('/api/auth/me', {
+      cache: 'no-store',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!response.ok) {
+      showLogin();
+      return false;
+    }
+    const data = await response.json();
     showApp(data.user);
     return true;
-  } catch (_) {
-    showLogin();
+  } catch (err) {
+    console.warn('auth check failed', err);
+    showLogin('Не удалось проверить авторизацию. Попробуйте войти снова.');
     return false;
   }
 }

@@ -1893,10 +1893,63 @@ html, body { max-width: 100%; }
 }
 </style>
 
-</head>
-<body>
 
-  <section id="loginScreen" class="login-screen">
+<style id="arti-crm-auth-bootstrap-fix">
+.auth-boot-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: grid;
+  place-items: center;
+  color: var(--text);
+  background:
+    radial-gradient(circle at 0% 12%, rgba(255, 146, 82, .25), transparent 32%),
+    radial-gradient(circle at 100% 0%, rgba(255, 204, 153, .28), transparent 35%),
+    linear-gradient(135deg, #fffaf6 0%, #fff3e8 42%, #f7fbff 100%);
+}
+.auth-boot-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 20px;
+  border: 1px solid rgba(255,255,255,.72);
+  border-radius: 22px;
+  background: rgba(255,255,255,.70);
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(18px);
+}
+.auth-boot-mark {
+  width: 42px;
+  height: 42px;
+  border-radius: 15px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-weight: 800;
+  background: linear-gradient(135deg, #ff6b3c, #ffb267 92%);
+}
+.auth-boot-card strong { display: block; font-size: 15px; letter-spacing: -.02em; }
+.auth-boot-card span { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
+body.auth-pending .login-screen,
+body.auth-pending .app-shell {
+  display: none !important;
+}
+</style>
+
+</head>
+<body class="auth-pending">
+
+  <div id="authBootScreen" class="auth-boot-screen" role="status" aria-live="polite">
+    <div class="auth-boot-card">
+      <div class="auth-boot-mark" aria-hidden="true">A</div>
+      <div>
+        <strong>Arti CRM</strong>
+        <span>Проверяем авторизацию…</span>
+      </div>
+    </div>
+  </div>
+
+  <section id="loginScreen" class="login-screen hidden">
     <form id="loginForm" class="login-card">
       <div class="login-mark">A</div>
       <h1>Arti Crm</h1>
@@ -1908,7 +1961,7 @@ html, body { max-width: 100%; }
     </form>
   </section>
 
-  <div id="appShell" class="app-shell app-locked">
+  <div id="appShell" class="app-shell app-locked hidden">
     <aside class="app-nav" aria-label="Навигация Arti CRM">
       <div class="brand-card">
         <div class="brand-mark" aria-hidden="true">✦</div>
@@ -2614,6 +2667,6 @@ html, body { max-width: 100%; }
 
   <div id="notificationToasts" class="notification-toast-stack" aria-live="polite"></div>
 
-  <script src="/static/app.js?v=103p32"></script>
+  <script src="/static/app.js?v=103p33"></script>
 </body>
 </html>
