@@ -1164,7 +1164,14 @@ class OzonConnector(MarketplaceConnector):
 
         for variant_name, extra in self._review_payload_variants():
             last_id = ""
-            variant_debug: dict[str, Any] = {"variant": variant_name, "requests": 0, "items": 0, "status_code": None, "error": None}
+            variant_debug: dict[str, Any] = {
+                "variant": variant_name,
+                "requests": 0,
+                "items": 0,
+                "status_code": None,
+                "error": None,
+                "payload_extra": extra,
+            }
             for _ in range(pages):
                 payload: dict[str, Any] = {"limit": limit, "sort_dir": "DESC", **extra}
                 if last_id:
@@ -1243,6 +1250,7 @@ class OzonConnector(MarketplaceConnector):
                 "items_count": len(items),
                 "error_body": None if status < 400 else text[:1500],
                 "response_keys": list((self._result(data) if data else {}).keys())[:50] if status < 400 else [],
+                "raw_text_preview": text[:800] if status < 400 else None,
             }
             if items:
                 first = items[0]
@@ -1274,14 +1282,11 @@ class OzonConnector(MarketplaceConnector):
     def _question_payload_variants(self) -> list[tuple[str, dict[str, Any]]]:
         """Return safe payload variants for /v1/question/list.
 
-        Ozon questions can appear in NEW, VIEWED, UNPROCESSED and PROCESSED
-        states. Older CRM builds requested only UNPROCESSED/PROCESSED by
-        default, so a fresh question could be missed until it was opened in
-        Seller UI and moved to another state.
-
-        OZON_QUESTIONS_STATUSES may add extra statuses. Set
-        OZON_QUESTIONS_STRICT_STATUSES=1 only when you intentionally want to
-        use exactly the statuses listed in OZON_QUESTIONS_STATUSES.
+        Fresh Ozon questions may be hidden from the old UNPROCESSED-only
+        request until the seller opens them in the Ozon UI. To catch these
+        questions before they are viewed manually, the sync also probes
+        unviewed/unread filters and alternate status field names used by
+        different Ozon API builds.
         """
         strict = os.getenv("OZON_QUESTIONS_STRICT_STATUSES", "0").strip().lower() in {
             "1",
@@ -1294,20 +1299,43 @@ class OzonConnector(MarketplaceConnector):
         env_statuses = [s.strip().upper() for s in raw_statuses.split(",") if s.strip()]
         default_statuses = ["NEW", "UNPROCESSED", "VIEWED", "PROCESSED", "ALL"]
         statuses: list[str] = []
-
         source_statuses = env_statuses if strict and env_statuses else [*default_statuses, *env_statuses]
         for status in source_statuses:
             if status and status not in statuses:
                 statuses.append(status)
 
-        variants: list[tuple[str, dict[str, Any]]] = [("all_without_status", {})]
+        variants: list[tuple[str, dict[str, Any]]] = [
+            ("all_without_status", {}),
+            ("filter_all", {"filter": {"status": "ALL"}}),
+            # Unopened questions can be represented by viewed/read flags rather
+            # than by status. These variants are the important part of this fix.
+            ("filter_is_viewed_false", {"filter": {"is_viewed": False}}),
+            ("filter_viewed_false", {"filter": {"viewed": False}}),
+            ("filter_is_read_false", {"filter": {"is_read": False}}),
+            ("filter_unread_true", {"filter": {"unread": True}}),
+            ("filter_unread_only_true", {"filter": {"unread_only": True}}),
+        ]
+
         for status in statuses:
-            # Ozon has changed question/list examples over time. Try both the
-            # direct documented style and the older filter-wrapper style. The
-            # sync keeps the first successful shape and records failures in diagnostics.
-            variants.append((status.lower(), {"status": status}))
-            variants.append((f"filter_{status.lower()}", {"filter": {"status": status}}))
-        return variants
+            slug = status.lower()
+            variants.append((slug, {"status": status}))
+            variants.append((f"filter_{slug}", {"filter": {"status": status}}))
+            # For NEW only, try alternate request keys because this is the state
+            # that disappears from CRM until the question is opened in Ozon.
+            if status == "NEW":
+                variants.append(("filter_question_status_new", {"filter": {"question_status": status}}))
+                variants.append(("filter_questionStatus_new", {"filter": {"questionStatus": status}}))
+                variants.append(("filter_state_new", {"filter": {"state": status}}))
+
+        deduped: list[tuple[str, dict[str, Any]]] = []
+        seen_payloads: set[str] = set()
+        for name, payload in variants:
+            key = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+            if key in seen_payloads:
+                continue
+            seen_payloads.add(key)
+            deduped.append((name, payload))
+        return deduped
 
     @staticmethod
     def _question_items(data: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -1491,7 +1519,14 @@ class OzonConnector(MarketplaceConnector):
         for variant_name, extra in self._question_payload_variants():
             last_id = ""
             offset = 0
-            variant_debug: dict[str, Any] = {"variant": variant_name, "requests": 0, "items": 0, "status_code": None, "error": None}
+            variant_debug: dict[str, Any] = {
+                "variant": variant_name,
+                "requests": 0,
+                "items": 0,
+                "status_code": None,
+                "error": None,
+                "payload_extra": extra,
+            }
             for _ in range(pages):
                 payload: dict[str, Any] = {"limit": limit, **extra}
                 sort_dir = os.getenv("OZON_QUESTIONS_SORT_DIR", "DESC").strip().upper()
@@ -1569,6 +1604,7 @@ class OzonConnector(MarketplaceConnector):
                 "items_count": len(items),
                 "error_body": None if status < 400 else text[:1500],
                 "response_keys": list((self._result(data) if data else {}).keys())[:50] if status < 400 else [],
+                "raw_text_preview": text[:800] if status < 400 else None,
             }
             if items:
                 first = items[0]

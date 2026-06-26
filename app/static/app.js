@@ -88,6 +88,10 @@ let syncStatusLoadPromise = null;
 let questionsSyncPromise = null;
 let questionsSyncLastStartedAt = 0;
 let replyTemplates = [];
+<<<<<<< HEAD
+=======
+let taskTypes = [];
+>>>>>>> 1de50c7 (Improve CRM task workflow, chat notes, and composer UI)
 let replyTemplatesLoaded = false;
 let replyTemplatesPanelOpen = false;
 let replyTemplateSaving = false;
@@ -99,6 +103,7 @@ let mobileChatClosedByUser = false;
 let currentChatMetaSaveTimer = null;
 let selectedChatImageFiles = [];
 let openChatRequestSeq = 0;
+let taskSearchTimer = null;
 
 function mergeChatSummary(updated) {
   if (!updated || !updated.id) return;
@@ -190,11 +195,10 @@ let statusNames = {
 };
 
 const taskStatusNames = {
-  open: 'открыта',
+  new: 'новая',
+  open: 'новая',
   in_progress: 'в работе',
-  done: 'выполнено',
   archived: 'архив',
-  cancelled: 'отменена',
 };
 
 const reviewStatusNames = {
@@ -615,8 +619,10 @@ function datetimeLocalValue(value) {
 }
 
 function taskStatusOptions(current) {
-  return ['open', 'in_progress', 'done', 'archived', 'cancelled'].map(status =>
-    `<option value="${status}" ${current === status ? 'selected' : ''}>${escapeHtml(taskStatusNames[status] || status)}</option>`
+  const normalized = normalizeTaskStatus(current);
+  const selected = normalized === 'open' ? 'new' : normalized === 'archive' ? 'archived' : 'in_progress';
+  return ['new', 'in_progress', 'archived'].map(status =>
+    `<option value="${status}" ${selected === status ? 'selected' : ''}>${escapeHtml(taskStatusNames[status] || status)}</option>`
   ).join('');
 }
 
@@ -702,7 +708,10 @@ function bindTaskCardActions(item, options = {}) {
       if (!taskId || !card) return;
       const body = {};
       if (action === 'save') {
+        const titleInput = card.querySelector('[data-task-title]');
+        if (titleInput) body.title = titleInput.value.trim() || undefined;
         body.status = card.querySelector('[data-task-status]')?.value || undefined;
+        body.task_type_id = card.querySelector('[data-task-type]')?.value ? Number(card.querySelector('[data-task-type]').value) : null;
         body.assigned_user_id = card.querySelector('[data-task-assignee]')?.value ? Number(card.querySelector('[data-task-assignee]').value) : null;
         body.due_at = card.querySelector('[data-task-due]')?.value || null;
         body.comment = card.querySelector('[data-task-comment]')?.value || null;
@@ -863,6 +872,201 @@ async function saveAllChatStatuses() {
     notify('Статусы не сохранены', String(err.message || err));
   } finally {
     [topBtn, bottomBtn].forEach(btn => { if (btn) btn.disabled = false; });
+  }
+}
+
+
+
+async function loadTaskTypes(options = {}) {
+  try {
+    const includeInactive = options.includeInactive !== false;
+    taskTypes = await api(`/api/task-types?include_inactive=${includeInactive ? 'true' : 'false'}`);
+    renderTaskTypeSettingsList();
+    hydrateTaskTypeSelects();
+    updateTaskTypeFilterOptions(Array.isArray(window.lastLoadedTasks) ? window.lastLoadedTasks : []);
+    return taskTypes;
+  } catch (err) {
+    console.warn('task types failed', err);
+    if (!options.silent) notify('Типы задач не загружены', String(err.message || err));
+    return [];
+  }
+}
+
+function taskTypeStatusLabel(type) {
+  return (type?.is_active === false || type?.is_active === 0) ? 'скрыт' : 'активен';
+}
+
+function activeTaskTypesList() {
+  return (Array.isArray(taskTypes) ? taskTypes : [])
+    .filter(type => type && type.is_active !== false && type.is_active !== 0);
+}
+
+function taskTypeOptions(selectedId = '', includeEmpty = true) {
+  const selected = selectedId ? String(selectedId) : '';
+  const empty = includeEmpty ? '<option value="">Тип задачи</option>' : '';
+  return empty + activeTaskTypesList().map(type => {
+    const value = String(type.id);
+    const title = type.title || type.name || 'Задача';
+    return `<option value="${escapeHtml(value)}" ${value === selected ? 'selected' : ''}>${escapeHtml(title)}</option>`;
+  }).join('');
+}
+
+function selectedTaskType() {
+  const select = $('taskTypeSelect');
+  if (!select) return null;
+  const id = select.value ? Number(select.value) : null;
+  if (!id) return null;
+  return activeTaskTypesList().find(type => Number(type.id) === Number(id)) || null;
+}
+
+function hydrateTaskTypeSelects() {
+  const select = $('taskTypeSelect');
+  if (select) {
+    const current = select.value || '';
+    select.innerHTML = taskTypeOptions(current, true);
+    const hasCurrentOption = Array.from(select.options || []).some(option => option.value === String(current));
+    if (current && !hasCurrentOption) {
+      select.value = '';
+    } else {
+      select.value = current;
+    }
+    updateTaskCreateCommentLabel();
+  }
+  document.querySelectorAll('[data-task-type]').forEach(typeSelect => {
+    const current = typeSelect.value || typeSelect.dataset.currentTaskType || '';
+    typeSelect.innerHTML = taskTypeOptions(current, true);
+    typeSelect.value = current;
+  });
+}
+
+function updateTaskCreateCommentLabel() {
+  const fieldLabel = selectedTaskType()?.comment_label || selectedTaskType()?.field_label || 'Комментарий';
+  const label = $('taskCommentFieldLabel');
+  const input = $('taskTitle');
+  if (label) label.textContent = fieldLabel;
+  if (input) input.placeholder = fieldLabel === 'Комментарий' ? 'Комментарий / адрес' : fieldLabel;
+}
+
+function renderTaskTypeSettingsList() {
+  const list = $('taskTypesSettingsList');
+  if (!list) return;
+  const rows = Array.isArray(taskTypes) ? taskTypes : [];
+  list.innerHTML = rows.length ? rows.map(type => `
+    <article class="task-type-settings-row" data-task-type-id="${escapeHtml(type.id)}">
+      <input class="task-type-title-input" data-task-type-title value="${escapeHtml(type.title || type.name || '')}" aria-label="Название типа задачи" />
+      <input class="task-type-label-input" data-task-type-label value="${escapeHtml(type.comment_label || type.field_label || 'Комментарий')}" aria-label="Название поля комментария" />
+      <input class="task-type-sort-input" data-task-type-sort type="number" value="${Number(type.sort_order || 0)}" aria-label="Порядок" />
+      <label class="task-type-active-toggle">
+        <input data-task-type-active type="checkbox" ${(type.is_active === false || type.is_active === 0) ? '' : 'checked'} />
+        <span>${escapeHtml(taskTypeStatusLabel(type))}</span>
+      </label>
+      <div class="task-type-settings-actions">
+        <button class="crm-light-btn task-type-save-btn" type="button" data-task-type-action="save">Сохранить</button>
+        <button class="crm-light-btn task-type-delete-btn" type="button" data-task-type-action="delete">Удалить</button>
+      </div>
+    </article>
+  `).join('') : '<p class="muted">Типов задач пока нет. Добавьте первый тип выше.</p>';
+}
+
+async function submitTaskTypeCreate(event) {
+  event?.preventDefault?.();
+  const titleInput = $('taskTypeTitle');
+  const labelInput = $('taskTypeCommentLabel');
+  const sortInput = $('taskTypeSort');
+  const title = titleInput?.value?.trim() || '';
+  const commentLabel = labelInput?.value?.trim() || 'Комментарий';
+  if (!title) {
+    notify('Тип задачи', 'Введите название типа задачи.');
+    titleInput?.focus?.();
+    return;
+  }
+  const button = $('taskTypeCreateBtn');
+  if (button) button.disabled = true;
+  try {
+    await api('/api/task-types', {
+      method: 'POST',
+      body: JSON.stringify({
+        title,
+        comment_label: commentLabel,
+        sort_order: Number(sortInput?.value || 0),
+        is_active: true,
+      }),
+    });
+    if (titleInput) titleInput.value = '';
+    if (labelInput) labelInput.value = 'Комментарий';
+    if (sortInput) sortInput.value = '0';
+    await loadTaskTypes({ silent: true });
+    notify('Тип задачи', 'Тип задачи добавлен.');
+  } catch (err) {
+    notify('Тип задачи не добавлен', String(err.message || err));
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function saveTaskTypeRow(row) {
+  const id = Number(row?.dataset?.taskTypeId || 0);
+  if (!id) return;
+  const title = row.querySelector('[data-task-type-title]')?.value?.trim() || '';
+  const commentLabel = row.querySelector('[data-task-type-label]')?.value?.trim() || 'Комментарий';
+  if (!title) {
+    notify('Тип задачи', 'Название типа не может быть пустым.');
+    row.querySelector('[data-task-type-title]')?.focus?.();
+    return;
+  }
+  await api(`/api/task-types/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      title,
+      comment_label: commentLabel,
+      sort_order: Number(row.querySelector('[data-task-type-sort]')?.value || 0),
+      is_active: Boolean(row.querySelector('[data-task-type-active]')?.checked),
+    }),
+  });
+}
+
+async function deleteTaskTypeRow(row) {
+  const id = Number(row?.dataset?.taskTypeId || 0);
+  if (!id) return;
+  const title = row.querySelector('[data-task-type-title]')?.value?.trim() || 'тип задачи';
+  if (!confirm(`Удалить тип задачи «${title}»? Если он уже используется в задачах, он будет скрыт из списка активных.`)) return;
+  await api(`/api/task-types/${id}`, { method: 'DELETE' });
+}
+
+async function handleTaskTypeSettingsClick(event) {
+  const actionButton = event.target.closest?.('[data-task-type-action]');
+  if (!actionButton) return;
+  const row = actionButton.closest('[data-task-type-id]');
+  if (!row) return;
+  actionButton.disabled = true;
+  try {
+    if (actionButton.dataset.taskTypeAction === 'save') {
+      await saveTaskTypeRow(row);
+      notify('Тип задачи', 'Изменения сохранены.');
+    }
+    if (actionButton.dataset.taskTypeAction === 'delete') {
+      await deleteTaskTypeRow(row);
+      notify('Тип задачи', 'Тип задачи удалён или скрыт.');
+    }
+    await loadTaskTypes({ silent: true });
+    await loadAllTasks().catch(() => {});
+  } catch (err) {
+    notify('Тип задачи', String(err.message || err));
+  } finally {
+    actionButton.disabled = false;
+  }
+}
+
+async function handleTaskTypeSettingsChange(event) {
+  const activeToggle = event.target.closest?.('[data-task-type-active]');
+  if (!activeToggle) return;
+  const row = activeToggle.closest('[data-task-type-id]');
+  if (!row) return;
+  try {
+    await saveTaskTypeRow(row);
+    await loadTaskTypes({ silent: true });
+  } catch (err) {
+    notify('Тип задачи', String(err.message || err));
   }
 }
 
@@ -1488,10 +1692,34 @@ function prepareLazyChatImage(img, src) {
   }
 }
 
+
+function messageTimestampMs(message) {
+  const value = message?.created_at || message?.createdAt || message?.created || '';
+  const ts = Date.parse(value);
+  return Number.isFinite(ts) ? ts : 0;
+}
+
+function buildMessageReceiptContext(messages) {
+  const inboundTimes = (messages || [])
+    .filter(message => message?.direction === 'inbound')
+    .map(messageTimestampMs)
+    .filter(Boolean)
+    .sort((a, b) => a - b);
+
+  return {
+    hasInboundAfter(message) {
+      const ts = messageTimestampMs(message);
+      if (!ts || !inboundTimes.length) return false;
+      return inboundTimes.some(inboundTs => inboundTs > ts);
+    },
+  };
+}
+
 function renderMessages(messages) {
   const box = $('messages');
   if (!box) return;
   box.innerHTML = '';
+  const receiptContext = buildMessageReceiptContext(messages || []);
   for (const message of messages) {
     const item = document.createElement('div');
     item.className = `message ${message.direction} ${Number(message.id) === Number(selectedAiMessageId) ? 'ai-selected-message' : ''}`;
@@ -1531,6 +1759,7 @@ function renderMessages(messages) {
 
       menuBtn.onclick = (event) => {
         event.stopPropagation();
+        if (activeExtraPanel) closeActiveExtraPanel();
         document.querySelectorAll('.message-actions-menu').forEach(el => {
           if (el !== menu) el.classList.add('hidden');
         });
@@ -1540,6 +1769,38 @@ function renderMessages(messages) {
       aiWrap.appendChild(menuBtn);
       aiWrap.appendChild(menu);
       meta.appendChild(aiWrap);
+    }
+
+
+    if (message.direction === 'internal') {
+      const noteActions = document.createElement('span');
+      noteActions.className = 'internal-note-actions';
+
+      const editBtn = document.createElement('button');
+      editBtn.type = 'button';
+      editBtn.className = 'internal-note-action';
+      editBtn.textContent = 'Изменить';
+      editBtn.title = 'Редактировать заметку';
+      editBtn.dataset.noteEdit = String(message.id);
+      editBtn.onclick = (event) => {
+        event.stopPropagation();
+        startInternalNoteEdit(item, message);
+      };
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.type = 'button';
+      deleteBtn.className = 'internal-note-action internal-note-delete';
+      deleteBtn.textContent = 'Удалить';
+      deleteBtn.title = 'Удалить заметку';
+      deleteBtn.dataset.noteDelete = String(message.id);
+      deleteBtn.onclick = async (event) => {
+        event.stopPropagation();
+        await deleteInternalNote(message);
+      };
+
+      noteActions.appendChild(editBtn);
+      noteActions.appendChild(deleteBtn);
+      meta.appendChild(noteActions);
     }
 
     const images = extractImageUrls(message);
@@ -1586,7 +1847,7 @@ function renderMessages(messages) {
       item.appendChild(gallery);
     }
 
-    const receipt = messageReceiptInfo(message);
+    const receipt = messageReceiptInfo(message, receiptContext);
     if (receipt) {
       const receiptEl = document.createElement('div');
       receiptEl.className = `message-receipt ${receipt.read ? 'is-read' : 'is-sent'}`;
@@ -1596,6 +1857,72 @@ function renderMessages(messages) {
     }
 
     box.appendChild(item);
+  }
+}
+
+
+function startInternalNoteEdit(item, message) {
+  if (!item || !message || message.direction !== 'internal') return;
+  if (item.querySelector('.internal-note-editor')) return;
+  const textEl = item.querySelector('.message-text');
+  const editor = document.createElement('div');
+  editor.className = 'internal-note-editor';
+  editor.innerHTML = `
+    <textarea class="internal-note-edit-text" aria-label="Текст внутренней заметки">${escapeHtml(message.text || '')}</textarea>
+    <div class="internal-note-editor-actions">
+      <button type="button" class="internal-note-save">Сохранить</button>
+      <button type="button" class="internal-note-cancel">Отмена</button>
+    </div>
+  `;
+  if (textEl) {
+    textEl.classList.add('hidden');
+    textEl.after(editor);
+  } else {
+    item.appendChild(editor);
+  }
+  const textarea = editor.querySelector('textarea');
+  const saveBtn = editor.querySelector('.internal-note-save');
+  const cancelBtn = editor.querySelector('.internal-note-cancel');
+  textarea?.focus();
+  textarea?.setSelectionRange(textarea.value.length, textarea.value.length);
+  cancelBtn?.addEventListener('click', () => {
+    editor.remove();
+    textEl?.classList.remove('hidden');
+  });
+  saveBtn?.addEventListener('click', async () => {
+    await saveInternalNoteEdit(message, textarea?.value || '', saveBtn);
+  });
+}
+
+async function saveInternalNoteEdit(message, text, btn = null) {
+  if (!currentChatId || !message?.id) return;
+  const cleanText = String(text || '').trim();
+  if (!cleanText) return notify('Заметка не сохранена', 'Текст заметки не может быть пустым.');
+  if (btn) btn.disabled = true;
+  try {
+    await api(`/api/chats/${currentChatId}/notes/${message.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ text: cleanText }),
+    });
+    await openChat(currentChatId);
+    notify('Заметка обновлена');
+  } catch (err) {
+    notify('Заметка не сохранена', String(err.message || err));
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function deleteInternalNote(message) {
+  if (!currentChatId || !message?.id) return;
+  const confirmed = window.confirm('Удалить эту внутреннюю заметку?');
+  if (!confirmed) return;
+  try {
+    await api(`/api/chats/${currentChatId}/notes/${message.id}`, { method: 'DELETE' });
+    await openChat(currentChatId);
+    notify('Заметка удалена');
+  } catch (err) {
+    notify('Заметка не удалена', String(err.message || err));
   }
 }
 
@@ -1618,7 +1945,7 @@ function cleanMessageTextForDisplay(value, imageUrls = []) {
   return text.replace(/\n{3,}/g, '\n\n').trim();
 }
 
-function messageReceiptInfo(message) {
+function messageReceiptInfo(message, context = null) {
   if (!message || message.direction === 'internal') return null;
   if (message.raw && message.raw._crm_marketplace_attachment_sent) {
     return { icon: '✓✓', label: 'отправлено', read: false, title: 'Изображение отправлено в маркетплейс и сохранено в CRM' };
@@ -1628,9 +1955,12 @@ function messageReceiptInfo(message) {
   }
 
   if (message.direction === 'outbound') {
-    const state = outboundReceiptState(message);
+    const state = outboundReceiptState(message, context);
     if (state === 'read') {
-      return { icon: '✓✓', label: 'прочитано', read: true, title: 'Маркетплейс вернул признак прочтения клиентом' };
+      return { icon: '✓✓', label: 'прочитано', read: true, title: 'Маркетплейс вернул явный признак прочтения клиентом' };
+    }
+    if (state === 'read_inferred') {
+      return { icon: '✓✓', label: 'прочитано', read: true, title: 'Клиент написал после этого сообщения — считаем его прочитанным' };
     }
     if (state === 'delivered') {
       return { icon: '✓✓', label: 'доставлено', read: false, title: 'Маркетплейс подтвердил доставку сообщения' };
@@ -1659,6 +1989,47 @@ function statusLooks(value, positiveWords) {
   const normalized = String(value || '').trim().toLowerCase().replace(/[_\-\s]/g, '');
   if (!normalized) return false;
   return positiveWords.some(word => normalized.includes(word));
+}
+
+
+function messageMarketplace(message) {
+  const raw = message?.raw || {};
+  return String(
+    message?.marketplace
+    || raw.marketplace
+    || raw._crm_marketplace
+    || currentChat?.marketplace
+    || ''
+  ).trim().toLowerCase();
+}
+
+function scanCustomerReadSignal(value, depth = 0) {
+  if (!value || depth > 8) return false;
+  if (Array.isArray(value)) return value.some(v => scanCustomerReadSignal(v, depth + 1));
+  if (typeof value !== 'object') return false;
+
+  // These keys explicitly mean that the buyer/customer/client read the seller reply.
+  // Generic Ozon `is_read` is intentionally not included: in chat history it can
+  // describe seller-side/read-in-cabinet state and gives false “прочитано” badges.
+  const explicitReadKeys = new Set([
+    'readbycustomer', 'customerread', 'clientread', 'buyerread', 'readbybuyer',
+    'readbyclient', 'isreadbycustomer', 'isreadbybuyer', 'isreadbyclient',
+    'customerreadat', 'clientreadat', 'buyerreadat', 'readbycustomerat',
+    'readbybuyerat', 'readbyclientat', 'customerseenat', 'buyerseenat',
+  ]);
+  const explicitStatusKeys = new Set([
+    'customerreadstatus', 'clientreadstatus', 'buyerreadstatus',
+    'customerreceiptstatus', 'clientreceiptstatus', 'buyerreceiptstatus',
+  ]);
+  const readStatuses = ['read', 'seen', 'viewed', 'opened', 'прочитан'];
+
+  for (const [key, nested] of Object.entries(value)) {
+    const k = normalizeRawKey(key);
+    if (explicitReadKeys.has(k) && valueLooksTruthy(nested)) return true;
+    if (explicitStatusKeys.has(k) && statusLooks(nested, readStatuses)) return true;
+    if (scanCustomerReadSignal(nested, depth + 1)) return true;
+  }
+  return false;
 }
 
 function scanReceiptSignal(value, type, depth = 0) {
@@ -1700,15 +2071,26 @@ function scanReceiptSignal(value, type, depth = 0) {
   return false;
 }
 
-function outboundReceiptState(message) {
+function outboundReceiptState(message, context = null) {
   const raw = message.raw || {};
+  const marketplace = messageMarketplace(message);
   const status = String(message.delivery_status || message.status || '').toLowerCase();
-  if (message.read_at || message.customer_read_at || statusLooks(status, ['read', 'seen', 'viewed', 'opened', 'прочитан'])) return 'read';
+
+  // Ozon `is_read` from /v3/chat/history is not a reliable buyer-read receipt:
+  // it is also true for seller-side messages and can mean that the seller/account
+  // has the message in a read state. For Ozon we show “прочитано” only when there
+  // is an explicit buyer/customer signal or when the buyer replied after this
+  // outgoing message. The second rule is a safe inference: if the customer sent a
+  // later message in the same dialog, they necessarily opened the dialog after our reply.
+  if (message.customer_read_at || message.buyer_read_at || message.client_read_at || scanCustomerReadSignal(raw)) return 'read';
+  if (marketplace === 'ozon' && context?.hasInboundAfter?.(message)) return 'read_inferred';
+
+  if (marketplace !== 'ozon' && (message.read_at || statusLooks(status, ['read', 'seen', 'viewed', 'opened', 'прочитан']))) return 'read';
   if (message.delivered_at || statusLooks(status, ['delivered', 'sent', 'sended', 'success', 'ok', 'доставлен', 'отправлен'])) return 'delivered';
 
-  // Only outbound messages are scanned. This prevents inbound/customer statuses
-  // from being interpreted as read receipts for seller replies.
-  if (scanReceiptSignal(raw, 'read')) return 'read';
+  // Only use the broad raw scan for non-Ozon marketplaces. Ozon `is_read` is
+  // ambiguous and caused false “прочитано” badges for outgoing seller messages.
+  if (marketplace !== 'ozon' && scanReceiptSignal(raw, 'read')) return 'read';
   if (scanReceiptSignal(raw, 'delivered')) return 'delivered';
 
   // A marketplace message ID means the marketplace accepted the message even if
@@ -2365,43 +2747,242 @@ function renderTasks(tasks) {
   }
   for (const task of visibleTasks) {
     const item = document.createElement('div');
-    item.className = `task-card task-${task.status}`;
+    const statusClass = taskUiStatusClass(task.status);
+    const typeLabel = getTaskTypeLabel(task);
+    const fieldLabel = getTaskCustomFieldLabel(task);
+    const primaryText = getTaskPrimaryText(task);
+    const responsibleLabel = assigneeNameFromTask(task) || 'Не назначен';
+    const dueLabel = formatDateTime(task.due_at) || 'Без даты';
+    item.className = `task-card task-chat-card task-chat-status-${escapeHtml(statusClass)}`;
     item.dataset.taskCard = '1';
     item.innerHTML = `
-      <div class="task-card-head">
-        <strong>${escapeHtml(task.title)}</strong>
-        <span class="task-status task-status-${escapeHtml(task.status)}">${escapeHtml(taskStatusNames[task.status] || task.status)}</span>
+      <div class="task-chat-card-head">
+        <div class="task-chat-card-badges">
+          <span class="task-chat-pill task-chat-assignee">${escapeHtml(responsibleLabel)}</span>
+          <span class="task-chat-pill task-chat-status-pill task-chat-status-${escapeHtml(statusClass)}">${escapeHtml(taskUiStatusLabel(task.status))}</span>
+          <span class="task-chat-pill task-chat-type">${escapeHtml(typeLabel)}</span>
+        </div>
       </div>
-      ${task.description ? `<p class="task-description">${escapeHtml(task.description)}</p>` : ''}
-      <div class="task-edit-grid">
-        <label>Статус<select data-task-status>${taskStatusOptions(task.status)}</select></label>
-        <label>Исполнитель<select data-task-assignee>${assigneeOptions(task.assigned_user_id || '', true)}</select></label>
-        <label>Срок<input data-task-due type="datetime-local" value="${escapeHtml(datetimeLocalValue(task.due_at))}" /></label>
+      <div class="task-chat-summary">
+        <div class="task-chat-summary-line">
+          <span>Дата:</span>
+          <strong>${escapeHtml(dueLabel)}</strong>
+        </div>
+        <div class="task-chat-summary-line">
+          <span>${escapeHtml(fieldLabel)}:</span>
+          <p>${escapeHtml(primaryText)}</p>
+        </div>
       </div>
-      <div class="task-meta-line">Создана: ${escapeHtml(formatDateTime(task.created_at) || '—')}${task.completed_at ? ` · выполнена: ${escapeHtml(formatDateTime(task.completed_at))}` : ''}</div>
       <div class="task-comments">${renderTaskComments(task)}</div>
-      <textarea data-task-comment class="task-comment-input" placeholder="Добавить комментарий к задаче"></textarea>
-      <div class="task-actions">
-        <button class="small" data-task-card-button data-task-id="${task.id}" data-task-action="save">Сохранить</button>
-        <button class="small secondary" data-task-id="${task.id}" data-task-action="start">В работу</button>
-        <button class="small secondary" data-task-id="${task.id}" data-task-action="done">Выполнено</button>
-        <button class="small ghost" data-task-id="${task.id}" data-task-action="archive">В архив</button>
+      <div class="task-chat-card-actions">
+        <button class="task-chat-edit-btn" type="button" data-task-edit-toggle data-task-id="${escapeHtml(task.id)}">Изменить</button>
+      </div>
+      <div class="task-chat-edit-panel hidden" data-task-edit-panel>
+        <div class="task-edit-grid">
+          <label><span>Тип</span><select data-task-type data-current-task-type="${escapeHtml(task.task_type_id || '')}">${taskTypeOptions(task.task_type_id || '', true)}</select></label>
+          <label><span>Статус</span><select data-task-status>${taskStatusOptions(task.status)}</select></label>
+          <label><span>Ответственный</span><select data-task-assignee>${assigneeOptions(task.assigned_user_id || '', true)}</select></label>
+          <label><span>Дата</span><input data-task-due type="datetime-local" value="${escapeHtml(datetimeLocalValue(task.due_at))}" /></label>
+        </div>
+        <label class="task-chat-edit-title"><span>${escapeHtml(fieldLabel)}</span><textarea data-task-title>${escapeHtml(primaryText === '—' ? '' : primaryText)}</textarea></label>
+        <label class="task-chat-edit-comment"><span>Комментарий к изменению</span><textarea data-task-comment placeholder="Добавить комментарий к задаче"></textarea></label>
+        <div class="task-actions task-chat-edit-actions">
+          <button class="small task-save-btn" data-task-id="${escapeHtml(task.id)}" data-task-action="save" type="button">Сохранить</button>
+          <button class="small secondary" data-task-edit-cancel type="button">Отмена</button>
+          <button class="small secondary" data-task-id="${escapeHtml(task.id)}" data-task-action="start" type="button">В работу</button>
+          <button class="small ghost" data-task-id="${escapeHtml(task.id)}" data-task-action="archive" type="button">В архив</button>
+        </div>
       </div>
     `;
     bindTaskCardActions(item);
+    bindTaskChatEditToggle(item);
     box.appendChild(item);
   }
+}
+
+function bindTaskChatEditToggle(item) {
+  const toggle = item.querySelector('[data-task-edit-toggle]');
+  const panel = item.querySelector('[data-task-edit-panel]');
+  const cancel = item.querySelector('[data-task-edit-cancel]');
+  if (!toggle || !panel) return;
+  toggle.addEventListener('click', () => {
+    const isHidden = panel.classList.contains('hidden');
+    document.querySelectorAll('#tasksSection [data-task-edit-panel]').forEach(otherPanel => {
+      if (otherPanel !== panel) otherPanel.classList.add('hidden');
+    });
+    document.querySelectorAll('#tasksSection [data-task-edit-toggle]').forEach(otherToggle => {
+      if (otherToggle !== toggle) otherToggle.textContent = 'Изменить';
+    });
+    panel.classList.toggle('hidden', !isHidden);
+    toggle.textContent = isHidden ? 'Скрыть' : 'Изменить';
+  });
+  if (cancel) {
+    cancel.addEventListener('click', () => {
+      panel.classList.add('hidden');
+      toggle.textContent = 'Изменить';
+    });
+  }
+}
+
+function getTaskCustomFieldLabel(task) {
+  return String(
+    task?.field_label ||
+    task?.comment_label ||
+    task?.custom_field_label ||
+    task?.task_type?.field_label ||
+    task?.task_type?.comment_label ||
+    task?.task_type?.custom_field_label ||
+    task?.type_field_label ||
+    'Комментарий'
+  ).trim() || 'Комментарий';
+}
+
+function getTaskPrimaryText(task) {
+  return String(task?.title || task?.comment || task?.description || '').trim() || '—';
+}
+
+function getTaskTypeLabel(task) {
+  return String(
+    task?.task_type?.title ||
+    task?.task_type?.name ||
+    task?.task_type_name ||
+    task?.type_name ||
+    task?.type ||
+    task?.category ||
+    'Задача'
+  ).trim() || 'Задача';
+}
+
+function normalizeTaskStatus(status) {
+  const value = String(status || '').toLowerCase();
+  if (['in_progress', 'progress', 'working', 'work'].includes(value)) return 'in_progress';
+  if (['archived', 'archive', 'done', 'completed', 'cancelled', 'canceled'].includes(value)) return 'archive';
+  return 'open';
+}
+
+function taskUiStatusLabel(status) {
+  const normalized = normalizeTaskStatus(status);
+  if (normalized === 'in_progress') return 'В работе';
+  if (normalized === 'archive') return 'Архив';
+  return 'Новая';
+}
+
+function taskUiStatusClass(status) {
+  return normalizeTaskStatus(status);
+}
+
+const taskUiStatusOptions = [
+  { value: 'new', ui: 'open', label: 'Новая' },
+  { value: 'in_progress', ui: 'in_progress', label: 'В работе' },
+  { value: 'archived', ui: 'archive', label: 'Архив' },
+];
+
+function taskPatchStatusValue(status) {
+  const normalized = normalizeTaskStatus(status);
+  if (normalized === 'in_progress') return 'in_progress';
+  if (normalized === 'archive') return 'archived';
+  return 'new';
+}
+
+function closeTaskStatusMenus(exceptMenu = null) {
+  document.querySelectorAll('#tasksView .tasks-ref-status-menu').forEach(menu => {
+    if (menu !== exceptMenu) menu.classList.add('hidden');
+  });
+}
+
+function taskStatusMenuHtml(task) {
+  const current = normalizeTaskStatus(task?.status);
+  return taskUiStatusOptions.map(option => `
+    <button
+      class="tasks-ref-status-option ${option.ui === current ? 'active' : ''}"
+      type="button"
+      data-task-status-option="${escapeHtml(option.value)}"
+      role="menuitem"
+    >${escapeHtml(option.label)}</button>
+  `).join('');
+}
+
+function bindTaskBoardCardActions(item) {
+  const statusButton = item.querySelector('[data-task-status-pill]');
+  const statusMenu = item.querySelector('[data-task-status-menu]');
+  if (statusButton && statusMenu) {
+    statusButton.addEventListener('click', event => {
+      event.stopPropagation();
+      const willOpen = statusMenu.classList.contains('hidden');
+      closeTaskStatusMenus(statusMenu);
+      statusMenu.classList.toggle('hidden', !willOpen);
+      statusButton.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+    });
+    statusMenu.querySelectorAll('[data-task-status-option]').forEach(optionButton => {
+      optionButton.addEventListener('click', async event => {
+        event.stopPropagation();
+        const taskId = Number(statusButton.dataset.taskId || 0);
+        const nextStatus = optionButton.dataset.taskStatusOption;
+        if (!taskId || !nextStatus) return;
+        closeTaskStatusMenus();
+        statusButton.disabled = true;
+        optionButton.disabled = true;
+        try {
+          await patchTask(taskId, { status: nextStatus }, { refreshChat: false });
+          setStatus('Статус задачи обновлён');
+        } catch (err) {
+          notify('Не удалось изменить статус задачи', String(err.message || err));
+        } finally {
+          statusButton.disabled = false;
+          optionButton.disabled = false;
+        }
+      });
+    });
+  }
+}
+
+function taskMatchesDate(task, yyyyMmDd) {
+  if (!yyyyMmDd) return true;
+  const values = [task?.due_at, task?.created_at, task?.updated_at].filter(Boolean).map(String);
+  return values.some(value => value.startsWith(yyyyMmDd));
+}
+
+function updateTaskTypeFilterOptions(tasks) {
+  const select = $('taskTypeFilter');
+  if (!select) return;
+  const current = select.value || '';
+  const sourceLabels = Array.isArray(taskTypes) && taskTypes.length
+    ? taskTypes.filter(type => type.is_active !== false && type.is_active !== 0).map(type => type.title || type.name)
+    : (tasks || []).map(getTaskTypeLabel);
+  const labels = Array.from(new Set(sourceLabels.filter(Boolean).map(value => String(value).trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'ru'));
+  select.innerHTML = '<option value="">Тип задачи</option>' + labels.map(label => `<option value="${escapeHtml(label)}" ${label === current ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('');
+}
+
+function filterTasksForUi(tasks) {
+  const searchValue = ($('taskSearchInput')?.value || '').trim().toLowerCase();
+  const typeValue = $('taskTypeFilter')?.value || '';
+  const statusValue = $('taskStatusFilter')?.value || '';
+  const dateValue = $('taskDueDateFilter')?.value || '';
+  return (tasks || []).filter(task => {
+    const normalizedStatus = normalizeTaskStatus(task.status);
+    if (statusValue) {
+      const wanted = statusValue === 'archive' ? 'archive' : statusValue;
+      if (normalizedStatus !== wanted) return false;
+    }
+    if (typeValue && getTaskTypeLabel(task) !== typeValue) return false;
+    if (searchValue.length >= 3 && !getTaskPrimaryText(task).toLowerCase().includes(searchValue)) return false;
+    if (!taskMatchesDate(task, dateValue)) return false;
+    return true;
+  });
 }
 
 async function loadAllTasks() {
   const params = new URLSearchParams();
   const status = $('taskStatusFilter')?.value || '';
   const bucket = $('taskBucketFilter')?.value || 'active';
-  if (status) params.set('status', status);
+  if (status === 'archive') params.set('bucket', 'archive');
+  else if (status) params.set('status', status);
   else if (bucket === 'mine') { params.set('bucket', 'active'); params.set('mine', 'true'); }
   else if (bucket && bucket !== 'all') params.set('bucket', bucket);
   const tasks = await api(`/api/tasks?${params.toString()}`);
-  renderAllTasks(tasks);
+  window.lastLoadedTasks = tasks;
+  updateTaskTypeFilterOptions(tasks);
+  renderAllTasks(filterTasksForUi(tasks));
 }
 
 function renderAllTasks(tasks) {
@@ -2409,57 +2990,91 @@ function renderAllTasks(tasks) {
   if (!box) return;
   box.innerHTML = '';
   if (!tasks.length) {
-    box.innerHTML = '<div class="empty-card">Задач пока нет.</div>';
+    box.innerHTML = '<div class="tasks-ref-empty">Задач пока нет.</div>';
     return;
   }
   for (const task of tasks) {
     const item = document.createElement('article');
-    item.className = `all-task-card task-${task.status}`;
+    const statusClass = taskUiStatusClass(task.status);
+    item.className = `tasks-ref-card tasks-ref-status-${escapeHtml(statusClass)}`;
     item.dataset.taskCard = '1';
+    const typeLabel = getTaskTypeLabel(task);
+    const fieldLabel = getTaskCustomFieldLabel(task);
+    const clientLabel = customerLabel(task) || task.customer_id || task.external_chat_id || `ID ${task.chat_id || task.id || ''}`.trim();
+    const primaryText = getTaskPrimaryText(task);
+    const responsibleLabel = assigneeNameFromTask(task) || 'Не назначен';
     item.innerHTML = `
-      <div class="task-main-block">
-        <div class="task-card-head">
-          <strong>${escapeHtml(task.title)}</strong>
-          <span class="task-status task-status-${escapeHtml(task.status)}">${escapeHtml(taskStatusNames[task.status] || task.status)}</span>
-        </div>
-        ${task.description ? `<p class="task-description">${escapeHtml(task.description)}</p>` : ''}
-        <p class="task-context">${escapeHtml(customerLabel(task))} · ${escapeHtml(marketplaceNames[task.marketplace] || task.marketplace)}${assigneeNameFromTask(task) ? ' · исполнитель: ' + escapeHtml(assigneeNameFromTask(task)) : ''}</p>
-        <div class="task-edit-grid compact">
-          <label>Статус<select data-task-status>${taskStatusOptions(task.status)}</select></label>
-          <label>Исполнитель<select data-task-assignee>${assigneeOptions(task.assigned_user_id || '', true)}</select></label>
-          <label>Срок<input data-task-due type="datetime-local" value="${escapeHtml(datetimeLocalValue(task.due_at))}" /></label>
-        </div>
-        <div class="task-meta-line">Создана: ${escapeHtml(formatDateTime(task.created_at) || '—')}${task.completed_at ? ` · выполнена: ${escapeHtml(formatDateTime(task.completed_at))}` : ''}${task.archived_at ? ` · архив: ${escapeHtml(formatDateTime(task.archived_at))}` : ''}</div>
-        <div class="task-comments">${renderTaskComments(task)}</div>
-        <textarea data-task-comment class="task-comment-input" placeholder="Добавить комментарий"></textarea>
+      <div class="tasks-ref-client">
+        <span class="tasks-ref-field-title">Клиент</span>
+        <span class="tasks-ref-field-value">${escapeHtml(clientLabel || '—')}</span>
       </div>
-      <div class="task-actions task-actions-column">
-        <button class="small" data-task-id="${task.id}" data-task-action="save">Сохранить</button>
-        <button class="small secondary" data-task-id="${task.id}" data-task-action="start">В работу</button>
-        <button class="small secondary" data-task-id="${task.id}" data-task-action="done">Выполнено</button>
-        <button class="small ghost" data-task-id="${task.id}" data-task-action="archive">В архив</button>
-        <button class="small ghost" data-open-chat="${task.chat_id}">Открыть чат</button>
+      <div class="tasks-ref-assignee">
+        <span class="tasks-ref-field-title">Ответственный</span>
+        <span class="tasks-ref-field-value">${escapeHtml(responsibleLabel)}</span>
+      </div>
+      <div class="tasks-ref-comment">
+        <span class="tasks-ref-field-title">${escapeHtml(fieldLabel)}</span>
+        <span class="tasks-ref-field-value">${escapeHtml(primaryText)}</span>
+      </div>
+      <div class="tasks-ref-side">
+        <div class="tasks-ref-badges">
+          <span class="tasks-ref-pill tasks-ref-type">${escapeHtml(typeLabel)}</span>
+          <div class="tasks-ref-status-wrap">
+            <button
+              class="tasks-ref-pill tasks-ref-status-pill tasks-ref-status-pill-${escapeHtml(statusClass)}"
+              type="button"
+              data-task-status-pill
+              data-task-id="${escapeHtml(task.id)}"
+              aria-haspopup="menu"
+              aria-expanded="false"
+              title="Изменить статус задачи"
+            >${escapeHtml(taskUiStatusLabel(task.status))}</button>
+            <div class="tasks-ref-status-menu hidden" data-task-status-menu role="menu">
+              ${taskStatusMenuHtml(task)}
+            </div>
+          </div>
+        </div>
+        ${task.chat_id ? `<button class="tasks-ref-chat-btn" type="button" data-open-chat="${escapeHtml(task.chat_id)}">в чат <span aria-hidden="true">→</span></button>` : ''}
       </div>
     `;
-    bindTaskCardActions(item);
+    bindTaskBoardCardActions(item);
     const openBtn = item.querySelector('[data-open-chat]');
     if (openBtn) {
-      openBtn.onclick = async () => {
+      openBtn.addEventListener('click', async () => {
+        closeTaskStatusMenus();
         showView('chats');
         await loadChats();
         await openChat(Number(openBtn.dataset.openChat));
-      };
+      });
     }
     box.appendChild(item);
   }
 }
 
 
+document.addEventListener('click', event => {
+  if (!event.target.closest?.('#tasksView .tasks-ref-status-wrap')) closeTaskStatusMenus();
+});
+
+
+function closeActiveExtraPanel() {
+  activeExtraPanel = '';
+  const panel = $('extraPanel');
+  if (panel) {
+    panel.classList.add('hidden');
+    panel.classList.remove('tasks-panel-open', 'note-panel-open', 'customer-panel-open');
+  }
+  $('tasksSection')?.classList.add('hidden');
+  $('noteSection')?.classList.add('hidden');
+  $('customerSection')?.classList.add('hidden');
+}
+
 function toggleExtraMenu(force) {
   const menu = $('extraMenu');
   const btn = $('extraMenuBtn');
   if (!menu) return;
   const shouldOpen = typeof force === 'boolean' ? force : menu.classList.contains('hidden');
+  if (shouldOpen && activeExtraPanel) closeActiveExtraPanel();
   menu.classList.toggle('hidden', !shouldOpen);
   if (btn) btn.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
 }
@@ -2467,7 +3082,12 @@ function toggleExtraMenu(force) {
 function showExtraPanel(panelName) {
   activeExtraPanel = activeExtraPanel === panelName ? '' : panelName;
   const panel = $('extraPanel');
-  panel?.classList.toggle('hidden', !activeExtraPanel);
+  if (panel) {
+    panel.classList.toggle('hidden', !activeExtraPanel);
+    panel.classList.toggle('tasks-panel-open', activeExtraPanel === 'tasks');
+    panel.classList.toggle('note-panel-open', activeExtraPanel === 'note');
+    panel.classList.toggle('customer-panel-open', activeExtraPanel === 'customer');
+  }
   $('tasksSection')?.classList.toggle('hidden', activeExtraPanel !== 'tasks');
   $('noteSection')?.classList.toggle('hidden', activeExtraPanel !== 'note');
   $('customerSection')?.classList.toggle('hidden', activeExtraPanel !== 'customer');
@@ -3209,12 +3829,17 @@ function showView(view, options = {}) {
   }
 
   if (normalizedView === 'analytics') loadAnalytics().catch(err => notify('Ошибка загрузки аналитики', String(err.message || err)));
-  if (normalizedView === 'tasks') loadAllTasks().catch(err => notify('Ошибка загрузки задач', String(err.message || err)));
+  if (normalizedView === 'tasks') {
+    loadTaskTypes({ silent: true }).finally(() => loadAllTasks()).catch(err => notify('Ошибка загрузки задач', String(err.message || err)));
+  }
   if (normalizedView === 'reviews') loadReviews().catch(err => notify('Ошибка загрузки отзывов', String(err.message || err)));
   if (normalizedView === 'questions') { loadQuestions().catch(err => notify('Ошибка загрузки вопросов', String(err.message || err))); runFrontendQuestionsSyncSoon('show-questions'); }
   if (normalizedView === 'knowledge') loadKnowledge().catch(err => notify('Ошибка загрузки базы знаний', String(err.message || err)));
   if (normalizedView === 'users') loadUsers().catch(err => notify('Ошибка загрузки сотрудников', String(err.message || err)));
-  if (normalizedView === 'techSettings') loadChatSettings({ keepValues: true }).catch(err => notify('Ошибка загрузки тех. настроек', String(err.message || err)));
+  if (normalizedView === 'techSettings') {
+    loadChatSettings({ keepValues: true }).catch(err => notify('Ошибка загрузки тех. настроек', String(err.message || err)));
+    loadTaskTypes({ silent: true });
+  }
   if (normalizedView === 'profile') fillProfileForm();
   if (normalizedView === 'chats') runFrontendSyncSoon('show-chats');
 }
@@ -3743,6 +4368,7 @@ function init() {
   activeView = getInitialRouteView();
   document.body.dataset.activeView = activeView || 'chats';
   loadChatSettings({ keepValues: true }).catch(err => console.warn('chat settings init failed', err));
+  loadTaskTypes({ silent: true }).catch(err => console.warn('task types init failed', err));
   bind('refreshBtn', 'click', async () => {
     await runFrontendOzonFastSync({ silent: false, force: true });
     await refreshVisibleData();
@@ -3754,6 +4380,12 @@ function init() {
   bind('chatScopeSelect', 'change', handleChatScopeSelectChange);
   bind('taskStatusFilter', 'change', loadAllTasks);
   bind('taskBucketFilter', 'change', loadAllTasks);
+  bind('taskTypeFilter', 'change', loadAllTasks);
+  bind('taskDueDateFilter', 'change', loadAllTasks);
+  bind('taskSearchInput', 'input', () => {
+    clearTimeout(taskSearchTimer);
+    taskSearchTimer = setTimeout(loadAllTasks, 220);
+  });
   bind('navChats', 'click', () => showView('chats'));
   bind('navAnalytics', 'click', () => showView('analytics'));
   bind('navTasks', 'click', () => showView('tasks'));
@@ -3865,6 +4497,13 @@ function init() {
   }
   $('chatFunnelsList')?.addEventListener('click', handleChatFunnelListClick);
   $('chatStatusesList')?.addEventListener('click', handleChatStatusListClick);
+  const taskTypeForm = $('taskTypeForm');
+  if (taskTypeForm && !taskTypeForm.dataset.bound) {
+    taskTypeForm.dataset.bound = '1';
+    taskTypeForm.addEventListener('submit', submitTaskTypeCreate);
+  }
+  $('taskTypesSettingsList')?.addEventListener('click', handleTaskTypeSettingsClick);
+  $('taskTypesSettingsList')?.addEventListener('change', handleTaskTypeSettingsChange);
   bind('saveChatSettingsBtn', 'click', saveAllChatStatuses);
   bind('saveChatSettingsBottomBtn', 'click', saveAllChatStatuses);
   bind('extraMenuBtn', 'click', (event) => {
@@ -4000,20 +4639,22 @@ function init() {
         body: JSON.stringify({
           chat_id: currentChatId,
           title,
-          assigned_user_id: $('taskAssignee').value ? Number($('taskAssignee').value) : null,
-          due_at: $('taskDueAt').value || null,
-          description: $('taskDescription')?.value || null,
+          task_type_id: $('taskTypeSelect')?.value ? Number($('taskTypeSelect').value) : null,
+          assigned_user_id: $('taskAssignee')?.value ? Number($('taskAssignee').value) : null,
+          due_at: $('taskDueAt')?.value || null,
         }),
       });
       $('taskTitle').value = '';
+      if ($('taskTypeSelect')) $('taskTypeSelect').value = '';
       if ($('taskAssignee')) $('taskAssignee').value = '';
-      $('taskDueAt').value = '';
-      if ($('taskDescription')) $('taskDescription').value = '';
+      if ($('taskDueAt')) $('taskDueAt').value = '';
+      updateTaskCreateCommentLabel();
       await openChat(currentChatId);
       await loadAllTasks();
       await loadStats();
     });
   }
+  bind('taskTypeSelect', 'change', updateTaskCreateCommentLabel);
 
 
   bind('knowledgeNewArticleBtn', 'click', resetKnowledgeEditor);

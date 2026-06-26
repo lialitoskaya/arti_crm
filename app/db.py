@@ -69,12 +69,23 @@ def init_db() -> None:
                 FOREIGN KEY(chat_id) REFERENCES chats(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS task_types (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                comment_label TEXT NOT NULL DEFAULT 'Комментарий',
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE TABLE IF NOT EXISTS tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 chat_id INTEGER NOT NULL,
+                task_type_id INTEGER,
                 title TEXT NOT NULL,
                 description TEXT,
-                status TEXT NOT NULL DEFAULT 'open',
+                status TEXT NOT NULL DEFAULT 'new',
                 assignee TEXT,
                 assigned_user_id INTEGER,
                 due_at TEXT,
@@ -82,7 +93,8 @@ def init_db() -> None:
                 archived_at TEXT,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY(chat_id) REFERENCES chats(id) ON DELETE CASCADE
+                FOREIGN KEY(chat_id) REFERENCES chats(id) ON DELETE CASCADE,
+                FOREIGN KEY(task_type_id) REFERENCES task_types(id) ON DELETE SET NULL
             );
 
             CREATE TABLE IF NOT EXISTS task_comments (
@@ -203,6 +215,22 @@ def init_db() -> None:
             conn.execute("ALTER TABLE tasks ADD COLUMN completed_at TEXT")
         if "archived_at" not in task_columns:
             conn.execute("ALTER TABLE tasks ADD COLUMN archived_at TEXT")
+        if "task_type_id" not in task_columns:
+            conn.execute("ALTER TABLE tasks ADD COLUMN task_type_id INTEGER")
+
+        task_type_columns = _columns("task_types")
+        if "comment_label" not in task_type_columns:
+            conn.execute("ALTER TABLE task_types ADD COLUMN comment_label TEXT NOT NULL DEFAULT 'Комментарий'")
+        if "sort_order" not in task_type_columns:
+            conn.execute("ALTER TABLE task_types ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+        if "is_active" not in task_type_columns:
+            conn.execute("ALTER TABLE task_types ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
+        existing_task_types = conn.execute("SELECT COUNT(*) AS c FROM task_types").fetchone()["c"]
+        if not existing_task_types:
+            conn.execute(
+                "INSERT INTO task_types (title, comment_label, sort_order, is_active) VALUES (?, ?, ?, 1)",
+                ("Общая", "Комментарий", 0),
+            )
 
 
         chat_columns = _columns("chats")
@@ -438,6 +466,10 @@ def init_db() -> None:
                 ON notifications(chat_id);
             CREATE INDEX IF NOT EXISTS idx_notifications_task
                 ON notifications(task_id);
+            CREATE INDEX IF NOT EXISTS idx_tasks_status_type
+                ON tasks(status, task_type_id);
+            CREATE INDEX IF NOT EXISTS idx_task_types_active_sort
+                ON task_types(is_active, sort_order, title);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_dedupe
                 ON notifications(dedupe_key) WHERE dedupe_key IS NOT NULL AND dedupe_key != '';
             CREATE INDEX IF NOT EXISTS idx_reply_templates_active_sort

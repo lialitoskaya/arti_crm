@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 Marketplace = Literal["ozon", "yandex", "wildberries", "mock"]
 ChatStatus = str
-TaskStatus = Literal["open", "in_progress", "done", "cancelled", "archived"]
+TaskStatus = Literal["new", "open", "in_progress", "archived", "done", "cancelled"]
 MessageDirection = Literal["inbound", "outbound", "internal"]
 
 
@@ -72,10 +72,15 @@ class InternalNoteCreate(BaseModel):
     author: str | None = "manager"
 
 
+class InternalNoteUpdate(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+
+
 class TaskCreate(BaseModel):
     chat_id: int
     title: str = Field(min_length=1, max_length=250)
     description: str | None = None
+    task_type_id: int | None = None
     assignee: str | None = None
     assigned_user_id: int | None = None
     due_at: str | None = None
@@ -84,12 +89,26 @@ class TaskCreate(BaseModel):
 class TaskUpdate(BaseModel):
     title: str | None = None
     description: str | None = None
+    task_type_id: int | None = None
     status: TaskStatus | None = None
     assignee: str | None = None
     assigned_user_id: int | None = None
     due_at: str | None = None
     comment: str | None = Field(default=None, max_length=2000)
     comment_author: str | None = Field(default="manager", max_length=120)
+
+
+class TaskTypeCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    comment_label: str = Field(default="Комментарий", min_length=1, max_length=80)
+    sort_order: int = 0
+
+
+class TaskTypeUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=120)
+    comment_label: str | None = Field(default=None, min_length=1, max_length=80)
+    sort_order: int | None = None
+    is_active: bool | None = None
 
 
 class ReviewReplyCreate(BaseModel):

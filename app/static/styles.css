@@ -7985,7 +7985,11 @@ button#saveChatSettingsBottomBtn.crm-light-btn {
 }
 
 #messageForm #replyTemplatesToggleBtn.composer-template-btn {
+<<<<<<< HEAD
   grid-column: 1 !important;
+=======
+  grid-column: 2 !important;
+>>>>>>> 1de50c7 (Improve CRM task workflow, chat notes, and composer UI)
   width: 30px !important;
   min-width: 30px !important;
   max-width: 30px !important;
@@ -8189,3 +8193,2781 @@ button#saveChatSettingsBottomBtn.crm-light-btn {
     display: none !important;
   }
 }
+<<<<<<< HEAD
+=======
+
+/* v104 tasks visual phase 1: scoped redesign only, no global navigation/layout overrides */
+#tasksView.tasks-redesign-page {
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 24px 24px;
+  overflow: hidden;
+  background: transparent;
+}
+#tasksView.tasks-redesign-page.hidden {
+  display: none !important;
+}
+#tasksView .tasks-ref-toolbar {
+  width: 100%;
+  min-height: 58px;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: auto 20px minmax(160px, 1fr) minmax(120px, 150px) minmax(112px, 132px) 32px;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 24px 12px 28px;
+  border: 1px solid rgba(32, 41, 57, .08);
+  border-radius: 16px;
+  background: rgba(255,255,255,.96);
+  box-shadow: 0 8px 18px rgba(31, 41, 55, .10);
+}
+#tasksView .tasks-ref-toolbar h2 {
+  margin: 0 86px 0 0;
+  font-size: 20px;
+  line-height: 1.1;
+  font-weight: 500;
+  letter-spacing: -.035em;
+  color: #111827;
+  white-space: nowrap;
+}
+#tasksView .tasks-ref-search {
+  display: contents;
+}
+#tasksView .tasks-ref-search svg,
+#tasksView .tasks-ref-date svg {
+  width: 18px;
+  height: 18px;
+  stroke: #111827;
+  stroke-width: 1.8;
+  fill: none;
+  flex: 0 0 auto;
+}
+#tasksView .tasks-ref-search input {
+  width: 100%;
+  min-width: 0;
+  height: 26px;
+  padding: 0 14px;
+  border: 1px solid #8b9098;
+  border-radius: 8px;
+  background: #fff;
+  color: #111827;
+  font-size: 12px;
+  box-shadow: none;
+}
+#tasksView .tasks-ref-search input::placeholder {
+  color: #6b7280;
+  opacity: 1;
+}
+#tasksView .tasks-ref-select {
+  width: 100%;
+  height: 30px;
+  min-height: 30px;
+  padding: 0 32px 0 14px;
+  border: 1px solid #8b9098;
+  border-radius: 10px;
+  background-color: #fff;
+  color: #111827;
+  font-size: 14px;
+  box-shadow: none;
+}
+#tasksView .tasks-ref-date {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  border-radius: 8px;
+}
+#tasksView .tasks-ref-date:hover {
+  background: rgba(255,122,61,.08);
+}
+#tasksView .tasks-ref-date input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  opacity: 0;
+  cursor: pointer;
+  padding: 0;
+  border: 0;
+}
+#tasksView .tasks-ref-list {
+  width: 100%;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 0 16px;
+}
+#tasksView .tasks-ref-card {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 78px;
+  display: grid;
+  grid-template-columns: minmax(130px, 170px) minmax(220px, 1fr) minmax(150px, 190px);
+  align-items: start;
+  gap: 24px;
+  padding: 13px 14px 10px 34px;
+  border: 1px solid rgba(32, 41, 57, .06);
+  border-radius: 14px;
+  background: rgba(255,255,255,.98);
+  box-shadow: 0 5px 14px rgba(31, 41, 55, .09);
+}
+#tasksView .tasks-ref-client,
+#tasksView .tasks-ref-comment {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+#tasksView .tasks-ref-field-title {
+  display: block;
+  color: #111827;
+  font-size: 14px;
+  line-height: 1.2;
+  font-weight: 400;
+  white-space: nowrap;
+}
+#tasksView .tasks-ref-field-value {
+  display: block;
+  min-width: 0;
+  color: #374151;
+  font-size: 13px;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#tasksView .tasks-ref-side {
+  min-width: 0;
+  display: grid;
+  gap: 28px;
+  justify-items: end;
+  align-content: start;
+}
+#tasksView .tasks-ref-badges {
+  width: 100%;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+#tasksView .tasks-ref-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 17px;
+  min-width: 78px;
+  max-width: 105px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid #9ca3af;
+  background: #fff;
+  color: #111827;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: none;
+}
+#tasksView .tasks-ref-status-pill-open {
+  border-color: #75a86a;
+  color: #234d20;
+}
+#tasksView .tasks-ref-status-pill-in_progress {
+  border-color: #60b5e9;
+  color: #0284c7;
+}
+#tasksView .tasks-ref-status-pill-archive {
+  border-color: #c7cdd6;
+  color: #4b5563;
+}
+#tasksView .tasks-ref-chat-btn {
+  height: 18px;
+  min-height: 18px;
+  padding: 0 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 999px;
+  background: #fff;
+  color: #111827;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1;
+  box-shadow: none;
+}
+#tasksView .tasks-ref-chat-btn:hover {
+  transform: none;
+  border-color: rgba(255,122,61,.55);
+  color: #ff6b35;
+  background: rgba(255,247,242,.9);
+}
+#tasksView .tasks-ref-empty {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 24px;
+  border-radius: 14px;
+  border: 1px solid rgba(32, 41, 57, .06);
+  background: rgba(255,255,255,.82);
+  color: #6b7280;
+  text-align: center;
+  box-shadow: 0 5px 14px rgba(31, 41, 55, .06);
+}
+@media (max-width: 980px) {
+  #tasksView.tasks-redesign-page {
+    padding: 14px;
+  }
+  #tasksView .tasks-ref-toolbar {
+    grid-template-columns: 1fr 20px minmax(150px, 1fr) 32px;
+    gap: 10px;
+    padding: 12px 14px;
+  }
+  #tasksView .tasks-ref-toolbar h2 {
+    margin-right: 0;
+  }
+  #tasksView .tasks-ref-select {
+    grid-column: span 2;
+  }
+  #tasksView .tasks-ref-card {
+    grid-template-columns: minmax(100px, 150px) minmax(0, 1fr);
+    padding-left: 18px;
+  }
+  #tasksView .tasks-ref-side {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+}
+@media (max-width: 640px) {
+  #tasksView .tasks-ref-toolbar {
+    grid-template-columns: 1fr 32px;
+  }
+  #tasksView .tasks-ref-search {
+    display: grid;
+    grid-template-columns: 20px minmax(0, 1fr);
+    grid-column: 1 / -1;
+    align-items: center;
+    gap: 8px;
+  }
+  #tasksView .tasks-ref-select {
+    grid-column: 1 / -1;
+  }
+  #tasksView .tasks-ref-date {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+  }
+  #tasksView .tasks-ref-card {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  #tasksView .tasks-ref-side {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  #tasksView .tasks-ref-badges {
+    justify-content: flex-start;
+  }
+  #tasksView .tasks-ref-chat-btn {
+    width: fit-content;
+    justify-self: end;
+    align-self: flex-end;
+  }
+}
+
+/* v105 tasks visual badges/button proportions: scoped only */
+#tasksView .tasks-ref-badges {
+  align-items: center !important;
+  gap: 12px !important;
+}
+
+#tasksView .tasks-ref-pill {
+  height: 24px !important;
+  min-height: 24px !important;
+  min-width: 78px !important;
+  max-width: 128px !important;
+  padding: 0 14px !important;
+  border-radius: 999px !important;
+  background: #ffffff !important;
+  font-size: 12px !important;
+  font-weight: 400 !important;
+  line-height: 22px !important;
+  box-sizing: border-box !important;
+  box-shadow: none !important;
+}
+
+#tasksView .tasks-ref-type {
+  border: 1px solid #3f3f46 !important;
+  color: #111827 !important;
+}
+
+#tasksView .tasks-ref-status-pill-open {
+  border: 1px solid #72a866 !important;
+  color: #275b24 !important;
+}
+
+#tasksView .tasks-ref-status-pill-in_progress {
+  border: 1px solid #63b9e8 !important;
+  color: #0284c7 !important;
+}
+
+#tasksView .tasks-ref-status-pill-archive {
+  border: 1px solid #aeb6c2 !important;
+  color: #374151 !important;
+}
+
+#tasksView .tasks-ref-chat-btn,
+#tasksView button.tasks-ref-chat-btn {
+  height: 24px !important;
+  min-height: 24px !important;
+  padding: 0 14px !important;
+  border: 1px solid #d8d8d8 !important;
+  border-radius: 999px !important;
+  background: #ffffff !important;
+  color: #111827 !important;
+  font-size: 13px !important;
+  font-weight: 400 !important;
+  line-height: 22px !important;
+  box-sizing: border-box !important;
+  box-shadow: none !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 7px !important;
+}
+
+#tasksView .tasks-ref-chat-btn:hover,
+#tasksView button.tasks-ref-chat-btn:hover {
+  transform: none !important;
+  border-color: #ff9a6a !important;
+  background: #fff7f2 !important;
+  color: #ff6b35 !important;
+  box-shadow: none !important;
+}
+
+#tasksView .tasks-ref-side {
+  gap: 26px !important;
+}
+
+@media (max-width: 720px) {
+  #tasksView .tasks-ref-badges {
+    gap: 8px !important;
+  }
+
+  #tasksView .tasks-ref-pill,
+  #tasksView .tasks-ref-chat-btn,
+  #tasksView button.tasks-ref-chat-btn {
+    height: 23px !important;
+    min-height: 23px !important;
+    line-height: 21px !important;
+    padding: 0 12px !important;
+  }
+}
+
+/* v106 tasks responsible field + clickable status, scoped only */
+#tasksView .tasks-ref-card {
+  grid-template-columns: minmax(120px, 150px) minmax(130px, 165px) minmax(220px, 1fr) minmax(150px, 190px) !important;
+}
+
+#tasksView .tasks-ref-client,
+#tasksView .tasks-ref-assignee,
+#tasksView .tasks-ref-comment {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+#tasksView .tasks-ref-status-wrap {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+}
+
+#tasksView button.tasks-ref-status-pill {
+  cursor: pointer !important;
+  appearance: none !important;
+  -webkit-appearance: none !important;
+}
+
+#tasksView button.tasks-ref-status-pill:hover {
+  transform: none !important;
+  background: #fff7f2 !important;
+  border-color: #ff9a6a !important;
+  color: #ff6b35 !important;
+  box-shadow: none !important;
+}
+
+#tasksView button.tasks-ref-status-pill:disabled {
+  opacity: .58 !important;
+  cursor: wait !important;
+}
+
+#tasksView .tasks-ref-status-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 128px;
+  padding: 5px;
+  border: 1px solid rgba(17, 24, 39, .12);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 12px 28px rgba(17, 24, 39, .16);
+}
+
+#tasksView .tasks-ref-status-option,
+#tasksView button.tasks-ref-status-option {
+  width: 100%;
+  min-height: 28px;
+  height: 28px;
+  padding: 0 10px;
+  border: 0 !important;
+  border-radius: 9px;
+  background: #fff !important;
+  color: #111827 !important;
+  box-shadow: none !important;
+  font-size: 12px;
+  line-height: 1;
+  text-align: left;
+  justify-content: flex-start;
+  display: flex;
+  align-items: center;
+}
+
+#tasksView .tasks-ref-status-option:hover,
+#tasksView button.tasks-ref-status-option:hover {
+  transform: none !important;
+  background: #fff2ea !important;
+  color: #ff6b35 !important;
+}
+
+#tasksView .tasks-ref-status-option.active,
+#tasksView button.tasks-ref-status-option.active {
+  background: #fff7f2 !important;
+  color: #ff6b35 !important;
+  font-weight: 600;
+}
+
+@media (max-width: 1120px) {
+  #tasksView .tasks-ref-card {
+    grid-template-columns: minmax(110px, 150px) minmax(120px, 160px) minmax(0, 1fr) !important;
+  }
+  #tasksView .tasks-ref-side {
+    grid-column: 1 / -1;
+    display: flex !important;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px !important;
+  }
+}
+
+@media (max-width: 720px) {
+  #tasksView .tasks-ref-card {
+    grid-template-columns: 1fr !important;
+  }
+  #tasksView .tasks-ref-status-menu {
+    right: auto;
+    left: 0;
+  }
+}
+
+/* Task type settings: scoped to technical settings only */
+#techSettingsView .task-type-settings-card {
+  display: grid;
+  gap: 14px;
+}
+
+#techSettingsView .task-type-create-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.1fr) minmax(180px, 1.1fr) 100px auto;
+  gap: 10px;
+  align-items: center;
+}
+
+#techSettingsView .task-type-create-form input {
+  min-width: 0;
+  height: 38px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 14px;
+  background: #fff;
+  padding: 0 12px;
+  color: #1f2937;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+#techSettingsView .task-type-settings-header,
+#techSettingsView .task-type-settings-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1.1fr) minmax(160px, 1.1fr) 90px 110px auto;
+  gap: 10px;
+  align-items: center;
+}
+
+#techSettingsView .task-type-settings-header {
+  color: #64748b;
+  font-size: 12px;
+  padding: 0 8px;
+}
+
+#techSettingsView .task-type-settings-list {
+  display: grid;
+  gap: 8px;
+}
+
+#techSettingsView .task-type-settings-row {
+  padding: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
+}
+
+#techSettingsView .task-type-settings-row input[type="text"],
+#techSettingsView .task-type-settings-row input:not([type]),
+#techSettingsView .task-type-title-input,
+#techSettingsView .task-type-label-input,
+#techSettingsView .task-type-sort-input {
+  min-width: 0;
+  width: 100%;
+  height: 34px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 12px;
+  background: #fff;
+  padding: 0 10px;
+  color: #1f2937;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+#techSettingsView .task-type-active-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #475569;
+  white-space: nowrap;
+}
+
+#techSettingsView .task-type-active-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: #ff7a45;
+}
+
+#techSettingsView .task-type-settings-actions {
+  display: inline-flex;
+  justify-content: flex-end;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+#techSettingsView .task-type-save-btn,
+#techSettingsView .task-type-delete-btn,
+#techSettingsView button.task-type-save-btn,
+#techSettingsView button.task-type-delete-btn {
+  min-height: 30px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1;
+}
+
+#techSettingsView .task-type-delete-btn,
+#techSettingsView button.task-type-delete-btn {
+  border-color: rgba(248, 113, 113, 0.35);
+  color: #b91c1c;
+  background: #fff;
+}
+
+#techSettingsView .task-type-delete-btn:hover,
+#techSettingsView button.task-type-delete-btn:hover {
+  background: #fff5f5;
+  border-color: rgba(248, 113, 113, 0.55);
+}
+
+@media (max-width: 880px) {
+  #techSettingsView .task-type-create-form,
+  #techSettingsView .task-type-settings-header,
+  #techSettingsView .task-type-settings-row {
+    grid-template-columns: 1fr;
+  }
+
+  #techSettingsView .task-type-settings-header {
+    display: none;
+  }
+
+  #techSettingsView .task-type-settings-actions {
+    justify-content: flex-start;
+  }
+}
+
+/* v107 tasks/chat task form + tech settings width polish, scoped only */
+#tasksView .tasks-ref-card {
+  height: 100%;
+}
+
+#techSettingsView .tech-settings-hero,
+#techSettingsView .settings-card,
+#techSettingsView .chat-status-settings-card,
+#techSettingsView .task-type-settings-card {
+  width: min(100%, 980px) !important;
+  max-width: 980px !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
+  box-sizing: border-box !important;
+  height: auto !important;
+  min-height: 0 !important;
+  overflow: visible !important;
+}
+
+#techSettingsView .tech-settings-page {
+  display: grid !important;
+  gap: 16px !important;
+  align-items: start !important;
+  overflow: visible !important;
+}
+
+#techSettingsView .settings-card {
+  align-self: start !important;
+}
+
+#techSettingsView .task-type-settings-card {
+  padding: 20px !important;
+}
+
+#techSettingsView .task-type-create-form {
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+#techSettingsView .task-type-settings-row,
+#techSettingsView .task-type-settings-header {
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+#tasksSection .task-create-form-v2 {
+  display: grid !important;
+  grid-template-columns: minmax(140px, .9fr) minmax(150px, .9fr) minmax(180px, 1fr) auto !important;
+  gap: 8px !important;
+  align-items: stretch !important;
+}
+
+#tasksSection .task-create-form-v2 select,
+#tasksSection .task-create-form-v2 input,
+#tasksSection .task-create-form-v2 button {
+  min-width: 0 !important;
+  min-height: 38px !important;
+  height: 38px !important;
+  box-sizing: border-box !important;
+}
+
+#tasksSection .task-comment-create-field {
+  grid-column: 1 / -2 !important;
+  display: grid !important;
+  gap: 5px !important;
+  margin: 0 !important;
+  color: var(--muted) !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+}
+
+#tasksSection .task-comment-create-field span {
+  line-height: 1.15 !important;
+}
+
+#tasksSection .task-comment-create-field textarea {
+  width: 100% !important;
+  min-height: 54px !important;
+  max-height: 120px !important;
+  resize: vertical !important;
+  box-sizing: border-box !important;
+  font-size: 13px !important;
+  line-height: 1.35 !important;
+}
+
+#tasksSection .task-create-form-v2 > button[type="submit"] {
+  grid-column: auto !important;
+  align-self: end !important;
+  min-width: 96px !important;
+}
+
+#tasksSection .task-edit-grid {
+  grid-template-columns: repeat(4, minmax(105px, 1fr)) !important;
+}
+
+@media (max-width: 980px) {
+  #techSettingsView .tech-settings-hero,
+  #techSettingsView .settings-card,
+  #techSettingsView .chat-status-settings-card,
+  #techSettingsView .task-type-settings-card {
+    width: 100% !important;
+    max-width: none !important;
+  }
+
+  #tasksSection .task-create-form-v2,
+  #tasksSection .task-edit-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  #tasksSection .task-comment-create-field,
+  #tasksSection .task-create-form-v2 > button[type="submit"] {
+    grid-column: auto !important;
+  }
+}
+
+/* v108 — compact chat task cards + no dark buttons in tasks */
+#tasksSection .section-head {
+  align-items: center !important;
+  gap: 12px !important;
+}
+
+#tasksSection .section-head .link-btn,
+#tasksSection button.link-btn,
+#tasksSection [data-view="tasks"] {
+  min-height: 32px !important;
+  height: 32px !important;
+  padding: 0 12px !important;
+  border-radius: 999px !important;
+  background: #ffffff !important;
+  color: #2f3949 !important;
+  border: 1px solid rgba(34, 43, 58, 0.12) !important;
+  box-shadow: none !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+}
+
+#tasksSection .section-head .link-btn:hover,
+#tasksSection button.link-btn:hover,
+#tasksSection [data-view="tasks"]:hover {
+  background: #fff7f1 !important;
+  color: #ff7a45 !important;
+  border-color: rgba(255, 122, 69, 0.32) !important;
+}
+
+#tasksSection .task-chat-card {
+  display: grid !important;
+  gap: 12px !important;
+  padding: 16px !important;
+  border-radius: 18px !important;
+  background: #fff !important;
+  border: 1px solid rgba(34, 43, 58, 0.08) !important;
+  box-shadow: 0 10px 28px rgba(24, 34, 51, 0.06) !important;
+}
+
+#tasksSection .task-chat-card-head {
+  display: flex !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+  align-items: flex-start !important;
+}
+
+#tasksSection .task-chat-title-block {
+  min-width: 0 !important;
+  display: grid !important;
+  gap: 4px !important;
+}
+
+#tasksSection .task-chat-title-block strong {
+  color: #2f3949 !important;
+  font-size: 15px !important;
+  font-weight: 800 !important;
+  line-height: 1.25 !important;
+}
+
+#tasksSection .task-chat-title-block span,
+#tasksSection .task-meta-line {
+  color: #7f8898 !important;
+  font-size: 12px !important;
+  line-height: 1.3 !important;
+}
+
+#tasksSection .task-chat-card-badges,
+#tasksSection .task-chat-card-actions,
+#tasksSection .task-chat-edit-actions {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 8px !important;
+  align-items: center !important;
+}
+
+#tasksSection .task-chat-card-badges {
+  justify-content: flex-end !important;
+}
+
+#tasksSection .task-chat-pill {
+  min-height: 24px !important;
+  padding: 3px 12px !important;
+  border-radius: 999px !important;
+  border: 1px solid rgba(34, 43, 58, 0.13) !important;
+  background: #fff !important;
+  color: #2f3949 !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  line-height: 1.2 !important;
+  box-shadow: none !important;
+}
+
+#tasksSection .task-chat-type {
+  border-color: rgba(255, 122, 69, 0.28) !important;
+  color: #d95d24 !important;
+  background: #fff7f1 !important;
+}
+
+#tasksSection .task-chat-status-open,
+#tasksSection .task-chat-status-pill.task-chat-status-open {
+  border-color: rgba(96, 165, 250, 0.35) !important;
+  color: #0f75bc !important;
+  background: #f2f9ff !important;
+}
+
+#tasksSection .task-chat-status-in_progress,
+#tasksSection .task-chat-status-pill.task-chat-status-in_progress {
+  border-color: rgba(255, 183, 77, 0.42) !important;
+  color: #b66a00 !important;
+  background: #fff8e8 !important;
+}
+
+#tasksSection .task-chat-status-archive,
+#tasksSection .task-chat-status-pill.task-chat-status-archive {
+  border-color: rgba(148, 163, 184, 0.35) !important;
+  color: #64748b !important;
+  background: #f8fafc !important;
+}
+
+#tasksSection .task-chat-meta-grid {
+  display: grid !important;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  gap: 8px !important;
+}
+
+#tasksSection .task-chat-meta-cell {
+  min-width: 0 !important;
+  display: grid !important;
+  gap: 4px !important;
+  padding: 10px 12px !important;
+  border-radius: 14px !important;
+  background: #fbfcfe !important;
+  border: 1px solid rgba(34, 43, 58, 0.07) !important;
+}
+
+#tasksSection .task-chat-meta-cell span,
+#tasksSection .task-chat-comment span,
+#tasksSection .task-chat-edit-title span,
+#tasksSection .task-chat-edit-comment span {
+  color: #7f8898 !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  line-height: 1.2 !important;
+}
+
+#tasksSection .task-chat-meta-cell strong {
+  min-width: 0 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  color: #2f3949 !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  white-space: nowrap !important;
+}
+
+#tasksSection .task-chat-comment,
+#tasksSection .task-chat-edit-title,
+#tasksSection .task-chat-edit-comment {
+  display: grid !important;
+  gap: 6px !important;
+}
+
+#tasksSection .task-chat-comment p {
+  margin: 0 !important;
+  color: #2f3949 !important;
+  font-size: 13px !important;
+  line-height: 1.45 !important;
+}
+
+#tasksSection .task-chat-card-actions {
+  justify-content: flex-end !important;
+}
+
+#tasksSection .task-chat-edit-btn,
+#tasksSection button.task-chat-edit-btn,
+#tasksSection .task-chat-edit-actions .secondary,
+#tasksSection .task-chat-edit-actions .ghost,
+#tasksSection .task-chat-edit-actions button.secondary,
+#tasksSection .task-chat-edit-actions button.ghost {
+  min-height: 32px !important;
+  height: 32px !important;
+  padding: 0 13px !important;
+  border-radius: 999px !important;
+  background: #ffffff !important;
+  color: #2f3949 !important;
+  border: 1px solid rgba(34, 43, 58, 0.12) !important;
+  box-shadow: none !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+}
+
+#tasksSection .task-chat-edit-btn:hover,
+#tasksSection button.task-chat-edit-btn:hover,
+#tasksSection .task-chat-edit-actions .secondary:hover,
+#tasksSection .task-chat-edit-actions .ghost:hover {
+  background: #fff7f1 !important;
+  color: #ff7a45 !important;
+  border-color: rgba(255, 122, 69, 0.32) !important;
+}
+
+#tasksSection .task-save-btn,
+#tasksSection button.task-save-btn,
+#tasksSection .task-create-form-v2 > button[type="submit"] {
+  min-height: 34px !important;
+  height: 34px !important;
+  padding: 0 15px !important;
+  border-radius: 999px !important;
+  background: #ff7a45 !important;
+  color: #ffffff !important;
+  border: 1px solid #ff7a45 !important;
+  box-shadow: 0 8px 16px rgba(255, 122, 69, 0.20) !important;
+  font-size: 12px !important;
+  font-weight: 800 !important;
+}
+
+#tasksSection .task-save-btn:hover,
+#tasksSection button.task-save-btn:hover,
+#tasksSection .task-create-form-v2 > button[type="submit"]:hover {
+  background: #f36f38 !important;
+  border-color: #f36f38 !important;
+}
+
+#tasksSection .task-chat-edit-panel {
+  display: grid !important;
+  gap: 10px !important;
+  padding: 12px !important;
+  border-radius: 16px !important;
+  background: #fffaf6 !important;
+  border: 1px solid rgba(255, 122, 69, 0.18) !important;
+}
+
+#tasksSection .task-chat-edit-panel.hidden {
+  display: none !important;
+}
+
+#tasksSection .task-chat-edit-title textarea,
+#tasksSection .task-chat-edit-comment textarea {
+  width: 100% !important;
+  min-height: 52px !important;
+  resize: vertical !important;
+  border-radius: 14px !important;
+  background: #fff !important;
+  border: 1px solid rgba(34, 43, 58, 0.10) !important;
+  color: #2f3949 !important;
+  font-size: 13px !important;
+  line-height: 1.4 !important;
+  padding: 10px 12px !important;
+  box-sizing: border-box !important;
+}
+
+#tasksSection .task-create-form-v2 select,
+#tasksSection .task-create-form-v2 input,
+#tasksSection .task-create-form-v2 textarea,
+#tasksSection .task-edit-grid select,
+#tasksSection .task-edit-grid input {
+  background: #ffffff !important;
+  color: #2f3949 !important;
+  border-color: rgba(34, 43, 58, 0.12) !important;
+}
+
+@media (max-width: 760px) {
+  #tasksSection .task-chat-card-head {
+    flex-direction: column !important;
+  }
+  #tasksSection .task-chat-card-badges,
+  #tasksSection .task-chat-card-actions {
+    justify-content: flex-start !important;
+  }
+  #tasksSection .task-chat-meta-grid {
+    grid-template-columns: 1fr 1fr !important;
+  }
+}
+
+@media (max-width: 520px) {
+  #tasksSection .task-chat-meta-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+
+/* v109 — compact chat tasks popover and vertical fields */
+#tasksSection {
+  width: min(100%, 540px) !important;
+  max-width: 540px !important;
+  margin: 0 auto 0 0 !important;
+  box-sizing: border-box !important;
+}
+
+#tasksSection .section-head {
+  width: 100% !important;
+  margin-bottom: 10px !important;
+  align-items: center !important;
+}
+
+#tasksSection .section-head .link-btn,
+#tasksSection button.link-btn,
+#tasksSection [data-view="tasks"] {
+  background: #ffffff !important;
+  color: #2f3949 !important;
+  border: 1px solid rgba(34, 43, 58, 0.12) !important;
+  box-shadow: none !important;
+}
+
+#tasksSection .task-list {
+  display: grid !important;
+  gap: 14px !important;
+  margin-bottom: 16px !important;
+}
+
+#tasksSection .task-chat-card {
+  width: 100% !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+  display: grid !important;
+  gap: 8px !important;
+  padding: 13px 14px !important;
+  border-radius: 16px !important;
+  background: #ffffff !important;
+  border: 1px solid rgba(34, 43, 58, 0.10) !important;
+  box-shadow: 0 8px 20px rgba(24, 34, 51, 0.055) !important;
+}
+
+#tasksSection .task-chat-card-head {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  gap: 8px !important;
+  align-items: start !important;
+}
+
+#tasksSection .task-chat-title-block {
+  gap: 2px !important;
+}
+
+#tasksSection .task-chat-title-block strong {
+  font-size: 14px !important;
+  line-height: 1.2 !important;
+}
+
+#tasksSection .task-chat-title-block span,
+#tasksSection .task-meta-line {
+  font-size: 11px !important;
+  line-height: 1.25 !important;
+}
+
+#tasksSection .task-chat-card-badges {
+  gap: 6px !important;
+  justify-content: flex-end !important;
+}
+
+#tasksSection .task-chat-pill {
+  min-height: 22px !important;
+  padding: 3px 10px !important;
+  font-size: 11px !important;
+  border-radius: 999px !important;
+  background: #ffffff !important;
+  box-shadow: none !important;
+}
+
+#tasksSection .task-chat-meta-grid,
+#tasksSection .task-edit-grid,
+#tasksSection .task-create-form-v2 {
+  grid-template-columns: 1fr !important;
+}
+
+#tasksSection .task-chat-meta-grid {
+  display: grid !important;
+  gap: 6px !important;
+  width: 100% !important;
+}
+
+#tasksSection .task-chat-meta-cell {
+  min-height: 0 !important;
+  padding: 7px 9px !important;
+  border-radius: 12px !important;
+  display: grid !important;
+  gap: 2px !important;
+  background: #fbfcfe !important;
+  border: 1px solid rgba(34, 43, 58, 0.08) !important;
+}
+
+#tasksSection .task-chat-meta-cell span,
+#tasksSection .task-chat-comment span,
+#tasksSection .task-chat-edit-title span,
+#tasksSection .task-chat-edit-comment span,
+#tasksSection .task-comment-create-field span {
+  color: #7f8898 !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  line-height: 1.15 !important;
+}
+
+#tasksSection .task-chat-meta-cell strong,
+#tasksSection .task-chat-comment p {
+  color: #2f3949 !important;
+  font-size: 12px !important;
+  line-height: 1.25 !important;
+}
+
+#tasksSection .task-chat-comment {
+  gap: 4px !important;
+}
+
+#tasksSection .task-comments {
+  font-size: 11px !important;
+}
+
+#tasksSection .task-chat-card-actions {
+  margin-top: 2px !important;
+  justify-content: flex-end !important;
+}
+
+#tasksSection .task-chat-edit-btn,
+#tasksSection button.task-chat-edit-btn,
+#tasksSection .task-chat-edit-actions .secondary,
+#tasksSection .task-chat-edit-actions .ghost,
+#tasksSection .task-chat-edit-actions button.secondary,
+#tasksSection .task-chat-edit-actions button.ghost {
+  min-height: 28px !important;
+  height: 28px !important;
+  padding: 0 11px !important;
+  border-radius: 999px !important;
+  background: #ffffff !important;
+  color: #2f3949 !important;
+  border: 1px solid rgba(34, 43, 58, 0.12) !important;
+  box-shadow: none !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+}
+
+#tasksSection .task-save-btn,
+#tasksSection button.task-save-btn,
+#tasksSection .task-create-form-v2 > button[type="submit"] {
+  min-height: 32px !important;
+  height: 32px !important;
+  padding: 0 16px !important;
+  border-radius: 999px !important;
+  background: #ff7a45 !important;
+  color: #ffffff !important;
+  border: 1px solid #ff7a45 !important;
+  box-shadow: 0 8px 18px rgba(255, 122, 69, 0.18) !important;
+  font-size: 12px !important;
+  font-weight: 800 !important;
+}
+
+#tasksSection .task-create-form-v2 {
+  width: 100% !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+  display: grid !important;
+  gap: 8px !important;
+  padding-top: 14px !important;
+  margin-top: 2px !important;
+  border-top: 1px solid rgba(34, 43, 58, 0.08) !important;
+  align-items: stretch !important;
+}
+
+#tasksSection .task-create-form-v2 select,
+#tasksSection .task-create-form-v2 input,
+#tasksSection .task-create-form-v2 textarea,
+#tasksSection .task-edit-grid select,
+#tasksSection .task-edit-grid input {
+  width: 100% !important;
+  min-width: 0 !important;
+  min-height: 34px !important;
+  height: 34px !important;
+  box-sizing: border-box !important;
+  border-radius: 12px !important;
+  background: #ffffff !important;
+  color: #2f3949 !important;
+  border: 1px solid rgba(34, 43, 58, 0.12) !important;
+}
+
+#tasksSection .task-comment-create-field {
+  grid-column: auto !important;
+  display: grid !important;
+  gap: 5px !important;
+  margin: 0 !important;
+}
+
+#tasksSection .task-comment-create-field textarea,
+#tasksSection .task-chat-edit-title textarea,
+#tasksSection .task-chat-edit-comment textarea {
+  min-height: 52px !important;
+  max-height: 110px !important;
+  resize: vertical !important;
+  font-size: 12px !important;
+  line-height: 1.35 !important;
+  padding: 9px 10px !important;
+}
+
+#tasksSection .task-create-form-v2 > button[type="submit"] {
+  grid-column: auto !important;
+  justify-self: end !important;
+  align-self: start !important;
+  min-width: 108px !important;
+}
+
+#tasksSection .task-chat-edit-panel {
+  gap: 8px !important;
+  padding: 10px !important;
+  border-radius: 14px !important;
+  background: #fffaf6 !important;
+  border: 1px solid rgba(255, 122, 69, 0.18) !important;
+}
+
+#tasksSection .task-chat-edit-panel.hidden {
+  display: none !important;
+}
+
+#tasksSection .task-chat-edit-actions {
+  justify-content: flex-end !important;
+}
+
+@media (max-width: 720px) {
+  #tasksSection {
+    width: 100% !important;
+    max-width: none !important;
+  }
+  #tasksSection .task-chat-card-head {
+    grid-template-columns: 1fr !important;
+  }
+  #tasksSection .task-chat-card-badges,
+  #tasksSection .task-chat-card-actions,
+  #tasksSection .task-chat-edit-actions {
+    justify-content: flex-start !important;
+  }
+  #tasksSection .task-create-form-v2 > button[type="submit"] {
+    justify-self: stretch !important;
+  }
+}
+
+/* v110 — narrow chat task panel: no full-width background, smaller vertical cards */
+#extraPanel.tasks-panel-open {
+  width: min(100%, 360px) !important;
+  max-width: 360px !important;
+  margin: 0 !important;
+  padding: 10px 0 14px !important;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  overflow: visible !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection {
+  width: 100% !important;
+  max-width: 360px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  color: #202020 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .section-head {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 8px !important;
+  width: 100% !important;
+  margin: 0 0 10px !important;
+  padding: 0 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .section-head h3 {
+  margin: 0 !important;
+  color: #202020 !important;
+  font-size: 14px !important;
+  line-height: 1.2 !important;
+  font-weight: 800 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .section-head .link-btn,
+#extraPanel.tasks-panel-open #tasksSection button.link-btn,
+#extraPanel.tasks-panel-open #tasksSection [data-view="tasks"] {
+  min-height: 28px !important;
+  height: 28px !important;
+  padding: 0 10px !important;
+  border-radius: 999px !important;
+  background: #ffffff !important;
+  color: #202020 !important;
+  border: 1px solid rgba(32, 32, 32, 0.12) !important;
+  box-shadow: none !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-list {
+  display: grid !important;
+  gap: 10px !important;
+  width: 100% !important;
+  margin: 0 0 16px !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-card {
+  width: 100% !important;
+  max-width: 360px !important;
+  min-height: 0 !important;
+  padding: 11px 12px !important;
+  border-radius: 16px !important;
+  background: #ffffff !important;
+  border: 1px solid rgba(255, 122, 69, 0.22) !important;
+  box-shadow: 0 8px 18px rgba(24, 34, 51, 0.055) !important;
+  color: #202020 !important;
+  box-sizing: border-box !important;
+  display: grid !important;
+  gap: 7px !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-card-head {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  gap: 8px !important;
+  align-items: start !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-title-block strong {
+  color: #202020 !important;
+  font-size: 13px !important;
+  line-height: 1.18 !important;
+  font-weight: 800 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-title-block span,
+#extraPanel.tasks-panel-open #tasksSection .task-meta-line {
+  color: #777777 !important;
+  font-size: 10px !important;
+  line-height: 1.2 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-card-badges {
+  display: flex !important;
+  justify-content: flex-end !important;
+  align-items: center !important;
+  flex-wrap: wrap !important;
+  gap: 5px !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-pill {
+  min-height: 21px !important;
+  height: 21px !important;
+  padding: 0 8px !important;
+  border-radius: 999px !important;
+  background: #ffffff !important;
+  color: #202020 !important;
+  border: 1px solid rgba(32, 32, 32, 0.12) !important;
+  box-shadow: none !important;
+  font-size: 10px !important;
+  line-height: 1 !important;
+  font-weight: 700 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-type {
+  color: #e3652f !important;
+  background: #fff7f1 !important;
+  border-color: rgba(255, 122, 69, 0.34) !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-status-open,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-status-pill.task-chat-status-open {
+  color: #0d7db7 !important;
+  background: #f3fbff !important;
+  border-color: rgba(13, 125, 183, 0.22) !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-status-in_progress,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-status-pill.task-chat-status-in_progress {
+  color: #bf6a00 !important;
+  background: #fff8e8 !important;
+  border-color: rgba(255, 183, 77, 0.42) !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-status-archive,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-status-pill.task-chat-status-archive {
+  color: #777777 !important;
+  background: #fafafa !important;
+  border-color: rgba(32, 32, 32, 0.12) !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-meta-grid,
+#extraPanel.tasks-panel-open #tasksSection .task-edit-grid,
+#extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 {
+  grid-template-columns: 1fr !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-meta-grid {
+  display: grid !important;
+  gap: 5px !important;
+  width: 100% !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-meta-cell {
+  min-height: 0 !important;
+  padding: 6px 8px !important;
+  border-radius: 11px !important;
+  display: grid !important;
+  gap: 2px !important;
+  background: #ffffff !important;
+  border: 1px solid rgba(32, 32, 32, 0.09) !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-meta-cell span,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-comment span,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-title span,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-comment span,
+#extraPanel.tasks-panel-open #tasksSection .task-comment-create-field span {
+  color: #777777 !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  line-height: 1.15 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-meta-cell strong,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-comment p {
+  color: #202020 !important;
+  font-size: 11px !important;
+  line-height: 1.25 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-comment,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-title,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-comment {
+  display: grid !important;
+  gap: 4px !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-comments,
+#extraPanel.tasks-panel-open #tasksSection .task-comments-empty,
+#extraPanel.tasks-panel-open #tasksSection .task-comment-meta {
+  color: #777777 !important;
+  font-size: 10px !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-card-actions {
+  margin-top: 1px !important;
+  justify-content: flex-end !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-btn,
+#extraPanel.tasks-panel-open #tasksSection button.task-chat-edit-btn,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-actions .secondary,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-actions .ghost,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-actions button.secondary,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-actions button.ghost {
+  min-height: 26px !important;
+  height: 26px !important;
+  padding: 0 10px !important;
+  border-radius: 999px !important;
+  background: #ffffff !important;
+  color: #202020 !important;
+  border: 1px solid rgba(32, 32, 32, 0.12) !important;
+  box-shadow: none !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-btn:hover,
+#extraPanel.tasks-panel-open #tasksSection button.task-chat-edit-btn:hover,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-actions .secondary:hover,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-actions .ghost:hover,
+#extraPanel.tasks-panel-open #tasksSection .section-head .link-btn:hover,
+#extraPanel.tasks-panel-open #tasksSection button.link-btn:hover {
+  background: #fff7f1 !important;
+  color: #ff7a45 !important;
+  border-color: rgba(255, 122, 69, 0.35) !important;
+  transform: none !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 {
+  width: 100% !important;
+  max-width: 360px !important;
+  box-sizing: border-box !important;
+  display: grid !important;
+  gap: 7px !important;
+  margin: 0 !important;
+  padding: 14px 0 0 !important;
+  border-top: 1px solid rgba(32, 32, 32, 0.08) !important;
+  background: transparent !important;
+  align-items: stretch !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 select,
+#extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 input,
+#extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 textarea,
+#extraPanel.tasks-panel-open #tasksSection .task-edit-grid select,
+#extraPanel.tasks-panel-open #tasksSection .task-edit-grid input {
+  width: 100% !important;
+  min-width: 0 !important;
+  min-height: 32px !important;
+  height: 32px !important;
+  box-sizing: border-box !important;
+  border-radius: 12px !important;
+  background: #ffffff !important;
+  color: #202020 !important;
+  border: 1px solid rgba(32, 32, 32, 0.12) !important;
+  box-shadow: none !important;
+  font-size: 12px !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-comment-create-field {
+  grid-column: auto !important;
+  display: grid !important;
+  gap: 5px !important;
+  margin: 0 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-comment-create-field textarea,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-title textarea,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-comment textarea {
+  min-height: 48px !important;
+  max-height: 90px !important;
+  resize: vertical !important;
+  font-size: 11px !important;
+  line-height: 1.35 !important;
+  padding: 8px 9px !important;
+  color: #202020 !important;
+  background: #ffffff !important;
+  border: 1px solid rgba(32, 32, 32, 0.12) !important;
+  box-shadow: none !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-save-btn,
+#extraPanel.tasks-panel-open #tasksSection button.task-save-btn,
+#extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 > button[type="submit"] {
+  min-height: 31px !important;
+  height: 31px !important;
+  padding: 0 14px !important;
+  border-radius: 999px !important;
+  background: #ff7a45 !important;
+  color: #ffffff !important;
+  border: 1px solid #ff7a45 !important;
+  box-shadow: 0 7px 15px rgba(255, 122, 69, 0.16) !important;
+  font-size: 11px !important;
+  font-weight: 800 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 > button[type="submit"] {
+  grid-column: auto !important;
+  justify-self: end !important;
+  align-self: start !important;
+  min-width: 96px !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-panel {
+  gap: 7px !important;
+  padding: 9px !important;
+  border-radius: 13px !important;
+  background: #fffaf6 !important;
+  border: 1px solid rgba(255, 122, 69, 0.18) !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-panel.hidden {
+  display: none !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-actions {
+  justify-content: flex-end !important;
+}
+
+@media (max-width: 720px) {
+  #extraPanel.tasks-panel-open,
+  #extraPanel.tasks-panel-open #tasksSection,
+  #extraPanel.tasks-panel-open #tasksSection .task-chat-card,
+  #extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 {
+    width: 100% !important;
+    max-width: none !important;
+  }
+  #extraPanel.tasks-panel-open #tasksSection .task-chat-card-head {
+    grid-template-columns: 1fr !important;
+  }
+  #extraPanel.tasks-panel-open #tasksSection .task-chat-card-badges,
+  #extraPanel.tasks-panel-open #tasksSection .task-chat-card-actions,
+  #extraPanel.tasks-panel-open #tasksSection .task-chat-edit-actions {
+    justify-content: flex-start !important;
+  }
+  #extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 > button[type="submit"] {
+    justify-self: stretch !important;
+  }
+}
+
+
+/* chat tasks compact card style v2 */
+#extraPanel.tasks-panel-open #tasksSection {
+  width: 100% !important;
+  max-width: 312px !important;
+  padding: 0 !important;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .section-head {
+  margin-bottom: 10px !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-list {
+  width: 100% !important;
+  max-width: 312px !important;
+  gap: 10px !important;
+  margin-bottom: 14px !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-card {
+  width: 100% !important;
+  max-width: 312px !important;
+  padding: 10px 12px !important;
+  border-radius: 14px !important;
+  background: #fff !important;
+  border: 1px solid rgba(32, 32, 32, 0.10) !important;
+  box-shadow: 0 4px 10px rgba(16, 24, 40, 0.06) !important;
+  gap: 8px !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-card-head {
+  display: flex !important;
+  justify-content: flex-start !important;
+  align-items: flex-start !important;
+  min-height: 0 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-card-badges {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 8px !important;
+  justify-content: flex-start !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-pill {
+  min-height: 18px !important;
+  height: 18px !important;
+  padding: 0 12px !important;
+  border-radius: 999px !important;
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  background: #fff !important;
+  color: #3a3a3a !important;
+  border: 1px solid rgba(32, 32, 32, 0.14) !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-assignee {
+  background: #f8f8f8 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-summary {
+  display: grid !important;
+  gap: 8px !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-summary-line {
+  display: grid !important;
+  gap: 2px !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-summary-line span,
+#extraPanel.tasks-panel-open #tasksSection .task-create-field > span,
+#extraPanel.tasks-panel-open #tasksSection .task-comment-create-field > span,
+#extraPanel.tasks-panel-open #tasksSection .task-edit-grid label > span {
+  color: #6b7280 !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  line-height: 1.2 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-summary-line strong {
+  color: #1f2937 !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-summary-line p {
+  margin: 0 !important;
+  color: #1f2937 !important;
+  font-size: 13px !important;
+  line-height: 1.3 !important;
+  font-weight: 500 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-comments,
+#extraPanel.tasks-panel-open #tasksSection .task-comments-empty,
+#extraPanel.tasks-panel-open #tasksSection .task-comment-meta {
+  color: #6b7280 !important;
+  font-size: 11px !important;
+  line-height: 1.3 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-card-actions {
+  margin-top: 0 !important;
+  justify-content: flex-end !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-btn,
+#extraPanel.tasks-panel-open #tasksSection button.task-chat-edit-btn {
+  min-height: 22px !important;
+  height: 22px !important;
+  padding: 0 10px !important;
+  border-radius: 999px !important;
+  background: #fff !important;
+  color: #2563eb !important;
+  border: 0 !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  box-shadow: none !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 {
+  width: 100% !important;
+  max-width: 312px !important;
+  display: grid !important;
+  gap: 10px !important;
+  padding: 10px 12px !important;
+  margin: 0 !important;
+  border-radius: 14px !important;
+  border: 1px solid rgba(32, 32, 32, 0.10) !important;
+  background: #fff !important;
+  box-shadow: 0 4px 10px rgba(16, 24, 40, 0.06) !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-create-field,
+#extraPanel.tasks-panel-open #tasksSection .task-comment-create-field {
+  display: grid !important;
+  gap: 4px !important;
+  margin: 0 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 select,
+#extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 input,
+#extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 textarea,
+#extraPanel.tasks-panel-open #tasksSection .task-edit-grid select,
+#extraPanel.tasks-panel-open #tasksSection .task-edit-grid input,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-title textarea,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-comment textarea {
+  width: 100% !important;
+  min-width: 0 !important;
+  min-height: 30px !important;
+  height: 30px !important;
+  padding: 0 10px !important;
+  border-radius: 12px !important;
+  border: 1px solid rgba(32, 32, 32, 0.12) !important;
+  background: #fff !important;
+  color: #1f2937 !important;
+  font-size: 12px !important;
+  box-shadow: none !important;
+  box-sizing: border-box !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 textarea,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-title textarea,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-comment textarea {
+  min-height: 52px !important;
+  height: auto !important;
+  padding: 8px 10px !important;
+  resize: vertical !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-create-actions {
+  display: flex !important;
+  justify-content: flex-end !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 > button[type="submit"],
+#extraPanel.tasks-panel-open #tasksSection .task-create-actions > button[type="submit"] {
+  min-width: 86px !important;
+  min-height: 32px !important;
+  height: 32px !important;
+  padding: 0 16px !important;
+  border-radius: 999px !important;
+  background: #ff7a45 !important;
+  color: #fff !important;
+  border: 1px solid #ff7a45 !important;
+  box-shadow: 0 8px 16px rgba(255,122,69,.18) !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-panel {
+  margin-top: 4px !important;
+  padding: 10px !important;
+  border-radius: 14px !important;
+  background: #fffaf6 !important;
+  border: 1px solid rgba(255,122,69,.16) !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-edit-grid {
+  display: grid !important;
+  grid-template-columns: 1fr !important;
+  gap: 8px !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-edit-grid label {
+  display: grid !important;
+  gap: 4px !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-actions {
+  justify-content: flex-end !important;
+  gap: 6px !important;
+}
+
+@media (max-width: 720px) {
+  #extraPanel.tasks-panel-open #tasksSection,
+  #extraPanel.tasks-panel-open #tasksSection .task-list,
+  #extraPanel.tasks-panel-open #tasksSection .task-chat-card,
+  #extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 {
+    max-width: 100% !important;
+    width: 100% !important;
+  }
+}
+
+
+
+/* FINAL OVERRIDE — right aligned compact chat task menu */
+#chatPanel {
+  position: relative !important;
+}
+
+#extraPanel.tasks-panel-open {
+  position: absolute !important;
+  top: 142px !important;
+  right: 18px !important;
+  left: auto !important;
+  z-index: 30 !important;
+
+  width: 300px !important;
+  max-width: 300px !important;
+  min-width: 300px !important;
+  height: auto !important;
+  max-height: calc(100% - 170px) !important;
+  overflow: visible !important;
+
+  margin: 0 !important;
+  padding: 0 !important;
+  display: block !important;
+
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection,
+#extraPanel.tasks-panel-open .extra-section#tasksSection {
+  width: 300px !important;
+  max-width: 300px !important;
+  min-width: 300px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  display: block !important;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  box-sizing: border-box !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .section-head {
+  width: 300px !important;
+  max-width: 300px !important;
+  min-width: 300px !important;
+  margin: 0 0 10px 0 !important;
+  padding: 0 !important;
+  display: grid !important;
+  grid-template-columns: 1fr auto !important;
+  align-items: center !important;
+  gap: 10px !important;
+  box-sizing: border-box !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .section-head h3 {
+  margin: 0 !important;
+  color: #1f2937 !important;
+  font-size: 13px !important;
+  font-weight: 800 !important;
+  line-height: 1.2 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .section-head .link-btn,
+#extraPanel.tasks-panel-open #tasksSection button.link-btn,
+#extraPanel.tasks-panel-open #tasksSection [data-view="tasks"] {
+  width: auto !important;
+  min-width: 0 !important;
+  min-height: 28px !important;
+  height: 28px !important;
+  padding: 0 12px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border-radius: 999px !important;
+  border: 1px solid rgba(32, 32, 32, 0.12) !important;
+  background: #ffffff !important;
+  color: #333333 !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  line-height: 1 !important;
+  box-shadow: none !important;
+  white-space: nowrap !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-list {
+  width: 300px !important;
+  max-width: 300px !important;
+  min-width: 300px !important;
+  display: grid !important;
+  gap: 14px !important;
+  margin: 0 0 14px 0 !important;
+  padding: 0 !important;
+  box-sizing: border-box !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-card,
+#extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 {
+  width: 300px !important;
+  max-width: 300px !important;
+  min-width: 300px !important;
+  box-sizing: border-box !important;
+  margin: 0 !important;
+  padding: 13px 16px !important;
+  border-radius: 12px !important;
+  background: #f7f7f7 !important;
+  border: 1px solid rgba(32, 32, 32, 0.10) !important;
+  box-shadow: 0 3px 7px rgba(16, 24, 40, 0.12) !important;
+}
+
+/* Remove the previous status-colored background from old task cards */
+#extraPanel.tasks-panel-open #tasksSection .task-chat-card.task-chat-status-open,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-card.task-chat-status-in_progress,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-card.task-chat-status-archive {
+  background: #f7f7f7 !important;
+  border-color: rgba(32, 32, 32, 0.10) !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-card {
+  display: grid !important;
+  gap: 10px !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-card-head {
+  display: flex !important;
+  justify-content: center !important;
+  align-items: center !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-card-badges {
+  width: 100% !important;
+  max-width: 100% !important;
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 10px !important;
+  margin: 0 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-pill {
+  min-width: 0 !important;
+  min-height: 18px !important;
+  height: 18px !important;
+  padding: 0 11px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border-radius: 999px !important;
+  background: #ffffff !important;
+  border: 1px solid rgba(32, 32, 32, 0.14) !important;
+  color: #202020 !important;
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  line-height: 18px !important;
+  text-align: center !important;
+  white-space: nowrap !important;
+  box-shadow: none !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-assignee {
+  color: #2f4733 !important;
+  border-color: rgba(65, 135, 72, 0.18) !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-status-open,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-status-pill.task-chat-status-open {
+  color: #3f6f32 !important;
+  border-color: rgba(77, 145, 68, 0.26) !important;
+  background: #ffffff !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-status-in_progress,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-status-pill.task-chat-status-in_progress {
+  color: #b86a00 !important;
+  border-color: rgba(255, 178, 65, 0.34) !important;
+  background: #ffffff !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-status-archive,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-status-pill.task-chat-status-archive {
+  color: #626262 !important;
+  border-color: rgba(32, 32, 32, 0.14) !important;
+  background: #ffffff !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-type {
+  color: #202020 !important;
+  border-color: rgba(32, 32, 32, 0.14) !important;
+  background: #ffffff !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-summary {
+  display: grid !important;
+  gap: 8px !important;
+  margin: 0 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-summary-line {
+  display: grid !important;
+  gap: 2px !important;
+  margin: 0 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-summary-line span,
+#extraPanel.tasks-panel-open #tasksSection .task-create-field > span,
+#extraPanel.tasks-panel-open #tasksSection .task-comment-create-field > span,
+#extraPanel.tasks-panel-open #tasksSection .task-edit-grid label > span,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-title > span,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-comment > span {
+  color: #202020 !important;
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  line-height: 1.2 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-summary-line strong,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-summary-line p {
+  margin: 0 !important;
+  color: #111111 !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  line-height: 1.25 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-comments,
+#extraPanel.tasks-panel-open #tasksSection .task-comments-empty,
+#extraPanel.tasks-panel-open #tasksSection .task-comment-meta {
+  color: #6b7280 !important;
+  font-size: 10px !important;
+  line-height: 1.3 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-card-actions {
+  display: flex !important;
+  justify-content: flex-end !important;
+  align-items: center !important;
+  margin: 0 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-btn,
+#extraPanel.tasks-panel-open #tasksSection button.task-chat-edit-btn {
+  min-height: 20px !important;
+  height: 20px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: #2354ff !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  line-height: 20px !important;
+  box-shadow: none !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 {
+  display: grid !important;
+  gap: 9px !important;
+  border-top: 0 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-create-field,
+#extraPanel.tasks-panel-open #tasksSection .task-comment-create-field,
+#extraPanel.tasks-panel-open #tasksSection .task-edit-grid label {
+  display: grid !important;
+  gap: 4px !important;
+  margin: 0 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 select,
+#extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 input,
+#extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 textarea,
+#extraPanel.tasks-panel-open #tasksSection .task-edit-grid select,
+#extraPanel.tasks-panel-open #tasksSection .task-edit-grid input,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-title textarea,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-comment textarea {
+  width: 100% !important;
+  min-width: 0 !important;
+  min-height: 30px !important;
+  height: 30px !important;
+  box-sizing: border-box !important;
+  padding: 0 10px !important;
+  border-radius: 12px !important;
+  border: 1px solid rgba(32, 32, 32, 0.12) !important;
+  background: #ffffff !important;
+  color: #202020 !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  box-shadow: none !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 textarea,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-title textarea,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-comment textarea {
+  min-height: 48px !important;
+  height: auto !important;
+  padding: 8px 10px !important;
+  resize: vertical !important;
+  line-height: 1.35 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-create-actions {
+  display: flex !important;
+  justify-content: flex-end !important;
+  margin: 0 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-create-actions > button[type="submit"],
+#extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 > button[type="submit"],
+#extraPanel.tasks-panel-open #tasksSection .task-save-btn,
+#extraPanel.tasks-panel-open #tasksSection button.task-save-btn {
+  min-width: 86px !important;
+  min-height: 32px !important;
+  height: 32px !important;
+  padding: 0 16px !important;
+  border-radius: 999px !important;
+  border: 1px solid #ff7a45 !important;
+  background: #ff7a45 !important;
+  color: #ffffff !important;
+  box-shadow: 0 8px 16px rgba(255, 122, 69, 0.18) !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-panel {
+  margin-top: 4px !important;
+  padding: 10px !important;
+  border-radius: 12px !important;
+  background: #fffaf6 !important;
+  border: 1px solid rgba(255, 122, 69, 0.16) !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-edit-grid {
+  display: grid !important;
+  grid-template-columns: 1fr !important;
+  gap: 8px !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-actions {
+  display: flex !important;
+  justify-content: flex-end !important;
+  flex-wrap: wrap !important;
+  gap: 6px !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-actions .secondary,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-actions .ghost,
+#extraPanel.tasks-panel-open #tasksSection button.secondary,
+#extraPanel.tasks-panel-open #tasksSection button.ghost {
+  min-height: 30px !important;
+  height: 30px !important;
+  padding: 0 12px !important;
+  border-radius: 999px !important;
+  background: #ffffff !important;
+  color: #404040 !important;
+  border: 1px solid rgba(32, 32, 32, 0.12) !important;
+  box-shadow: none !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+}
+
+@media (max-width: 720px) {
+  #extraPanel.tasks-panel-open {
+    position: static !important;
+    width: 100% !important;
+    max-width: none !important;
+    min-width: 0 !important;
+    margin: 12px 0 16px 0 !important;
+    padding: 0 12px !important;
+    display: flex !important;
+    justify-content: flex-end !important;
+    box-sizing: border-box !important;
+  }
+
+  #extraPanel.tasks-panel-open #tasksSection,
+  #extraPanel.tasks-panel-open .extra-section#tasksSection,
+  #extraPanel.tasks-panel-open #tasksSection .section-head,
+  #extraPanel.tasks-panel-open #tasksSection .task-list,
+  #extraPanel.tasks-panel-open #tasksSection .task-chat-card,
+  #extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 {
+    width: min(100%, 300px) !important;
+    max-width: 300px !important;
+    min-width: 0 !important;
+  }
+}
+
+
+
+/* FINAL FIX — readable semi-opaque task popup and internal note controls */
+#extraPanel.tasks-panel-open {
+  background: rgba(255, 255, 255, 0.94) !important;
+  border: 1px solid rgba(32, 32, 32, 0.10) !important;
+  border-radius: 16px !important;
+  box-shadow: 0 18px 45px rgba(17, 24, 39, 0.12) !important;
+  backdrop-filter: blur(10px) !important;
+  -webkit-backdrop-filter: blur(10px) !important;
+  padding: 12px !important;
+  overflow: visible !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection,
+#extraPanel.tasks-panel-open .extra-section#tasksSection {
+  background: transparent !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-card,
+#extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 {
+  background: #f7f7f7 !important;
+}
+
+.internal-note-actions {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  margin-left: 10px !important;
+  vertical-align: middle !important;
+}
+
+.internal-note-action,
+.message.internal .internal-note-action {
+  appearance: none !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: #ff7a45 !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  min-height: 0 !important;
+  height: auto !important;
+  border-radius: 0 !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  line-height: 1.2 !important;
+  cursor: pointer !important;
+}
+
+.internal-note-action:hover,
+.message.internal .internal-note-action:hover {
+  color: #e95f2f !important;
+  text-decoration: underline !important;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+.internal-note-delete,
+.message.internal .internal-note-delete {
+  color: #d64545 !important;
+}
+
+.internal-note-delete:hover,
+.message.internal .internal-note-delete:hover {
+  color: #b92f2f !important;
+}
+
+.internal-note-editor {
+  display: grid !important;
+  gap: 8px !important;
+  margin-top: 8px !important;
+}
+
+.internal-note-edit-text {
+  width: 100% !important;
+  min-height: 70px !important;
+  resize: vertical !important;
+  border-radius: 14px !important;
+  border: 1px solid rgba(32, 32, 32, 0.12) !important;
+  background: #ffffff !important;
+  color: #202020 !important;
+  padding: 10px 12px !important;
+  box-shadow: none !important;
+}
+
+.internal-note-editor-actions {
+  display: flex !important;
+  justify-content: flex-end !important;
+  gap: 8px !important;
+}
+
+.internal-note-save,
+.message.internal .internal-note-save {
+  min-height: 30px !important;
+  height: 30px !important;
+  padding: 0 14px !important;
+  border-radius: 999px !important;
+  background: #ff7a45 !important;
+  color: #ffffff !important;
+  border: 1px solid #ff7a45 !important;
+  box-shadow: 0 8px 16px rgba(255, 122, 69, 0.18) !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+}
+
+.internal-note-cancel,
+.message.internal .internal-note-cancel {
+  min-height: 30px !important;
+  height: 30px !important;
+  padding: 0 14px !important;
+  border-radius: 999px !important;
+  background: #ffffff !important;
+  color: #404040 !important;
+  border: 1px solid rgba(32, 32, 32, 0.12) !important;
+  box-shadow: none !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+}
+
+
+
+/* FINAL FIX — keep chat task popup content inside its own panel */
+#chatPanel {
+  position: relative !important;
+}
+
+#extraPanel.tasks-panel-open {
+  position: absolute !important;
+  top: 142px !important;
+  right: 18px !important;
+  left: auto !important;
+  z-index: 30 !important;
+
+  width: 324px !important;
+  max-width: 324px !important;
+  min-width: 324px !important;
+  height: auto !important;
+  max-height: calc(100% - 170px) !important;
+
+  margin: 0 !important;
+  padding: 12px !important;
+  box-sizing: border-box !important;
+
+  display: block !important;
+  overflow: hidden !important;
+
+  background: rgba(255, 255, 255, 0.96) !important;
+  border: 1px solid rgba(32, 32, 32, 0.10) !important;
+  border-radius: 16px !important;
+  box-shadow: 0 18px 45px rgba(17, 24, 39, 0.12) !important;
+  backdrop-filter: blur(10px) !important;
+  -webkit-backdrop-filter: blur(10px) !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection,
+#extraPanel.tasks-panel-open .extra-section#tasksSection {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  box-sizing: border-box !important;
+  display: block !important;
+
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  overflow: visible !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .section-head,
+#extraPanel.tasks-panel-open #tasksSection .task-list,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-card,
+#extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .section-head {
+  margin: 0 0 12px 0 !important;
+  padding: 0 !important;
+  display: grid !important;
+  grid-template-columns: 1fr auto !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .section-head h3 {
+  margin: 0 !important;
+  color: #1f2937 !important;
+  font-size: 13px !important;
+  font-weight: 800 !important;
+  line-height: 1.2 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .section-head .link-btn,
+#extraPanel.tasks-panel-open #tasksSection button.link-btn,
+#extraPanel.tasks-panel-open #tasksSection [data-view="tasks"] {
+  min-width: 0 !important;
+  min-height: 28px !important;
+  height: 28px !important;
+  padding: 0 11px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+
+  border-radius: 999px !important;
+  border: 1px solid rgba(32, 32, 32, 0.12) !important;
+  background: #ffffff !important;
+  color: #333333 !important;
+  box-shadow: none !important;
+
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-list {
+  display: grid !important;
+  gap: 12px !important;
+  margin: 0 0 12px 0 !important;
+  padding: 0 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-card,
+#extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 {
+  margin: 0 !important;
+  padding: 12px 14px !important;
+  border-radius: 14px !important;
+  background: #f7f7f7 !important;
+  border: 1px solid rgba(32, 32, 32, 0.10) !important;
+  box-shadow: 0 3px 7px rgba(16, 24, 40, 0.12) !important;
+  overflow: hidden !important;
+}
+
+/* Do not let old status styles recolor the whole card */
+#extraPanel.tasks-panel-open #tasksSection .task-chat-card.task-chat-status-open,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-card.task-chat-status-in_progress,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-card.task-chat-status-archive {
+  background: #f7f7f7 !important;
+  border-color: rgba(32, 32, 32, 0.10) !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 {
+  display: grid !important;
+  gap: 9px !important;
+  border-top: 0 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-create-field,
+#extraPanel.tasks-panel-open #tasksSection .task-comment-create-field,
+#extraPanel.tasks-panel-open #tasksSection .task-edit-grid label {
+  display: grid !important;
+  gap: 4px !important;
+  margin: 0 !important;
+  min-width: 0 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 select,
+#extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 input,
+#extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 textarea,
+#extraPanel.tasks-panel-open #tasksSection .task-edit-grid select,
+#extraPanel.tasks-panel-open #tasksSection .task-edit-grid input,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-title textarea,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-comment textarea {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  min-height: 30px !important;
+  height: 30px !important;
+  box-sizing: border-box !important;
+
+  padding: 0 10px !important;
+  border-radius: 12px !important;
+  border: 1px solid rgba(32, 32, 32, 0.12) !important;
+  background: #ffffff !important;
+  color: #202020 !important;
+  box-shadow: none !important;
+
+  font-size: 12px !important;
+  font-weight: 500 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 textarea,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-title textarea,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-comment textarea {
+  min-height: 48px !important;
+  height: auto !important;
+  padding: 8px 10px !important;
+  resize: vertical !important;
+  line-height: 1.35 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-create-actions {
+  display: flex !important;
+  justify-content: flex-end !important;
+  margin: 0 !important;
+  min-width: 0 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-create-actions > button[type="submit"],
+#extraPanel.tasks-panel-open #tasksSection .task-create-form-v2 > button[type="submit"],
+#extraPanel.tasks-panel-open #tasksSection .task-save-btn,
+#extraPanel.tasks-panel-open #tasksSection button.task-save-btn {
+  min-width: 86px !important;
+  min-height: 32px !important;
+  height: 32px !important;
+  padding: 0 16px !important;
+  border-radius: 999px !important;
+  border: 1px solid #ff7a45 !important;
+  background: #ff7a45 !important;
+  color: #ffffff !important;
+  box-shadow: 0 8px 16px rgba(255, 122, 69, 0.18) !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-card-head {
+  display: flex !important;
+  justify-content: center !important;
+  align-items: center !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-card-badges {
+  width: 100% !important;
+  max-width: 100% !important;
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 8px !important;
+  margin: 0 !important;
+  min-width: 0 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-pill {
+  min-width: 0 !important;
+  min-height: 18px !important;
+  height: 18px !important;
+  padding: 0 10px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+
+  border-radius: 999px !important;
+  background: #ffffff !important;
+  border: 1px solid rgba(32, 32, 32, 0.14) !important;
+  color: #202020 !important;
+  box-shadow: none !important;
+
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  line-height: 18px !important;
+  text-align: center !important;
+  white-space: nowrap !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-status-open,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-status-pill.task-chat-status-open {
+  color: #3f6f32 !important;
+  border-color: rgba(77, 145, 68, 0.26) !important;
+  background: #ffffff !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-type {
+  color: #202020 !important;
+  border-color: rgba(32, 32, 32, 0.14) !important;
+  background: #ffffff !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-summary {
+  display: grid !important;
+  gap: 8px !important;
+  margin: 0 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-summary-line {
+  display: grid !important;
+  gap: 2px !important;
+  margin: 0 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-summary-line span,
+#extraPanel.tasks-panel-open #tasksSection .task-create-field > span,
+#extraPanel.tasks-panel-open #tasksSection .task-comment-create-field > span {
+  color: #202020 !important;
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  line-height: 1.2 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-summary-line strong,
+#extraPanel.tasks-panel-open #tasksSection .task-chat-summary-line p {
+  margin: 0 !important;
+  color: #111111 !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  line-height: 1.25 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-comments,
+#extraPanel.tasks-panel-open #tasksSection .task-comments-empty,
+#extraPanel.tasks-panel-open #tasksSection .task-comment-meta {
+  color: #6b7280 !important;
+  font-size: 10px !important;
+  line-height: 1.3 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-card-actions {
+  display: flex !important;
+  justify-content: flex-end !important;
+  align-items: center !important;
+  margin: 0 !important;
+}
+
+#extraPanel.tasks-panel-open #tasksSection .task-chat-edit-btn,
+#extraPanel.tasks-panel-open #tasksSection button.task-chat-edit-btn {
+  min-height: 20px !important;
+  height: 20px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: #2354ff !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  line-height: 20px !important;
+  box-shadow: none !important;
+}
+
+@media (max-width: 720px) {
+  #extraPanel.tasks-panel-open {
+    position: static !important;
+    width: 100% !important;
+    max-width: none !important;
+    min-width: 0 !important;
+    margin: 12px 0 16px 0 !important;
+    padding: 12px !important;
+    box-sizing: border-box !important;
+  }
+}
+
+
+/* FINAL FIX — composer buttons alignment: attach + quick replies + textarea + send */
+#messageForm .composer-main-row {
+  display: grid !important;
+  grid-template-columns: 34px 34px minmax(0, 1fr) 42px !important;
+  align-items: center !important;
+  gap: 8px !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box !important;
+}
+
+#messageForm #attachImageBtn.composer-attach-btn {
+  grid-column: 1 !important;
+  grid-row: 1 !important;
+  width: 34px !important;
+  min-width: 34px !important;
+  max-width: 34px !important;
+  height: 38px !important;
+  min-height: 38px !important;
+  max-height: 38px !important;
+  padding: 0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border-radius: 999px !important;
+}
+
+#messageForm #replyTemplatesToggleBtn.composer-template-btn {
+  grid-column: 2 !important;
+  grid-row: 1 !important;
+  width: 34px !important;
+  min-width: 34px !important;
+  max-width: 34px !important;
+  height: 38px !important;
+  min-height: 38px !important;
+  max-height: 38px !important;
+  padding: 0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border-radius: 999px !important;
+}
+
+#messageForm #messageText {
+  grid-column: 3 !important;
+  grid-row: 1 !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+#messageForm .composer-send-btn {
+  grid-column: 4 !important;
+  grid-row: 1 !important;
+  width: 42px !important;
+  min-width: 42px !important;
+  max-width: 42px !important;
+  height: 42px !important;
+  min-height: 42px !important;
+  max-height: 42px !important;
+  padding: 0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+@media (max-width: 720px) {
+  #messageForm .composer-main-row {
+    grid-template-columns: 32px 32px minmax(0, 1fr) 40px !important;
+    gap: 6px !important;
+  }
+
+  #messageForm #attachImageBtn.composer-attach-btn,
+  #messageForm #replyTemplatesToggleBtn.composer-template-btn {
+    width: 32px !important;
+    min-width: 32px !important;
+    max-width: 32px !important;
+    height: 36px !important;
+    min-height: 36px !important;
+    max-height: 36px !important;
+  }
+
+  #messageForm .composer-send-btn {
+    width: 40px !important;
+    min-width: 40px !important;
+    max-width: 40px !important;
+    height: 40px !important;
+    min-height: 40px !important;
+    max-height: 40px !important;
+  }
+}
+>>>>>>> 1de50c7 (Improve CRM task workflow, chat notes, and composer UI)

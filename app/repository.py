@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.db import get_connection
-from app.schemas import ChatCreate, ChatUpdate, TaskCreate, TaskUpdate
+from app.schemas import ChatCreate, ChatUpdate, TaskCreate, TaskUpdate, TaskTypeCreate, TaskTypeUpdate
 
 
 STATUS_LABELS = {
@@ -1842,6 +1842,57 @@ def add_message(
         return message_id
 
 
+
+def update_internal_note(chat_id: int, message_id: int, text: str) -> dict[str, Any] | None:
+    """Update an internal chat note only; marketplace messages are never affected."""
+    clean_text = (text or "").strip()
+    if not clean_text:
+        return None
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM messages WHERE id=? AND chat_id=? AND direction='internal'",
+            (int(message_id), int(chat_id)),
+        ).fetchone()
+        if not row:
+            return None
+        try:
+            raw_payload = json.loads(row["raw_json"] or "{}")
+            if not isinstance(raw_payload, dict):
+                raw_payload = {}
+        except Exception:
+            raw_payload = {}
+        raw_payload["internal"] = True
+        raw_payload["_crm_note_edited"] = True
+        raw_payload["_crm_note_edited_at"] = _utc_now_iso()
+        conn.execute(
+            """
+            UPDATE messages
+            SET text=?, raw_json=?
+            WHERE id=? AND chat_id=? AND direction='internal'
+            """,
+            (clean_text, json.dumps(raw_payload, ensure_ascii=False), int(message_id), int(chat_id)),
+        )
+        refresh_chat_last_message(conn, int(chat_id))
+        updated = conn.execute("SELECT * FROM messages WHERE id=?", (int(message_id),)).fetchone()
+        return row_to_dict(updated) if updated else None
+
+
+def delete_internal_note(chat_id: int, message_id: int) -> bool:
+    """Delete an internal chat note only; marketplace messages are never affected."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT id FROM messages WHERE id=? AND chat_id=? AND direction='internal'",
+            (int(message_id), int(chat_id)),
+        ).fetchone()
+        if not row:
+            return False
+        conn.execute(
+            "DELETE FROM messages WHERE id=? AND chat_id=? AND direction='internal'",
+            (int(message_id), int(chat_id)),
+        )
+        refresh_chat_last_message(conn, int(chat_id))
+        return True
+
 def _chats_select_sql(where: str) -> str:
     return f"""
         SELECT
@@ -2258,18 +2309,143 @@ def delete_chat_status(status_id: int) -> bool:
         return True
 
 
+def _normalize_task_status(status: str | None) -> str:
+    raw = str(status or "new").strip().lower()
+    if raw in {"open", "new"}:
+        return "new"
+    if raw in {"in_progress", "work", "working"}:
+        return "in_progress"
+    if raw in {"archived", "archive", "done", "cancelled", "canceled"}:
+        return "archived"
+    return raw or "new"
+
+
+def _ensure_task_types_table(conn) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS task_types (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            comment_label TEXT NOT NULL DEFAULT 'Комментарий',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(task_types)").fetchall()}
+    if "comment_label" not in columns:
+        conn.execute("ALTER TABLE task_types ADD COLUMN comment_label TEXT NOT NULL DEFAULT 'Комментарий'")
+    if "sort_order" not in columns:
+        conn.execute("ALTER TABLE task_types ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+    if "is_active" not in columns:
+        conn.execute("ALTER TABLE task_types ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
+    task_columns = {row["name"] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
+    if "task_type_id" not in task_columns:
+        conn.execute("ALTER TABLE tasks ADD COLUMN task_type_id INTEGER")
+    count = conn.execute("SELECT COUNT(*) AS c FROM task_types").fetchone()["c"]
+    if not count:
+        conn.execute(
+            "INSERT INTO task_types (title, comment_label, sort_order, is_active) VALUES (?, ?, ?, 1)",
+            ("Общая", "Комментарий", 0),
+        )
+
+
+def list_task_types(include_inactive: bool = False) -> list[dict[str, Any]]:
+    with get_connection() as conn:
+        _ensure_task_types_table(conn)
+        where = "" if include_inactive else "WHERE is_active=1"
+        rows = conn.execute(
+            f"""
+            SELECT id, title, comment_label, sort_order, is_active, created_at, updated_at
+            FROM task_types
+            {where}
+            ORDER BY is_active DESC, sort_order ASC, title COLLATE NOCASE ASC, id ASC
+            """
+        ).fetchall()
+        return [row_to_dict(r) for r in rows]
+
+
+def create_task_type(payload: TaskTypeCreate) -> dict[str, Any]:
+    title = (payload.title or "").strip()
+    comment_label = (payload.comment_label or "Комментарий").strip() or "Комментарий"
+    if not title:
+        raise ValueError("Название типа задачи обязательно")
+    with get_connection() as conn:
+        _ensure_task_types_table(conn)
+        cur = conn.execute(
+            """
+            INSERT INTO task_types (title, comment_label, sort_order, is_active)
+            VALUES (?, ?, ?, 1)
+            """,
+            (title, comment_label, int(payload.sort_order or 0)),
+        )
+        row = conn.execute("SELECT * FROM task_types WHERE id=?", (cur.lastrowid,)).fetchone()
+        return row_to_dict(row)
+
+
+def update_task_type(type_id: int, payload: TaskTypeUpdate) -> dict[str, Any] | None:
+    fields = payload.model_dump(exclude_unset=True)
+    allowed = {"title", "comment_label", "sort_order", "is_active"}
+    updates: dict[str, Any] = {}
+    for key, value in fields.items():
+        if key not in allowed:
+            continue
+        if key in {"title", "comment_label"} and value is not None:
+            value = str(value).strip()
+            if not value:
+                continue
+        if key == "is_active" and value is not None:
+            value = 1 if value else 0
+        updates[key] = value
+    with get_connection() as conn:
+        _ensure_task_types_table(conn)
+        exists = conn.execute("SELECT id FROM task_types WHERE id=?", (type_id,)).fetchone()
+        if not exists:
+            return None
+        if updates:
+            assignments = ", ".join([f"{key}=?" for key in updates])
+            conn.execute(
+                f"UPDATE task_types SET {assignments}, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                list(updates.values()) + [type_id],
+            )
+        row = conn.execute("SELECT * FROM task_types WHERE id=?", (type_id,)).fetchone()
+        return row_to_dict(row) if row else None
+
+
+def delete_task_type(type_id: int) -> bool:
+    with get_connection() as conn:
+        _ensure_task_types_table(conn)
+        row = conn.execute("SELECT id FROM task_types WHERE id=?", (type_id,)).fetchone()
+        if not row:
+            return False
+        in_use = conn.execute("SELECT COUNT(*) AS c FROM tasks WHERE task_type_id=?", (type_id,)).fetchone()["c"]
+        if int(in_use or 0) > 0:
+            conn.execute("UPDATE task_types SET is_active=0, updated_at=CURRENT_TIMESTAMP WHERE id=?", (type_id,))
+        else:
+            conn.execute("DELETE FROM task_types WHERE id=?", (type_id,))
+        return True
+
+
 def create_task(payload: TaskCreate) -> int:
     with get_connection() as conn:
+        _ensure_task_types_table(conn)
         assigned_user_id = payload.assigned_user_id
         assignee = payload.assignee
         if assigned_user_id:
             assignee = _get_user_label(conn, int(assigned_user_id)) or assignee
+        task_type_id = payload.task_type_id
+        if task_type_id:
+            exists = conn.execute("SELECT id FROM task_types WHERE id=? AND is_active=1", (int(task_type_id),)).fetchone()
+            if not exists:
+                task_type_id = None
         cur = conn.execute(
             """
-            INSERT INTO tasks (chat_id, title, description, assignee, assigned_user_id, due_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO tasks (chat_id, task_type_id, title, description, status, assignee, assigned_user_id, due_at)
+            VALUES (?, ?, ?, ?, 'new', ?, ?, ?)
             """,
-            (payload.chat_id, payload.title, payload.description, assignee, assigned_user_id, payload.due_at),
+            (payload.chat_id, task_type_id, payload.title, payload.description, assignee, assigned_user_id, payload.due_at),
         )
         return int(cur.lastrowid)
 
@@ -2289,9 +2465,20 @@ def _load_task_comments(conn, task_id: int) -> list[dict[str, Any]]:
 
 def _decorate_task(row, conn) -> dict[str, Any]:
     data = row_to_dict(row)
+    data["status"] = _normalize_task_status(data.get("status"))
     data["comments"] = _load_task_comments(conn, int(data["id"]))
     data["comments_count"] = len(data["comments"])
     data["last_comment"] = data["comments"][-1]["comment"] if data["comments"] else None
+    if data.get("task_type_id"):
+        data["task_type"] = {
+            "id": data.get("task_type_id"),
+            "title": data.get("task_type_title") or "Задача",
+            "comment_label": data.get("task_type_comment_label") or "Комментарий",
+        }
+    else:
+        data["task_type"] = None
+    data["task_type_title"] = data.get("task_type_title") or "Задача"
+    data["task_comment_label"] = data.get("task_type_comment_label") or "Комментарий"
     if data.get("assigned_user_id"):
         data["assignee_user"] = {
             "id": data.get("assigned_user_id"),
@@ -2317,22 +2504,25 @@ def update_task(task_id: int, payload: TaskUpdate) -> dict[str, Any] | None:
         fields["assigned_user_id"] = None
     if "description" in fields and fields.get("description") == "":
         fields["description"] = None
+    if "task_type_id" in fields and fields.get("task_type_id") in {"", 0}:
+        fields["task_type_id"] = None
 
     status = fields.get("status")
-    if status == "done":
-        fields["completed_at"] = __import__("datetime").datetime.utcnow().isoformat(timespec="seconds") + "Z"
-        fields["archived_at"] = None
-    elif status == "archived":
+    if status is not None:
+        status = _normalize_task_status(status)
+        fields["status"] = status
+    if status == "archived":
         fields["archived_at"] = __import__("datetime").datetime.utcnow().isoformat(timespec="seconds") + "Z"
-    elif status in {"open", "in_progress", "cancelled"}:
-        # Re-opening a task brings it back from archive/done sections.
+        fields["completed_at"] = None
+    elif status in {"new", "in_progress"}:
         fields["completed_at"] = None
         fields["archived_at"] = None
 
-    allowed = {"title", "description", "status", "assignee", "assigned_user_id", "due_at", "completed_at", "archived_at"}
+    allowed = {"title", "description", "task_type_id", "status", "assignee", "assigned_user_id", "due_at", "completed_at", "archived_at"}
     fields = {k: v for k, v in fields.items() if k in allowed}
 
     with get_connection() as conn:
+        _ensure_task_types_table(conn)
         exists = conn.execute("SELECT id FROM tasks WHERE id=?", (task_id,)).fetchone()
         if not exists:
             return None
@@ -2355,8 +2545,14 @@ def update_task(task_id: int, payload: TaskUpdate) -> dict[str, Any] | None:
                 (task_id, comment, comment_author),
             )
         row = conn.execute("""
-            SELECT t.*, u.display_name AS assignee_user_display_name, u.username AS assignee_user_username
+            SELECT
+                t.*,
+                tt.title AS task_type_title,
+                tt.comment_label AS task_type_comment_label,
+                u.display_name AS assignee_user_display_name,
+                u.username AS assignee_user_username
             FROM tasks t
+            LEFT JOIN task_types tt ON tt.id = t.task_type_id
             LEFT JOIN users u ON u.id = t.assigned_user_id
             WHERE t.id=?
         """, (task_id,)).fetchone()
@@ -2366,35 +2562,72 @@ def update_task(task_id: int, payload: TaskUpdate) -> dict[str, Any] | None:
 def get_task(task_id: int) -> dict[str, Any] | None:
     with get_connection() as conn:
         row = conn.execute("""
-            SELECT t.*, u.display_name AS assignee_user_display_name, u.username AS assignee_user_username
+            SELECT
+                t.*,
+                tt.title AS task_type_title,
+                tt.comment_label AS task_type_comment_label,
+                u.display_name AS assignee_user_display_name,
+                u.username AS assignee_user_username
             FROM tasks t
+            LEFT JOIN task_types tt ON tt.id = t.task_type_id
             LEFT JOIN users u ON u.id = t.assigned_user_id
             WHERE t.id=?
         """, (task_id,)).fetchone()
         return _decorate_task(row, conn) if row else None
 
 
-def list_tasks(status: str | None = None, bucket: str | None = None, assigned_user_id: int | None = None) -> list[dict[str, Any]]:
+def list_tasks(
+    status: str | None = None,
+    bucket: str | None = None,
+    assigned_user_id: int | None = None,
+    q: str | None = None,
+    task_type_id: int | None = None,
+    due_date: str | None = None,
+) -> list[dict[str, Any]]:
     clauses = ["c.marketplace != 'mock'"]
     params: list[Any] = []
-    if status:
+    normalized_status = _normalize_task_status(status) if status else None
+    if normalized_status == "new":
+        clauses.append("t.status IN ('new', 'open')")
+    elif normalized_status == "in_progress":
+        clauses.append("t.status = 'in_progress'")
+    elif normalized_status == "archived":
+        clauses.append("t.status IN ('archived', 'done', 'cancelled')")
+    elif status:
         clauses.append("t.status = ?")
         params.append(status)
     elif bucket == "active":
         clauses.append("t.status NOT IN ('done', 'archived', 'cancelled')")
     elif bucket == "done":
-        clauses.append("t.status = 'done'")
+        clauses.append("t.status IN ('done', 'archived', 'cancelled')")
     elif bucket == "archive":
-        clauses.append("t.status IN ('archived', 'cancelled')")
+        clauses.append("t.status IN ('archived', 'done', 'cancelled')")
     if assigned_user_id:
         clauses.append("t.assigned_user_id = ?")
         params.append(int(assigned_user_id))
+    if task_type_id:
+        clauses.append("t.task_type_id = ?")
+        params.append(int(task_type_id))
+    query = (q or "").strip()
+    if len(query) >= 3:
+        search_variants = []
+        for variant in (query, query.lower(), query.upper(), query.capitalize()):
+            if variant and variant not in search_variants:
+                search_variants.append(variant)
+        clauses.append("(" + " OR ".join(["COALESCE(t.title, '') LIKE ?"] * len(search_variants)) + ")")
+        params.extend([f"%{variant}%" for variant in search_variants])
+    if due_date:
+        clauses.append("date(t.due_at) = date(?)")
+        params.append(str(due_date))
     where = f"WHERE {' AND '.join(clauses)}"
     with get_connection() as conn:
+        _ensure_task_types_table(conn)
         rows = conn.execute(
             f"""
             SELECT
                 t.*,
+                tt.title AS task_type_title,
+                tt.comment_label AS task_type_comment_label,
                 c.marketplace,
                 c.customer_name,
                 c.customer_public_id,
@@ -2405,10 +2638,16 @@ def list_tasks(status: str | None = None, bucket: str | None = None, assigned_us
                 u.username AS assignee_user_username
             FROM tasks t
             JOIN chats c ON c.id = t.chat_id
+            LEFT JOIN task_types tt ON tt.id = t.task_type_id
             LEFT JOIN users u ON u.id = t.assigned_user_id
             {where}
             ORDER BY
-                CASE t.status WHEN 'open' THEN 0 WHEN 'in_progress' THEN 1 WHEN 'done' THEN 2 WHEN 'archived' THEN 3 ELSE 4 END,
+                CASE
+                    WHEN t.status IN ('new', 'open') THEN 0
+                    WHEN t.status = 'in_progress' THEN 1
+                    WHEN t.status IN ('archived', 'done', 'cancelled') THEN 2
+                    ELSE 3
+                END,
                 CASE WHEN t.due_at IS NULL OR t.due_at='' THEN 1 ELSE 0 END,
                 datetime(t.due_at),
                 datetime(t.updated_at) DESC

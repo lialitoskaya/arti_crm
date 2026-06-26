@@ -24,7 +24,11 @@ from app.connectors.ozon import OzonConnector
 from app.connectors.wildberries import WildberriesConnector
 from app.connectors.yandex_market import YandexMarketConnector
 from app.db import get_connection, init_db
+<<<<<<< HEAD
 from app.schemas import AiReplyCreate, ChatCreate, ChatUpdate, InternalNoteCreate, LoginCreate, MessageCreate, ReviewReplyCreate, QuestionAnswerCreate, TaskCreate, TaskUpdate, UserCreate, UserPasswordUpdate, UserUpdate, ProfileUpdate, KnowledgeCategoryCreate, KnowledgeArticleCreate, KnowledgeArticleUpdate, ChatFunnelCreate, ChatFunnelUpdate, ChatStatusCreate, ChatStatusUpdate, ReplyTemplateCreate
+=======
+from app.schemas import AiReplyCreate, ChatCreate, ChatUpdate, InternalNoteCreate, InternalNoteUpdate, LoginCreate, MessageCreate, ReviewReplyCreate, QuestionAnswerCreate, TaskCreate, TaskUpdate, UserCreate, UserPasswordUpdate, UserUpdate, ProfileUpdate, KnowledgeCategoryCreate, KnowledgeArticleCreate, KnowledgeArticleUpdate, ChatFunnelCreate, ChatFunnelUpdate, ChatStatusCreate, ChatStatusUpdate, ReplyTemplateCreate, TaskTypeCreate, TaskTypeUpdate
+>>>>>>> 1de50c7 (Improve CRM task workflow, chat notes, and composer UI)
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -1210,8 +1214,8 @@ async def _sync_ozon_questions_unlocked(*, background: bool = False) -> dict[str
         return {"ok": False, "marketplace": "ozon", "configured": False, "count": 0}
     if not hasattr(connector, "list_questions"):
         return {"ok": False, "marketplace": "ozon", "error": "Ozon connector has no questions API"}
-    limit = _env_int("OZON_QUESTIONS_BACKGROUND_LIMIT" if background else "OZON_QUESTIONS_SYNC_LIMIT", 50 if background else 50, minimum=1, maximum=100)
-    pages = _env_int("OZON_QUESTIONS_BACKGROUND_PAGES" if background else "OZON_QUESTIONS_SYNC_PAGES", 1 if background else 3, minimum=1, maximum=20)
+    limit = _env_int("OZON_QUESTIONS_BACKGROUND_LIMIT" if background else "OZON_QUESTIONS_SYNC_LIMIT", 100 if background else 100, minimum=1, maximum=100)
+    pages = _env_int("OZON_QUESTIONS_BACKGROUND_PAGES" if background else "OZON_QUESTIONS_SYNC_PAGES", 3 if background else 5, minimum=1, maximum=20)
     try:
         questions = await connector.list_questions(limit=limit, pages=pages)  # type: ignore[attr-defined]
     except Exception as exc:
@@ -3056,10 +3060,58 @@ async def answer_ozon_question(question_id: int, payload: QuestionAnswerCreate) 
 
 
 @app.get("/api/tasks")
-def list_tasks(request: Request, status: str | None = None, bucket: str | None = None, mine: bool = False) -> list[dict[str, Any]]:
+def list_tasks(
+    request: Request,
+    status: str | None = None,
+    bucket: str | None = None,
+    mine: bool = False,
+    q: str | None = None,
+    task_type_id: int | None = None,
+    due_date: str | None = None,
+) -> list[dict[str, Any]]:
     user = _current_user(request)
     assigned_user_id = int(user["id"]) if mine else None
-    return repo.list_tasks(status=status, bucket=bucket, assigned_user_id=assigned_user_id)
+    return repo.list_tasks(
+        status=status,
+        bucket=bucket,
+        assigned_user_id=assigned_user_id,
+        q=q,
+        task_type_id=task_type_id,
+        due_date=due_date,
+    )
+
+
+@app.get("/api/task-types")
+def api_list_task_types(request: Request, include_inactive: bool = False) -> list[dict[str, Any]]:
+    _current_user(request)
+    return repo.list_task_types(include_inactive=include_inactive)
+
+
+@app.post("/api/task-types")
+def api_create_task_type(payload: TaskTypeCreate, request: Request) -> dict[str, Any]:
+    _current_user(request)
+    try:
+        return repo.create_task_type(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.patch("/api/task-types/{type_id}")
+def api_update_task_type(type_id: int, payload: TaskTypeUpdate, request: Request) -> dict[str, Any]:
+    _current_user(request)
+    task_type = repo.update_task_type(type_id, payload)
+    if not task_type:
+        raise HTTPException(status_code=404, detail="Task type not found")
+    return task_type
+
+
+@app.delete("/api/task-types/{type_id}")
+def api_delete_task_type(type_id: int, request: Request) -> dict[str, bool]:
+    _current_user(request)
+    ok = repo.delete_task_type(type_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Task type not found")
+    return {"ok": True}
 
 
 
@@ -3523,6 +3575,28 @@ def add_internal_note(chat_id: int, payload: InternalNoteCreate) -> dict[str, An
         raw={"internal": True},
     )
     return {"message_id": message_id, "chat": repo.get_chat(chat_id)}
+
+
+@app.patch("/api/chats/{chat_id}/notes/{message_id}")
+def update_internal_note(chat_id: int, message_id: int, payload: InternalNoteUpdate) -> dict[str, Any]:
+    chat = repo.get_chat(chat_id)
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    message = repo.update_internal_note(chat_id, message_id, payload.text)
+    if not message:
+        raise HTTPException(status_code=404, detail="Internal note not found")
+    return {"message": message, "chat": repo.get_chat(chat_id)}
+
+
+@app.delete("/api/chats/{chat_id}/notes/{message_id}")
+def delete_internal_note(chat_id: int, message_id: int) -> dict[str, Any]:
+    chat = repo.get_chat(chat_id)
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    deleted = repo.delete_internal_note(chat_id, message_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Internal note not found")
+    return {"ok": True, "chat": repo.get_chat(chat_id)}
 
 
 @app.post("/api/tasks")
