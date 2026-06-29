@@ -23,9 +23,14 @@ def _resolve_db_path() -> str:
 
 @contextmanager
 def get_connection() -> Iterator[sqlite3.Connection]:
-    conn = sqlite3.connect(_resolve_db_path())
+    conn = sqlite3.connect(_resolve_db_path(), timeout=15)
     conn.row_factory = sqlite3.Row
     try:
+        conn.execute("PRAGMA busy_timeout=15000")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA temp_store=MEMORY")
         yield conn
         conn.commit()
     except Exception:
@@ -456,6 +461,10 @@ def init_db() -> None:
                 ON messages(direction, created_at);
             CREATE INDEX IF NOT EXISTS idx_messages_chat_direction_created_at
                 ON messages(chat_id, direction, created_at);
+            CREATE INDEX IF NOT EXISTS idx_messages_chat_created_id
+                ON messages(chat_id, created_at DESC, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_tasks_chat_created_id
+                ON tasks(chat_id, created_at DESC, id DESC);
             CREATE INDEX IF NOT EXISTS idx_chats_marketplace_status_last_message
                 ON chats(marketplace, status, last_message_at);
             CREATE INDEX IF NOT EXISTS idx_chats_marketplace_last_message

@@ -4,11 +4,11 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Arti CRM</title>
-  <meta name="arti-build-version" content="v35-desktop-chat-menu-position-fix-20260629" />
+  <meta name="arti-build-version" content="v40-chat-list-infinite-scroll-20260629" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/styles.css?v=v35-desktop-chat-menu-position-fix-20260629" />
+  <link rel="stylesheet" href="/static/styles.css?v=v40-chat-list-infinite-scroll-20260629" />
 
 </head>
 <body class="auth-pending">
@@ -129,6 +129,15 @@
                 <option value="mine">Мои чаты</option>
                 <option value="archive">Архив</option>
               </select>
+            </div>
+            <div class="chat-search-wrap">
+              <button id="chatSearchToggleBtn" class="chat-search-toggle" type="button" aria-label="Поиск по сообщениям" aria-expanded="false" title="Поиск по сообщениям">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M16.5 16.5L21 21"></path></svg>
+              </button>
+              <div id="chatSearchBox" class="chat-search-box hidden">
+                <input id="chatSearchInput" type="search" autocomplete="off" placeholder="Поиск по сообщениям" aria-label="Поиск по сообщениям" />
+                <button id="chatSearchClearBtn" class="chat-search-clear hidden" type="button" aria-label="Очистить поиск" title="Очистить">×</button>
+              </div>
             </div>
           </div>
           <div id="stats" class="stats"></div>
@@ -254,8 +263,8 @@
               <div id="composerAttachmentPreview" class="composer-attachments hidden"></div>
               <div class="composer-main-row">
                 <button id="attachImageBtn" class="composer-attach-btn" type="button" aria-label="Добавить изображение" title="Добавить изображение">＋</button>
-                <button id="replyTemplatesToggleBtn" class="composer-template-btn" type="button" aria-expanded="false" aria-label="Быстрые ответы" title="Быстрые ответы">✦</button>
                 <textarea id="messageText" placeholder="Напишите сообщение клиенту..." rows="2"></textarea>
+                <button id="replyTemplatesToggleBtn" class="composer-template-btn" type="button" aria-expanded="false" aria-label="Быстрые ответы" title="Быстрые ответы">✦</button>
                 <button class="composer-send-btn" type="submit" aria-label="Отправить">➤</button>
               </div>
               <input id="chatImageInput" class="hidden" type="file" accept="image/*" multiple />
@@ -800,6 +809,6 @@
 
   <div id="notificationToasts" class="notification-toast-stack" aria-live="polite"></div>
 
-  <script src="/static/app.js?v=v35-desktop-chat-menu-position-fix-20260629"></script>
+  <script src="/static/app.js?v=v40-chat-list-infinite-scroll-20260629"></script>
 </body>
 </html>

@@ -682,9 +682,9 @@ label { display: grid; gap: 6px; color: var(--crm-text-soft); font-size: 13px; }
 }
 .composer-main-row {
   display: grid;
-  grid-template-columns: 34px 34px minmax(0, 1fr) 42px;
+  grid-template-columns: 34px minmax(0, 1fr) 34px 42px;
   gap: 8px;
-  align-items: end;
+  align-items: center;
 }
 .composer-attach-btn,
 .composer-template-btn,
@@ -707,7 +707,7 @@ label { display: grid; gap: 6px; color: var(--crm-text-soft); font-size: 13px; }
 .composer-attachments { margin-bottom: 9px; display: flex; gap: 8px; flex-wrap: wrap; }
 .reply-templates-panel {
   position: absolute;
-  left: 18px;
+  right: 0;
   bottom: calc(100% + 8px);
   width: min(380px, calc(100% - 36px));
   max-height: 430px;
@@ -729,7 +729,6 @@ label { display: grid; gap: 6px; color: var(--crm-text-soft); font-size: 13px; }
 .reply-template-item {
   width: 100%;
   min-width: 0;
-  display: grid;
   gap: 4px;
   padding: 9px 10px;
   border: 1px solid var(--crm-line);
@@ -739,7 +738,11 @@ label { display: grid; gap: 6px; color: var(--crm-text-soft); font-size: 13px; }
 }
 .reply-template-item-title,
 .reply-template-item-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.reply-template-item-preview { color: var(--crm-muted); font-size: 12px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.reply-template-item-preview { color: var(--crm-muted); font-size: 12px; overflow: hidden; text-align: left; white-space: break-spaces; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+
+.reply-template-item-title {
+  display: none;
+}
 
 .notification-toast-stack {
   position: fixed;
@@ -1166,7 +1169,7 @@ label { display: grid; gap: 6px; color: var(--crm-text-soft); font-size: 13px; }
   .review-item { padding: 10px; }
   .message { max-width: 94%; }
   .extra-panel { right: 8px; top: 74px; width: calc(100% - 16px); }
-  .composer-main-row { grid-template-columns: 32px 32px minmax(0, 1fr) 38px; gap: 6px; }
+  .composer-main-row { grid-template-columns: 32px minmax(0, 1fr) 32px  38px; gap: 6px; }
   .composer-attach-btn,
   .composer-template-btn { width: 32px; height: 34px; }
   .composer-send-btn { width: 38px; height: 38px; }
@@ -2562,5 +2565,168 @@ textarea {
   top: calc(100% + 8px);
   right: 0;
   z-index: 120;
+}
+
+
+/* Arti CRM — v36 mobile input zoom fix
+   iOS Safari zooms focused inputs when font-size is below 16px. */
+@media (max-width: 900px) {
+  #chatsView.mobile-chat-mode input,
+  #chatsView.mobile-chat-mode select,
+  #chatsView.mobile-chat-mode textarea,
+  #chatsView > .conversation.mobile-chat-open input,
+  #chatsView > .conversation.mobile-chat-open select,
+  #chatsView > .conversation.mobile-chat-open textarea {
+    font-size: 13px !important;
+  }
+
+  #messageText {
+    font-size: 13px !important;
+  }
+}
+
+
+/* Arti CRM — v38 chat message search */
+#chatsView .filters {
+  grid-template-columns: repeat(3, minmax(0, 1fr)) 36px;
+  align-items: start;
+  overflow: visible;
+  position: relative;
+}
+
+.chat-search-wrap {
+  position: relative;
+  min-width: 36px;
+  justify-self: end;
+}
+
+.chat-search-toggle {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  border: 1px solid var(--crm-line);
+  border-radius: var(--crm-radius-sm);
+  background: #fff;
+  color: var(--crm-text-soft);
+}
+
+.chat-search-toggle:hover,
+.chat-search-toggle.active {
+  background: var(--crm-hover);
+  border-color: var(--crm-line-strong);
+  color: var(--crm-text);
+  transform: none;
+}
+
+.chat-search-toggle svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  fill: none;
+}
+
+.chat-search-box {
+  position: absolute;
+  top: calc(100% + 7px);
+  right: 0;
+  z-index: 60;
+  width: min(322px, calc(100vw - 48px));
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--crm-line);
+  border-radius: var(--crm-radius-md);
+  background: #fff;
+  box-shadow: var(--crm-shadow-md);
+}
+
+.chat-search-box input {
+  min-height: 34px;
+}
+
+.chat-search-clear {
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0;
+  border-radius: var(--crm-radius-sm);
+  background: transparent;
+  border: 0;
+  color: var(--crm-muted);
+}
+
+.chat-search-clear:hover {
+  background: var(--crm-hover);
+  color: var(--crm-text);
+  transform: none;
+}
+
+.chat-search-match-preview {
+  color: var(--crm-blue-text);
+}
+
+@media (max-width: 900px) {
+  #chatsView .filters {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 36px;
+  }
+
+  #chatsView .chat-scope-select-row {
+    grid-column: 1 / span 2;
+  }
+
+  #chatsView .chat-search-wrap {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+    align-self: start;
+    justify-self: end;
+  }
+
+  .chat-search-box {
+    width: min(290px, calc(100vw - 44px));
+  }
+}
+
+
+/* Arti CRM — v39 mobile search input zoom fix */
+#chatSearchInput::-webkit-search-cancel-button,
+#chatSearchInput::-webkit-search-decoration,
+#chatSearchInput::-webkit-search-results-button,
+#chatSearchInput::-webkit-search-results-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+
+#chatSearchInput {
+  -webkit-appearance: textfield;
+  appearance: textfield;
+}
+
+@media (max-width: 900px) {
+  #chatSearchInput,
+  .chat-search-box input {
+    font-size: 13px !important;
+    line-height: 1.35;
+  }
+}
+
+
+/* Arti CRM — v40 mobile chat list infinite scroll */
+.chat-list-render-limit-note,
+.chat-list-load-more-note {
+  cursor: default;
+  text-align: center;
+  color: var(--crm-muted);
+  background: var(--crm-panel-soft);
+}
+
+.chat-list-load-more-note p {
+  margin: 0;
 }
 

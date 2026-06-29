@@ -883,8 +883,13 @@ async def _sync_ozon_fast_inbox_unlocked(*, background: bool = True) -> dict[str
     if not getattr(connector, "client_id", "") or not getattr(connector, "api_key", ""):
         return {"ok": False, "marketplace": "ozon", "configured": False, "count": 0}
 
-    connector.sync_max_chats = _env_int("OZON_FAST_SYNC_MAX_CHATS", 300, minimum=20, maximum=1000)
-    connector.sync_pages_per_variant = _env_int("OZON_FAST_SYNC_PAGES_PER_VARIANT", 3, minimum=1, maximum=20)
+    # Operator/background polling must be quick. Deep archive recovery should
+    # use manual/debug sync with explicit env limits, not the opened CRM tab.
+    default_max_chats = _env_int("OZON_OPERATOR_FAST_SYNC_MAX_CHATS", 80, minimum=20, maximum=1000) if background else 300
+    default_pages_per_variant = _env_int("OZON_OPERATOR_FAST_SYNC_PAGES_PER_VARIANT", 1, minimum=1, maximum=20) if background else 3
+
+    connector.sync_max_chats = _env_int("OZON_FAST_SYNC_MAX_CHATS", default_max_chats, minimum=20, maximum=1000)
+    connector.sync_pages_per_variant = _env_int("OZON_FAST_SYNC_PAGES_PER_VARIANT", default_pages_per_variant, minimum=1, maximum=20)
     connector.sync_variant_mode = os.getenv("OZON_FAST_SYNC_VARIANT_MODE", "fast")
     connector.sync_include_closed = False
     connector.history_pages = _env_int("OZON_FAST_HISTORY_PAGES", 1, minimum=1, maximum=5)
@@ -3281,10 +3286,25 @@ def delete_chat_status(status_id: int, request: Request) -> dict[str, Any]:
 
 
 @app.get("/api/chats")
-def list_chats(request: Request, status: str | None = None, marketplace: str | None = None, archived: bool = False, mine: bool = False, funnel_id: int | None = None) -> list[dict[str, Any]]:
+def list_chats(
+    request: Request,
+    status: str | None = None,
+    marketplace: str | None = None,
+    archived: bool = False,
+    mine: bool = False,
+    funnel_id: int | None = None,
+    q: str | None = None,
+) -> list[dict[str, Any]]:
     user = _current_user(request)
     assigned_user_id = int(user["id"]) if mine else None
-    return repo.list_chats(status=status, marketplace=marketplace, archived=archived, assigned_user_id=assigned_user_id, funnel_id=funnel_id)
+    return repo.list_chats(
+        status=status,
+        marketplace=marketplace,
+        archived=archived,
+        assigned_user_id=assigned_user_id,
+        funnel_id=funnel_id,
+        q=q,
+    )
 
 
 @app.get("/api/chats/{chat_id}")
@@ -3783,14 +3803,75 @@ def api_create_reply_template(payload: ReplyTemplateCreate, request: Request) ->
         raise HTTPException(status_code=400, detail=str(exc))
 
 
-@app.post("/api/sync/operator")
-async def sync_operator_frontend() -> dict[str, Any]:
+def _frontend_operator_sync_lock() -> asyncio.Lock:
     lock: asyncio.Lock = getattr(app.state, "frontend_operator_sync_lock", None)
     if lock is None:
         lock = asyncio.Lock()
         app.state.frontend_operator_sync_lock = lock
+    return lock
+
+
+async def _run_frontend_operator_sync_task() -> dict[str, Any]:
+    lock = _frontend_operator_sync_lock()
+    if lock.locked():
+        return {
+            "ok": True,
+            "mode": "operator_frontend_async",
+            "status": "already_running",
+            "background": True,
+            "last": getattr(app.state, "last_frontend_operator_sync", None),
+        }
+
+    started_at = time.time()
     async with lock:
-        return await _sync_operator_frontend_unlocked()
+        try:
+            payload = await _sync_operator_frontend_unlocked()
+            payload["async_status"] = "finished"
+            payload["duration_seconds"] = round(time.time() - started_at, 2)
+            app.state.last_frontend_operator_sync = payload
+            return payload
+        except Exception as exc:
+            payload = {
+                "ok": False,
+                "mode": "operator_frontend_async",
+                "async_status": "error",
+                "duration_seconds": round(time.time() - started_at, 2),
+                "error": str(exc),
+                "background": True,
+            }
+            app.state.last_frontend_operator_sync = payload
+            return payload
+
+
+@app.post("/api/sync/operator")
+async def sync_operator_frontend(wait: bool = False) -> dict[str, Any]:
+    # Default mode is async: the browser should not wait 20-30 seconds for
+    # marketplace APIs. It starts sync and keeps refreshing local DB separately.
+    if wait:
+        return await _run_frontend_operator_sync_task()
+
+    task: asyncio.Task | None = getattr(app.state, "frontend_operator_sync_task", None)
+    if task and not task.done():
+        return {
+            "ok": True,
+            "mode": "operator_frontend_async",
+            "status": "running",
+            "queued": False,
+            "background": True,
+            "last": getattr(app.state, "last_frontend_operator_sync", None),
+        }
+
+    task = asyncio.create_task(_run_frontend_operator_sync_task())
+    app.state.frontend_operator_sync_task = task
+
+    return {
+        "ok": True,
+        "mode": "operator_frontend_async",
+        "status": "started",
+        "queued": True,
+        "background": True,
+        "last": getattr(app.state, "last_frontend_operator_sync", None),
+    }
 
 
 @app.post("/api/sync/{marketplace}")

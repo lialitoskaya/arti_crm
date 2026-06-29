@@ -1986,7 +1986,38 @@ def _chats_select_sql(where: str) -> str:
     """
 
 
-def list_chats(status: str | None = None, marketplace: str | None = None, archived: bool = False, assigned_user_id: int | None = None, funnel_id: int | None = None) -> list[dict[str, Any]]:
+def _escape_like_query(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _chat_message_search_variants(q: str | None) -> list[str]:
+    query = (q or "").strip()
+    if len(query) < 2:
+        return []
+
+    variants: list[str] = []
+    for variant in (query, query.lower(), query.upper(), query.capitalize()):
+        if variant and variant not in variants:
+            variants.append(variant)
+    return variants
+
+
+def _message_search_clause(alias: str, variants: list[str]) -> str:
+    return "(" + " OR ".join([f"COALESCE({alias}.text, '') LIKE ? ESCAPE '\\'"] * len(variants)) + ")"
+
+
+def _message_search_params(variants: list[str]) -> list[str]:
+    return [f"%{_escape_like_query(variant)}%" for variant in variants]
+
+
+def list_chats(
+    status: str | None = None,
+    marketplace: str | None = None,
+    archived: bool = False,
+    assigned_user_id: int | None = None,
+    funnel_id: int | None = None,
+    q: str | None = None,
+) -> list[dict[str, Any]]:
     clauses = ["c.marketplace != 'mock'", f"NOT ({_system_excluded_condition_sql('c')})"]
     params: list[Any] = []
     closed_condition = _closed_status_condition_sql()
@@ -2010,13 +2041,50 @@ def list_chats(status: str | None = None, marketplace: str | None = None, archiv
     if assigned_user_id:
         clauses.append("c.assigned_user_id = ?")
         params.append(int(assigned_user_id))
+
+    search_variants = _chat_message_search_variants(q)
+    search_params = _message_search_params(search_variants)
+    if search_variants:
+        clauses.append(
+            f"""
+            EXISTS (
+                SELECT 1
+                FROM messages sm
+                WHERE sm.chat_id = c.id
+                  AND {_message_search_clause('sm', search_variants)}
+            )
+            """
+        )
+        params.extend(search_params)
+
     where = f"WHERE {' AND '.join(clauses)}"
     with get_connection() as conn:
         rows = conn.execute(_chats_select_sql(where), params).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = _decorate_chat_sla(row_to_dict(row))
+            if search_variants:
+                match = conn.execute(
+                    f"""
+                    SELECT text, created_at
+                    FROM messages ms
+                    WHERE ms.chat_id=?
+                      AND {_message_search_clause('ms', search_variants)}
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 1
+                    """,
+                    [int(item["id"]), *search_params],
+                ).fetchone()
+                if match:
+                    item["search_match_text"] = match["text"]
+                    item["search_match_at"] = match["created_at"]
+                    item["search_query"] = (q or "").strip()
+            result.append(item)
+
         # v40: do not additionally hide Ozon rows at list-render time.
         # System/support chats are filtered/deleted during sync; hiding here made
         # real customer chats disappear when old metadata was classified too broadly.
-        return [_decorate_chat_sla(row_to_dict(r)) for r in rows]
+        return result
 
 
 
@@ -2064,16 +2132,16 @@ def get_chat(chat_id: int, messages_limit: int | None = None) -> dict[str, Any] 
                     SELECT *
                     FROM messages
                     WHERE chat_id=?
-                    ORDER BY datetime(created_at) DESC, id DESC
+                    ORDER BY created_at DESC, id DESC
                     LIMIT ?
                 )
-                ORDER BY datetime(created_at) ASC, id ASC
+                ORDER BY created_at ASC, id ASC
                 """,
                 (chat_id, int(messages_limit)),
             ).fetchall()
         else:
             messages = conn.execute(
-                "SELECT * FROM messages WHERE chat_id=? ORDER BY datetime(created_at) ASC, id ASC",
+                "SELECT * FROM messages WHERE chat_id=? ORDER BY created_at ASC, id ASC",
                 (chat_id,),
             ).fetchall()
         tasks = conn.execute(
@@ -2082,7 +2150,7 @@ def get_chat(chat_id: int, messages_limit: int | None = None) -> dict[str, Any] 
             FROM tasks t
             LEFT JOIN users u ON u.id = t.assigned_user_id
             WHERE t.chat_id=?
-            ORDER BY datetime(t.created_at) DESC, t.id DESC
+            ORDER BY t.created_at DESC, t.id DESC
             """,
             (chat_id,),
         ).fetchall()

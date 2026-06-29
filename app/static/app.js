@@ -73,6 +73,13 @@ let currentUser = null;
 let assignees = [];
 let usersCache = [];
 let chatOwnerScope = 'all';
+let chatMessageSearch = '';
+let chatSearchTimer = null;
+const CHAT_LIST_MOBILE_INITIAL_LIMIT = 90;
+const CHAT_LIST_MOBILE_PAGE_SIZE = 60;
+let chatListMobileRenderLimit = CHAT_LIST_MOBILE_INITIAL_LIMIT;
+let chatListLastRenderKey = '';
+let chatListInfiniteScrollBound = false;
 let knowledgeCategories = [];
 let knowledgeArticles = [];
 let currentKnowledgeCategoryId = null;
@@ -1590,13 +1597,13 @@ async function loadSyncStatus() {
 // The browser polls more often than before so new marketplace messages are
 // imported and shown without a manual page reload. Server-side throttles still
 // protect marketplace APIs from too many requests.
-const FRONTEND_OZON_SYNC_INTERVAL_MS = 15000;
-const FRONTEND_OZON_SYNC_MIN_GAP_MS = 12000;
+const FRONTEND_OZON_SYNC_INTERVAL_MS = 10000;
+const FRONTEND_OZON_SYNC_MIN_GAP_MS = 8000;
 const FRONTEND_OZON_QUESTIONS_SYNC_INTERVAL_MS = 60000;
 const FRONTEND_OZON_QUESTIONS_SYNC_MIN_GAP_MS = 45000;
 const ACTIVE_CHAT_UI_REFRESH_INTERVAL_MS = 9000;
 const ACTIVE_CHAT_UI_REFRESH_MIN_GAP_MS = 7000;
-const ACTIVE_CHAT_MESSAGES_REFRESH_INTERVAL_MS = 9000;
+const ACTIVE_CHAT_MESSAGES_REFRESH_INTERVAL_MS = 5000;
 
 function isFrontendSyncAllowed() {
   if (!appInitialized || !currentUser) return false;
@@ -1620,35 +1627,33 @@ async function runFrontendOzonFastSync(options = {}) {
   frontendSyncInFlight = true;
   frontendSyncLastStartedAt = now;
   try {
-    if (!silent) setStatus('Обновляем чаты маркетплейсов...');
-    const result = await api('/api/sync/operator', { method: 'POST', timeoutMs: 25000 });
+    if (!silent) setStatus('Запускаем фоновую синхронизацию...');
+    const result = await api('/api/sync/operator', { method: 'POST', timeoutMs: 5000 });
     frontendSyncLastSuccessAt = Date.now();
 
-    const chatsCount = Number(result?.count || 0);
-    const messagesCount = Number(result?.messages_count || 0);
-    const changed = chatsCount > 0 || messagesCount > 0 || Number(result?.reopened_closed_chats || 0) > 0;
+    // /api/sync/operator is async by default now: it starts marketplace polling
+    // and returns immediately. New messages are picked up by lightweight local
+    // refresh below and by the 5-second active-chat poll.
+    const lastResult = result?.last || result || {};
+    const chatsCount = Number(lastResult?.count || 0);
+    const messagesCount = Number(lastResult?.messages_count || 0);
+    const changed = messagesCount > 0 || chatsCount > 0 || Number(lastResult?.reopened_closed_chats || 0) > 0;
 
     if (activeView === 'chats') {
-      // If sync reports changes, refresh the list. If it reports no changes,
-      // still refresh the list occasionally because backend/background imports
-      // may have already updated local DB while the sync endpoint returns zero.
-      if (changed) {
-        await loadChats({ withStats: false, render: !isMobileChatOpen() });
-        if (messagesCount > 0 && currentChatId && !chatOpenInFlight) {
-          await refreshCurrentChatMessagesOnly({ force: true });
-        }
-      } else {
-        await refreshChatListOnly({ force: false });
-        if (currentChatId && !chatOpenInFlight) {
-          await refreshCurrentChatMessagesOnly({ force: false });
-        }
+      await refreshChatListOnly({ force: changed });
+      if (currentChatId && !chatOpenInFlight) {
+        await refreshCurrentChatMessagesOnly({ force: changed });
       }
     } else if (changed) {
       await loadStats();
     }
 
     if (!silent || changed) {
-      setStatus(`Маркетплейсы обновлены: чатов ${chatsCount}, сообщений ${messagesCount}`);
+      if (result?.status === 'started' || result?.status === 'running') {
+        setStatus('Фоновая синхронизация запущена');
+      } else {
+        setStatus(`Маркетплейсы обновлены: чатов ${chatsCount}, сообщений ${messagesCount}`);
+      }
     }
     return result;
   } catch (err) {
@@ -1793,6 +1798,93 @@ async function loadStats() {
   }
 }
 
+function currentChatMessageSearch() {
+  const input = $('chatSearchInput');
+  return String(input?.value ?? chatMessageSearch ?? '').trim();
+}
+
+function updateChatSearchUi() {
+  const query = currentChatMessageSearch();
+  const box = $('chatSearchBox');
+  const toggle = $('chatSearchToggleBtn');
+  const clearBtn = $('chatSearchClearBtn');
+  const isOpen = Boolean(box && !box.classList.contains('hidden'));
+  toggle?.classList.toggle('active', Boolean(query));
+  toggle?.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+  clearBtn?.classList.toggle('hidden', !query);
+}
+
+function setChatSearchOpen(open = true) {
+  const box = $('chatSearchBox');
+  const input = $('chatSearchInput');
+  if (!box) return;
+
+  box.classList.toggle('hidden', !open);
+  updateChatSearchUi();
+
+  if (open && input) {
+    window.setTimeout(() => {
+      input.focus();
+      input.select();
+    }, 0);
+  }
+}
+
+function resetChatListMobileLimit() {
+  chatListMobileRenderLimit = CHAT_LIST_MOBILE_INITIAL_LIMIT;
+  chatListLastRenderKey = '';
+}
+
+function currentChatListRenderKey() {
+  const marketplace = $('marketplaceFilter')?.value || '';
+  const status = $('statusFilter')?.value || '';
+  const funnel = $('funnelFilter')?.value || '';
+  const search = currentChatMessageSearch();
+  return [chatScope, chatOwnerScope, marketplace, status, funnel, search].join('|');
+}
+
+function scheduleChatMessageSearch() {
+  clearTimeout(chatSearchTimer);
+  chatSearchTimer = window.setTimeout(() => {
+    chatMessageSearch = currentChatMessageSearch();
+    resetChatListMobileLimit();
+    updateChatSearchUi();
+    loadChats({ withStats: false }).catch(err => notify('Поиск по сообщениям', String(err.message || err)));
+  }, 260);
+}
+
+function clearChatMessageSearch() {
+  clearTimeout(chatSearchTimer);
+  chatMessageSearch = '';
+  const input = $('chatSearchInput');
+  if (input) input.value = '';
+  resetChatListMobileLimit();
+  updateChatSearchUi();
+  loadChats({ withStats: false }).catch(err => notify('Поиск по сообщениям', String(err.message || err)));
+  input?.focus();
+}
+
+function bindChatListInfiniteScroll() {
+  const list = $('chatList');
+  if (!list || chatListInfiniteScrollBound) return;
+  chatListInfiniteScrollBound = true;
+
+  list.addEventListener('scroll', () => {
+    if (!isMobileChatLayout() || isMobileChatOpen()) return;
+    if (!chats || !chats.length) return;
+
+    const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 220;
+    if (!nearBottom) return;
+
+    const visibleChats = (chats || []).filter(chat => chatScope === 'archive' || !isClosedWorkflowStatus(chat.status, chat.status_label));
+    if (chatListMobileRenderLimit >= visibleChats.length) return;
+
+    const previousScrollTop = list.scrollTop;
+    chatListMobileRenderLimit = Math.min(chatListMobileRenderLimit + CHAT_LIST_MOBILE_PAGE_SIZE, visibleChats.length);
+    renderChatList({ force: true, preserveScrollTop: previousScrollTop });
+  }, { passive: true });
+}
+
 async function loadChats(options = {}) {
   const { withStats = true, render = true } = options;
   if (chatsLoadPromise) return chatsLoadPromise;
@@ -1804,6 +1896,13 @@ async function loadChats(options = {}) {
     const marketplace = marketplaceEl ? marketplaceEl.value : '';
     const status = statusEl ? statusEl.value : '';
     const funnelId = funnelEl ? funnelEl.value : '';
+    const searchQuery = currentChatMessageSearch();
+    chatMessageSearch = searchQuery;
+    const renderKey = currentChatListRenderKey();
+    if (renderKey !== chatListLastRenderKey) {
+      resetChatListMobileLimit();
+      chatListLastRenderKey = renderKey;
+    }
     if (marketplace) params.set('marketplace', marketplace);
     if (chatScope === 'archive') {
       params.set('archived', 'true');
@@ -1813,6 +1912,8 @@ async function loadChats(options = {}) {
       if (chatOwnerScope === 'mine') params.set('mine', 'true');
     }
 
+    if (searchQuery.length >= 2) params.set('q', searchQuery);
+
     chats = await api(`/api/chats?${params.toString()}`, { timeoutMs: 15000 });
 
     if (render) {
@@ -1820,6 +1921,7 @@ async function loadChats(options = {}) {
       if (chatCountLabel) chatCountLabel.textContent = String(chats.length);
       renderChatList();
       renderScopeTabs();
+      updateChatSearchUi();
     }
 
     if (withStats) await loadStats();
@@ -2089,9 +2191,10 @@ async function refreshCurrentChatMessagesOnly(options = {}) {
 
 
 function renderChatList(options = {}) {
-  const { force = false } = options;
+  const { force = false, preserveScrollTop = null } = options;
   const list = $('chatList');
   if (!list) return;
+  bindChatListInfiniteScroll();
 
   const chatCountLabel = $('chatCountLabel');
   if (chatCountLabel) chatCountLabel.textContent = String((chats || []).length);
@@ -2104,8 +2207,12 @@ function renderChatList(options = {}) {
   }
 
   list.innerHTML = '';
+  const searchQuery = currentChatMessageSearch();
   if (!chats.length) {
-    list.innerHTML = `<div class="chat-item empty-chat-item"><p>${chatScope === 'archive' ? 'В архиве пока нет закрытых чатов.' : 'Активных чатов пока нет. Маркетплейсы обновляются автоматически в фоне.'}</p></div>`;
+    const emptyText = searchQuery.length >= 2
+      ? `По сообщению «${escapeHtml(searchQuery)}» ничего не найдено.`
+      : (chatScope === 'archive' ? 'В архиве пока нет закрытых чатов.' : 'Активных чатов пока нет. Маркетплейсы обновляются автоматически в фоне.');
+    list.innerHTML = `<div class="chat-item empty-chat-item"><p>${emptyText}</p></div>`;
     return;
   }
 
@@ -2113,8 +2220,8 @@ function renderChatList(options = {}) {
   const mobileListVisible = isMobileChatLayout() && !isMobileChatOpen();
 
   // Large DOM lists are very expensive on mobile Safari. Render the newest
-  // portion first; data remains in memory, and filters/refresh can narrow it.
-  const renderLimit = mobileListVisible ? 90 : visibleChats.length;
+  // portion first, then append the rest in chunks when the operator scrolls down.
+  const renderLimit = mobileListVisible ? Math.min(chatListMobileRenderLimit, visibleChats.length) : visibleChats.length;
   const chatsToRender = visibleChats.slice(0, renderLimit);
 
   const fragment = document.createDocumentFragment();
@@ -2126,6 +2233,9 @@ function renderChatList(options = {}) {
     const slaBadge = waitingResponseBadge(chat);
     const assigneeBadge = chat.assigned_user_id ? `<span class="assignee-chip">${escapeHtml(chat.assigned_user_display_name || chat.assigned_user_username || chat.assigned_to || 'назначен')}</span>` : '';
     const time = formatChatTime(chat.last_message_at || chat.updated_at || chat.created_at);
+    const searchMatch = searchQuery.length >= 2 && chat.search_match_text
+      ? `Найдено: ${previewText(chat.search_match_text)}`
+      : previewText(chat.last_message_preview);
     item.innerHTML = `
       <div class="chat-item-topline">
         <div class="chat-item-title">
@@ -2134,7 +2244,7 @@ function renderChatList(options = {}) {
         </div>
         <span class="badge ${chat.marketplace}">${marketplaceNames[chat.marketplace] || chat.marketplace}</span>
       </div>
-      <p class="preview">${escapeHtml(previewText(chat.last_message_preview))}</p>
+      <p class="preview ${chat.search_match_text ? 'chat-search-match-preview' : ''}">${escapeHtml(searchMatch)}</p>
       <div class="chat-item-footer">
         <div class="chat-badges">${statusBadge(chat.status, chat.status_label, chat.status_color)}${slaBadge}${assigneeBadge}</div>
       </div>
@@ -2146,9 +2256,15 @@ function renderChatList(options = {}) {
 
   if (mobileListVisible && visibleChats.length > chatsToRender.length) {
     const note = document.createElement('div');
-    note.className = 'chat-item empty-chat-item chat-list-render-limit-note';
-    note.innerHTML = `<p>Показано ${chatsToRender.length} из ${visibleChats.length}. Используйте фильтры, чтобы сузить список.</p>`;
+    note.className = 'chat-item empty-chat-item chat-list-render-limit-note chat-list-load-more-note';
+    note.innerHTML = `<p>Показано ${chatsToRender.length} из ${visibleChats.length}. Прокрутите ниже, чтобы загрузить ещё.</p>`;
     list.appendChild(note);
+  }
+
+  if (typeof preserveScrollTop === 'number') {
+    requestAnimationFrame(() => {
+      list.scrollTop = preserveScrollTop;
+    });
   }
 }
 
@@ -5200,10 +5316,39 @@ function init() {
     await refreshVisibleData();
   });
   bind('mobileBackBtn', 'click', backToChatListMobile);
-  bind('marketplaceFilter', 'change', loadChats);
-  bind('statusFilter', 'change', loadChats);
-  if ($('funnelFilter')) bind('funnelFilter', 'change', () => { renderChatSettingsControls({ keepValues: true }); loadChats(); });
-  bind('chatScopeSelect', 'change', handleChatScopeSelectChange);
+  bind('marketplaceFilter', 'change', () => { resetChatListMobileLimit(); loadChats(); });
+  bind('statusFilter', 'change', () => { resetChatListMobileLimit(); loadChats(); });
+  if ($('funnelFilter')) bind('funnelFilter', 'change', () => { resetChatListMobileLimit(); renderChatSettingsControls({ keepValues: true }); loadChats(); });
+  bind('chatScopeSelect', 'change', (event) => { resetChatListMobileLimit(); handleChatScopeSelectChange(event); });
+  bind('chatSearchToggleBtn', 'click', (event) => {
+    event.preventDefault();
+    const box = $('chatSearchBox');
+    const isOpen = Boolean(box && !box.classList.contains('hidden'));
+    if (isOpen && !currentChatMessageSearch()) {
+      setChatSearchOpen(false);
+    } else {
+      setChatSearchOpen(true);
+    }
+  });
+  bind('chatSearchClearBtn', 'click', (event) => {
+    event.preventDefault();
+    clearChatMessageSearch();
+  });
+  const chatSearchInput = $('chatSearchInput');
+  if (chatSearchInput && !chatSearchInput.dataset.boundSearch) {
+    chatSearchInput.dataset.boundSearch = '1';
+    chatSearchInput.addEventListener('input', scheduleChatMessageSearch);
+    chatSearchInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        if (currentChatMessageSearch()) {
+          clearChatMessageSearch();
+        } else {
+          setChatSearchOpen(false);
+        }
+      }
+    });
+  }
   bind('taskStatusFilter', 'change', loadAllTasks);
   bind('taskBucketFilter', 'change', loadAllTasks);
   bind('taskTypeFilter', 'change', loadAllTasks);
