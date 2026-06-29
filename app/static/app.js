@@ -3018,15 +3018,30 @@ function extractOzonOrderNumber(message) {
   return candidates[0] || '';
 }
 
+function isOzonReturnNumber(orderNumber) {
+  // Возвраты отличаются от отправлений суффиксом вида -R12345.
+  return /-R\d+$/i.test(String(orderNumber || '').trim());
+}
+
 function ozonPostingUrl(orderNumber) {
   const clean = String(orderNumber || '').trim();
   return clean ? `https://seller.ozon.ru/app/postings/${encodeURIComponent(clean)}` : '';
 }
 
+function ozonReturnUrl(returnNumber) {
+  const clean = String(returnNumber || '').trim();
+  if (!clean) return '';
+  return `https://seller.ozon.ru/app/returns/main?tab=90&sort=StatusDate&sortingType=Desc&filters=[{%22single%22:{%22field%22:%22ReturnNumber%22,%22value%22:%22${encodeURIComponent(clean)}%22}}]&__rr=1`;
+}
+
+function ozonOrderOrReturnUrl(orderNumber) {
+  return isOzonReturnNumber(orderNumber) ? ozonReturnUrl(orderNumber) : ozonPostingUrl(orderNumber);
+}
+
 function renderMessageTextWithLinks(container, message, value) {
   const text = String(value || '');
   const orderNumber = extractOzonOrderNumber(message);
-  const orderUrl = ozonPostingUrl(orderNumber);
+  const orderUrl = ozonOrderOrReturnUrl(orderNumber);
 
   if (!orderNumber || !orderUrl || !text.includes(orderNumber)) {
     renderTextWithLinks(container, text);
@@ -3055,13 +3070,14 @@ function renderMessageTextWithLinks(container, message, value) {
       container.appendChild(a);
       if (trailing) container.appendChild(document.createTextNode(trailing));
     } else {
+      const isReturn = isOzonReturnNumber(orderNumber);
       const a = document.createElement('a');
       a.href = orderUrl;
       a.target = '_blank';
       a.rel = 'noopener noreferrer';
-      a.className = 'ozon-order-link';
+      a.className = isReturn ? 'ozon-order-link ozon-return-link' : 'ozon-order-link';
       a.textContent = match[2];
-      a.title = 'Открыть отправление Ozon';
+      a.title = isReturn ? 'Открыть возврат Ozon' : 'Открыть отправление Ozon';
       container.appendChild(a);
     }
 
