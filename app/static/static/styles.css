@@ -607,7 +607,6 @@ label { display: grid; gap: 6px; color: var(--crm-text-soft); font-size: 13px; }
   font-size: 10px;
   min-height: 16px;
 }
-.message.inbound .message-meta { justify-content: flex-start; }
 .message-text {
   padding: 10px 12px;
   border-radius: 12px;
@@ -1959,12 +1958,12 @@ textarea {
     overflow: hidden !important;
   }
 
-  body:has(#chatsView.mobile-chat-mode) .app-nav {
+  body.mobile-chat-open .app-nav {
     transform: translateY(120%) !important;
     pointer-events: none !important;
   }
 
-  body:has(#chatsView.mobile-chat-mode) .workspace {
+  body.mobile-chat-open .workspace {
     padding: 0 !important;
   }
 
@@ -2114,12 +2113,7 @@ textarea {
 }
 
 
-/* =========================================================
-   Arti CRM — v14 preservation fix
-   Keeps the uploaded flex-based mobile chat header from styles(30).css.
-   No grid override for .chat-heading-row.
-   ========================================================= */
-
+/* Arti CRM — v16 stable runtime states */
 @media (max-width: 900px) {
   html.mobile-chat-lock,
   body.mobile-chat-lock {
@@ -2127,79 +2121,362 @@ textarea {
     height: 100vh !important;
     height: 100dvh !important;
   }
+}
 
-  body.mobile-chat-open .app-nav {
-    transform: translateY(120%) !important;
-    pointer-events: none !important;
+.composer-send-btn:disabled,
+#messageForm button[type="submit"]:disabled {
+  opacity: .45;
+  cursor: wait;
+  transform: none;
+}
+
+
+/* Arti CRM — v17 mobile performance state */
+.chat-loading-card {
+  justify-self: center;
+  align-self: center;
+  cursor: default;
+}
+
+@media (max-width: 900px) {
+  #chatsView.mobile-chat-mode > .conversation .chat-loading-card {
+    width: calc(100% - 24px);
+    min-height: 52px;
+    display: grid;
+    place-items: center;
+    margin: 12px auto;
+    color: var(--crm-muted);
+  }
+}
+
+
+/* Arti CRM — v18 chat menu responsiveness */
+#extraMenuBtn,
+.extra-menu button,
+[data-extra] {
+  touch-action: manipulation;
+}
+
+@media (max-width: 900px) {
+  #chatsView.mobile-chat-mode > .conversation .extra-menu {
+    z-index: 10020 !important;
+    will-change: transform, opacity;
   }
 
-  body.mobile-chat-open .workspace {
-    padding: 0 !important;
+  #chatsView.mobile-chat-mode > .conversation .extra-panel {
+    z-index: 10015 !important;
+    will-change: transform, opacity;
+  }
+}
+
+
+/* Arti CRM — v19 desktop/mobile live message refresh */
+@media (min-width: 901px) {
+  .messages {
+    overflow-anchor: auto;
+  }
+}
+
+
+/* Arti CRM — v22 safe mobile interaction fix
+   Restores v20/v19 header stacking. Avoid paint containment on the header/menu:
+   it clipped dropdowns and made the menu appear under the chat body on iOS Safari. */
+@media (max-width: 900px) {
+  #chatsView.mobile-chat-mode button,
+  #chatsView.mobile-chat-mode select,
+  #chatsView.mobile-chat-mode input,
+  #chatsView.mobile-chat-mode textarea,
+  #chatsView.mobile-chat-mode [data-extra],
+  #chatsView > .conversation.mobile-chat-open button,
+  #chatsView > .conversation.mobile-chat-open select,
+  #chatsView > .conversation.mobile-chat-open input,
+  #chatsView > .conversation.mobile-chat-open textarea,
+  #chatsView > .conversation.mobile-chat-open [data-extra] {
+    touch-action: manipulation;
   }
 
-  #chatsView.mobile-chat-mode > .conversation,
-  #chatsView > .conversation.mobile-chat-open {
-    position: fixed !important;
-    inset: 0 !important;
-    z-index: 10000 !important;
-    width: 100vw !important;
-    max-width: 100vw !important;
-    height: 100vh !important;
-    height: 100dvh !important;
-    display: flex !important;
-    flex-direction: column !important;
-    background: #fff !important;
-    border: 0 !important;
-    border-radius: 0 !important;
-    box-shadow: none !important;
-    overflow: hidden !important;
+  #chatsView.mobile-chat-mode > .conversation .chat-header,
+  #chatsView > .conversation.mobile-chat-open .chat-header {
+    overflow: visible !important;
+    z-index: 30000 !important;
+    isolation: isolate;
   }
 
   #chatsView.mobile-chat-mode > .conversation .chat-heading-row,
   #chatsView > .conversation.mobile-chat-open .chat-heading-row {
-    display: flex !important;
-    align-items: center !important;
-    gap: 8px !important;
-    width: 100% !important;
-    min-width: 0 !important;
-    min-height: 42px !important;
-    position: relative !important;
-  }
-
-  #chatsView.mobile-chat-mode > .conversation .mobile-back-btn,
-  #chatsView > .conversation.mobile-chat-open .mobile-back-btn {
-    display: inline-grid !important;
-    position: static !important;
-    flex: 0 0 38px !important;
-    width: 38px !important;
-    height: 38px !important;
-    min-width: 38px !important;
-    min-height: 38px !important;
-    margin: 0 !important;
-  }
-
-  #chatsView.mobile-chat-mode > .conversation .chat-title-stack,
-  #chatsView > .conversation.mobile-chat-open .chat-title-stack {
-    flex: 1 1 auto !important;
-    min-width: 0 !important;
-  }
-
-  #chatsView.mobile-chat-mode > .conversation .chat-heading-row > button.icon-btn:last-child:not(.mobile-back-btn),
-  #chatsView > .conversation.mobile-chat-open .chat-heading-row > button.icon-btn:last-child:not(.mobile-back-btn) {
-    position: static !important;
-    flex: 0 0 38px !important;
-    width: 38px !important;
-    height: 38px !important;
-    min-width: 38px !important;
-    min-height: 38px !important;
-    margin-left: auto !important;
-    z-index: 6 !important;
+    overflow: visible !important;
+    z-index: 30001 !important;
   }
 
   #chatsView.mobile-chat-mode > .conversation .extra-menu,
   #chatsView > .conversation.mobile-chat-open .extra-menu {
+    position: absolute !important;
+    top: calc(100% + 8px) !important;
     left: auto !important;
     right: 0 !important;
-    top: calc(100% + 8px) !important;
+    z-index: 30020 !important;
+    background: #fff !important;
+    transform: translateZ(0);
+    -webkit-transform: translateZ(0);
+  }
+
+  #chatsView.mobile-chat-mode > .conversation .extra-panel,
+  #chatsView > .conversation.mobile-chat-open .extra-panel {
+    z-index: 30010 !important;
+    background: #fff !important;
+  }
+
+  #chatsView.mobile-chat-mode > .conversation .composer,
+  #chatsView > .conversation.mobile-chat-open .composer {
+    z-index: 60;
   }
 }
+
+
+/* Arti CRM — v23 native mobile select stability */
+#chatStatus,
+#assignedUserSelect {
+  touch-action: manipulation;
+}
+
+@media (max-width: 900px) {
+  #chatStatus,
+  #assignedUserSelect {
+    transition: none !important;
+    will-change: auto !important;
+  }
+
+  #chatsView.mobile-chat-mode > .conversation .chat-controls select {
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+
+/* Arti CRM — v25 mobile chat-list render performance */
+.chat-list-render-limit-note {
+  cursor: default;
+  text-align: center;
+  color: var(--crm-muted);
+}
+
+@media (max-width: 900px) {
+  body.mobile-chat-open #chatList {
+    contain: content;
+  }
+}
+
+
+/* Arti CRM — v27 message dialog UI */
+.message {
+  gap: 5px;
+}
+
+.message-bubble {
+  position: relative;
+  display: grid;
+  gap: 8px;
+}
+
+.message.inbound .message-bubble,
+.message.outbound .message-bubble {
+  background: #f3f3f3;
+  border-radius: 14px;
+  padding: 10px 12px;
+}
+
+.message.inbound .message-bubble {
+  padding-right: 36px;
+}
+
+.message.outbound .message-bubble {
+  background: #f2f2f2;
+}
+
+.message.internal .message-bubble {
+  background: #fff;
+  border: 1px solid var(--crm-line);
+  border-radius: 14px;
+  padding: 10px 12px;
+  box-shadow: var(--crm-shadow-xs);
+}
+
+.message-text {
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--crm-text);
+  box-shadow: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.message.outbound .message-text,
+.message.internal .message-text {
+  background: transparent;
+}
+
+.message-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 14px;
+  color: var(--crm-muted-2);
+  font-size: 10px;
+}
+
+.message.inbound .message-footer {
+  justify-content: flex-start;
+  padding-left: 4px;
+}
+
+.message.outbound .message-footer {
+  justify-content: flex-end;
+  padding-right: 4px;
+}
+
+.message-time {
+  line-height: 1;
+}
+
+.message-actions-menu-wrap {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  margin-left: 0;
+  z-index: 2;
+}
+
+.message-actions-btn {
+  width: 20px;
+  height: 20px;
+  min-width: 20px;
+  min-height: 20px;
+  padding: 0;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1;
+  background: rgba(255,255,255,.72);
+  border: 1px solid rgba(0,0,0,.06);
+  box-shadow: none;
+}
+
+.message-actions-menu {
+  top: 24px;
+  right: 0;
+}
+
+.message-receipt {
+  justify-self: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--crm-muted-2);
+  font-size: 10px;
+}
+
+.message-receipt .receipt-label {
+  display: none;
+}
+
+.message-images {
+  margin-top: 2px;
+}
+
+@media (max-width: 900px) {
+  .messages {
+    padding: 18px 16px;
+  }
+
+  .message {
+    max-width: 92%;
+  }
+
+  .message.inbound .message-bubble {
+    padding-right: 34px;
+  }
+}
+
+
+/* Arti CRM — v28 readable full image previews */
+.message.message-has-images {
+  max-width: min(520px, 88%);
+}
+
+.message.message-has-images .message-bubble {
+  padding: 8px;
+}
+
+.message.inbound.message-has-images .message-bubble {
+  padding-right: 36px;
+}
+
+.message.message-has-images .message-text {
+  padding: 2px 4px 0;
+}
+
+.message.message-has-images .message-images {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  margin-top: 0;
+}
+
+.message.message-has-images .image-card {
+  width: min(430px, 100%);
+  height: auto;
+  min-height: 120px;
+  max-height: 520px;
+  justify-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.message.message-has-images .image-card img {
+  width: 100%;
+  height: auto;
+  max-height: 520px;
+  object-fit: contain;
+  display: block;
+  background: #fff;
+}
+
+.message.message-has-images .image-card.image-error {
+  min-height: 148px;
+}
+
+@media (max-width: 900px) {
+  .message.message-has-images {
+    max-width: 96%;
+  }
+
+  .message.message-has-images .image-card {
+    width: min(100%, calc(100vw - 64px));
+    min-height: 118px;
+    max-height: 460px;
+  }
+
+  .message.message-has-images .image-card img {
+    max-height: 460px;
+  }
+}
+
+@media (max-width: 520px) {
+  .message.message-has-images {
+    max-width: 98%;
+  }
+
+  .message.message-has-images .image-card {
+    width: min(100%, calc(100vw - 56px));
+    max-height: 420px;
+  }
+
+  .message.message-has-images .image-card img {
+    max-height: 420px;
+  }
+}
+

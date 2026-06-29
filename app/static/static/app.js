@@ -8,6 +8,12 @@ let chatUiRefreshTimer = null;
 let frontendSyncInFlight = false;
 let activeChatRefreshInFlight = false;
 let outboundSendInFlight = false;
+let outboundSendLastStartedAt = 0;
+let chatInteractionBusyUntil = 0;
+let chatListRefreshLastStartedAt = 0;
+let activeChatMessagesRefreshInFlight = false;
+let activeChatMessagesRefreshLastStartedAt = 0;
+let currentChatMessagesSignature = '';
 let suppressFrontendSyncUntil = 0;
 let frontendSyncLastStartedAt = 0;
 let frontendSyncLastSuccessAt = 0;
@@ -51,6 +57,7 @@ const ROUTE_VIEWS = {
   profile: 'profile',
 };
 let activeExtraPanel = '';
+let extraMenuPointerHandledAt = 0;
 let chatScope = 'active';
 let selectedAiMessageId = null;
 let aiGenerating = false;
@@ -101,6 +108,9 @@ let currentChatMetaSaveTimer = null;
 let selectedChatImageFiles = [];
 let openChatRequestSeq = 0;
 let taskSearchTimer = null;
+let chatMetaControlsHydratedForChatId = null;
+let chatMetaControlsSignatureValue = '';
+let chatMetaControlBusyUntil = 0;
 
 function mergeChatSummary(updated) {
   if (!updated || !updated.id) return;
@@ -111,7 +121,88 @@ function mergeChatSummary(updated) {
 }
 
 function refreshChatListInBackground() {
-  loadChats().catch(err => console.warn('background chat list refresh failed', err));
+  const refresh = () => loadChats({ withStats: false, render: !isMobileChatOpen() }).catch(err => console.warn('background chat list refresh failed', err));
+  if (isMobileChatOpen()) {
+    runWhenBrowserIsIdle(refresh, 1400);
+    return;
+  }
+  refresh();
+}
+
+function markChatMetaControlBusy(ms = 7000) {
+  const until = Date.now() + ms;
+  chatMetaControlBusyUntil = Math.max(chatMetaControlBusyUntil || 0, until);
+  pauseMobileChatBackgroundWork(ms);
+}
+
+function isChatMetaControlBusy() {
+  return Date.now() < chatMetaControlBusyUntil;
+}
+
+function chatStatusOptionsSignature() {
+  return (chatSettings.statuses || [])
+    .map((status) => `${status.id || ''}:${status.key || ''}:${status.title || ''}:${status.is_active}:${status.sort_order || 0}`)
+    .join('|');
+}
+
+function assigneeOptionsSignature() {
+  return (assignees || [])
+    .map((user) => `${user.id || ''}:${assigneeDisplay(user)}:${user.role || ''}`)
+    .join('|');
+}
+
+function chatMetaControlsSignature() {
+  return `${chatStatusOptionsSignature()}::${assigneeOptionsSignature()}`;
+}
+
+function hydrateChatMetaControls(chat, options = {}) {
+  const { force = false, updateOptions = true } = options;
+  if (!chat) return;
+
+  const chatStatus = $('chatStatus');
+  const assignedUserSelect = $('assignedUserSelect');
+  const chatId = Number(chat.id || currentChatId || 0);
+  const signature = chatMetaControlsSignature();
+
+  const active = document.activeElement;
+  const userIsUsingMetaControl = Boolean(
+    active && (active === chatStatus || active === assignedUserSelect)
+  );
+
+  // Main mobile fix: do not rebuild native iOS selects while the operator is
+  // opening/using them. Rebuilding <select>.innerHTML during active use makes
+  // the picker feel like it loads for seconds and can drop the tap.
+  if (!force && userIsUsingMetaControl) {
+    markChatMetaControlBusy(7000);
+    return;
+  }
+
+  const shouldRebuildOptions = updateOptions && (
+    force ||
+    chatMetaControlsHydratedForChatId !== chatId ||
+    chatMetaControlsSignatureValue !== signature
+  );
+
+  if (chatStatus) {
+    const nextStatus = chat.status || chatStatus.value || 'new';
+    if (shouldRebuildOptions) {
+      chatStatus.innerHTML = statusOptions(nextStatus, true, '');
+    }
+    if (!userIsUsingMetaControl) chatStatus.value = nextStatus;
+  }
+
+  if (assignedUserSelect) {
+    const nextAssignee = chat.assigned_user_id || '';
+    if (shouldRebuildOptions) {
+      assignedUserSelect.innerHTML = assigneeOptions(nextAssignee, true);
+    }
+    if (!userIsUsingMetaControl) assignedUserSelect.value = nextAssignee;
+  }
+
+  if (shouldRebuildOptions) {
+    chatMetaControlsHydratedForChatId = chatId;
+    chatMetaControlsSignatureValue = signature;
+  }
 }
 
 async function persistCurrentChatMeta() {
@@ -133,7 +224,10 @@ async function persistCurrentChatMeta() {
     assigned_to: assignedUserId ? (assigneeOption?.textContent || '').trim() : null,
   };
   mergeChatSummary(optimistic);
-  renderChatList();
+  hydrateChatMetaControls({ ...currentChat, ...optimistic }, { updateOptions: false });
+  if (!(isMobileChatLayout() && document.body.classList.contains('mobile-chat-open'))) {
+    renderChatList();
+  }
 
   try {
     const updated = await api(`/api/chats/${chatId}`, {
@@ -147,7 +241,9 @@ async function persistCurrentChatMeta() {
     if (isClosedWorkflowStatus(updated.status || newStatus, updated.status_label || optimistic.status_label) && chatScope !== 'archive') {
       chats = (chats || []).filter((chat) => Number(chat.id) !== Number(chatId));
     }
-    renderChatList();
+    if (!(isMobileChatLayout() && document.body.classList.contains('mobile-chat-open'))) {
+      renderChatList();
+    }
 
     if (isClosedWorkflowStatus(updated?.status || newStatus, updated?.status_label || optimistic.status_label) && chatScope !== 'archive') {
       currentChatId = null;
@@ -436,29 +532,106 @@ async function markAllNotificationsRead() {
   await loadNotifications({ silent: false });
 }
 
-async function api(path, options = {}) {
-  const response = await fetch(path, {
-    cache: 'no-store',
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-    ...options,
-  });
-  if (!response.ok) {
-    const body = await response.text();
-    let detail = body;
-    try {
-      const parsed = JSON.parse(body);
-      detail = parsed.detail || parsed.error || body;
-      if (Array.isArray(parsed.detail)) {
-        detail = parsed.detail.map((item) => {
-          const field = Array.isArray(item.loc) ? item.loc.filter(part => part !== 'body').join('.') : '';
-          return `${field ? field + ': ' : ''}${item.msg || 'Ошибка заполнения'}`;
-        }).join('; ');
-      }
-    } catch (_) {}
-    if (response.status === 401) showLogin();
-    throw new Error(`${response.status}: ${detail}`);
+function safeJsonParse(value) {
+  try {
+    return JSON.parse(value);
+  } catch (_) {
+    return null;
   }
-  return response.json();
+}
+
+function normalizeApiErrorDetail(status, rawBody) {
+  const parsed = safeJsonParse(rawBody);
+  if (!parsed) return rawBody || `HTTP ${status}`;
+
+  if (Array.isArray(parsed.detail)) {
+    return parsed.detail.map((item) => {
+      const field = Array.isArray(item.loc) ? item.loc.filter(part => part !== 'body').join('.') : '';
+      return `${field ? field + ': ' : ''}${item.msg || 'Ошибка заполнения'}`;
+    }).join('; ');
+  }
+
+  return parsed.detail || parsed.error || parsed.message || rawBody || `HTTP ${status}`;
+}
+
+function createApiError(status, rawBody, path) {
+  const parsed = safeJsonParse(rawBody);
+  const detail = normalizeApiErrorDetail(status, rawBody);
+  const error = new Error(`${status}: ${detail}`);
+  error.name = 'ApiError';
+  error.status = status;
+  error.detail = detail;
+  error.body = rawBody;
+  error.parsed = parsed;
+  error.path = path;
+  return error;
+}
+
+async function api(path, options = {}) {
+  const {
+    retryDelays = [],
+    retryWhen = null,
+    timeoutMs = 30000,
+    ...fetchOptions
+  } = options || {};
+
+  for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
+    let timeoutId = null;
+    const controller = timeoutMs && !fetchOptions.signal ? new AbortController() : null;
+
+    try {
+      if (controller) {
+        timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+      }
+
+      const response = await fetch(path, {
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', ...(fetchOptions.headers || {}) },
+        ...fetchOptions,
+        signal: fetchOptions.signal || controller?.signal,
+      });
+
+      if (!response.ok) {
+        const body = await response.text();
+        const error = createApiError(response.status, body, path);
+        if (response.status === 401) showLogin();
+
+        const shouldRetry = typeof retryWhen === 'function'
+          ? retryWhen(error, attempt)
+          : false;
+
+        if (shouldRetry && attempt < retryDelays.length) {
+          await sleep(retryDelays[attempt]);
+          continue;
+        }
+
+        throw error;
+      }
+
+      const text = await response.text();
+      if (!text) return null;
+      return safeJsonParse(text) ?? text;
+    } catch (err) {
+      const normalizedError = err?.name === 'AbortError'
+        ? Object.assign(new Error(`Request timeout after ${timeoutMs}ms: ${path}`), { name: 'TimeoutError', status: 0, path })
+        : err;
+
+      const shouldRetry = typeof retryWhen === 'function'
+        ? retryWhen(normalizedError, attempt)
+        : false;
+
+      if (shouldRetry && attempt < retryDelays.length) {
+        await sleep(retryDelays[attempt]);
+        continue;
+      }
+
+      throw normalizedError;
+    } finally {
+      if (timeoutId) window.clearTimeout(timeoutId);
+    }
+  }
+
+  return null;
 }
 
 async function apiForm(path, formData, options = {}) {
@@ -480,6 +653,79 @@ async function apiForm(path, formData, options = {}) {
   }
   return response.json();
 }
+
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isMarketplaceRateLimitError(err) {
+  const message = String(err?.detail || err?.message || err || '');
+  const status = Number(err?.status || 0);
+  return status === 420
+    || status === 429
+    || /(too many requests|rate limit|hit rate limit|parallel requests|method_failure|businessId|METHOD_FAILURE)/i.test(message);
+}
+
+function friendlySendError(err) {
+  const message = String(err?.detail || err?.message || err || '');
+  if (isMarketplaceRateLimitError(err)) {
+    return 'Яндекс временно ограничил параллельные запросы. CRM уже сделала несколько повторных попыток, но лимит ещё не освободился. Подождите 10–20 секунд и отправьте снова.';
+  }
+  return message;
+}
+
+class SerialQueue {
+  constructor() {
+    this.tail = Promise.resolve();
+  }
+
+  enqueue(task) {
+    const run = this.tail.catch(() => {}).then(task);
+    this.tail = run.catch(() => {});
+    return run;
+  }
+}
+
+const outboundMessageQueue = new SerialQueue();
+
+async function sendCurrentChatMessageRequest(chatId, { text, imageFiles }) {
+  if (imageFiles?.length) {
+    const formData = new FormData();
+    imageFiles.forEach((file) => formData.append('images', file));
+    formData.append('caption', text || '');
+    return apiForm(`/api/chats/${chatId}/attachments`, formData);
+  }
+
+  return api(`/api/chats/${chatId}/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ text, author: 'manager' }),
+  });
+}
+
+async function sendCurrentChatMessageWithRetry(chatId, payload) {
+  const retryDelays = [1200, 2200, 4000, 6500];
+
+  return outboundMessageQueue.enqueue(async () => {
+    for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
+      try {
+        return await sendCurrentChatMessageRequest(chatId, payload);
+      } catch (err) {
+        const canRetry = isMarketplaceRateLimitError(err) && attempt < retryDelays.length;
+        if (!canRetry) throw err;
+
+        const waitMs = retryDelays[attempt];
+        const seconds = Math.ceil(waitMs / 1000);
+        setStatus(`Яндекс ограничил параллельные запросы — повтор через ${seconds}с`);
+        suppressFrontendSyncUntil = Date.now() + waitMs + 3500;
+        await sleep(waitMs);
+      }
+    }
+
+    return null;
+  });
+}
+
 
 function parseDate(value) {
   if (!value) return null;
@@ -659,9 +905,13 @@ async function loadAssignees() {
 
 function hydrateAssigneeSelects() {
   const chatSelect = $('assignedUserSelect');
-  if (chatSelect) {
-    const current = chatSelect.value || currentChat?.assigned_user_id || '';
-    chatSelect.innerHTML = assigneeOptions(current, true);
+  if (chatSelect && !(isMobileChatLayout() && document.activeElement === chatSelect)) {
+    if (currentChat) {
+      hydrateChatMetaControls(currentChat, { force: true });
+    } else {
+      const current = chatSelect.value || '';
+      chatSelect.innerHTML = assigneeOptions(current, true);
+    }
   }
   const taskSelect = $('taskAssignee');
   if (taskSelect) {
@@ -804,11 +1054,8 @@ function renderChatSettingsControls(options = {}) {
     statusFilter.innerHTML = statusOptions(selected, false, '');
   }
 
-  const chatStatus = $('chatStatus');
-  if (chatStatus) {
-    const selected = currentChat?.status || chatStatus.value || 'new';
-    chatStatus.innerHTML = statusOptions(selected, true, '');
-    chatStatus.value = selected;
+  if (currentChat && options.updateChatControls !== false) {
+    hydrateChatMetaControls(currentChat, { force: Boolean(options.forceChatControls) });
   }
 
   renderChatSettingsLists();
@@ -1071,6 +1318,10 @@ function isMobileChatLayout() {
   return window.matchMedia && window.matchMedia('(max-width: 900px)').matches;
 }
 
+function isMobileChatOpen() {
+  return isMobileChatLayout() && document.body.classList.contains('mobile-chat-open');
+}
+
 function setMobileChatOpen(isOpen) {
   const open = Boolean(isOpen) && isMobileChatLayout();
   const chatsView = $('chatsView');
@@ -1089,6 +1340,7 @@ function setMobileChatOpen(isOpen) {
   if (open) {
     $('emptyState')?.classList.add('hidden');
     chatPanel?.classList.remove('hidden');
+    bindMobileInstantChatActions();
     conversation?.scrollTo?.({ top: 0, left: 0, behavior: 'auto' });
   } else {
     toggleExtraMenu(false);
@@ -1100,12 +1352,62 @@ function backToChatListMobile(event) {
   event?.preventDefault?.();
   event?.stopPropagation?.();
 
-  // Fast mobile transition: close the full-screen overlay immediately.
-  // Keep currentChatId/currentChat so desktop state and drafts are not lost,
-  // but prevent background refresh from auto-opening the same dialog again.
   mobileChatClosedByUser = true;
   openChatRequestSeq += 1;
   setMobileChatOpen(false);
+  renderChatList({ force: true });
+}
+
+function pauseMobileChatBackgroundWork(ms = 1800) {
+  if (!isMobileChatLayout()) return;
+  const until = Date.now() + ms;
+  chatInteractionBusyUntil = Math.max(chatInteractionBusyUntil || 0, until);
+  suppressFrontendSyncUntil = Math.max(suppressFrontendSyncUntil || 0, until);
+}
+
+function isExtraMenuOpen() {
+  const menu = $('extraMenu');
+  return Boolean(menu && !menu.classList.contains('hidden'));
+}
+
+function isExtraPanelOpen() {
+  const panel = $('extraPanel');
+  return Boolean(panel && !panel.classList.contains('hidden'));
+}
+
+function isChatOverlayInteractionOpen() {
+  return isExtraMenuOpen() || isExtraPanelOpen() || replyTemplatesPanelOpen;
+}
+
+function isChatLocalControlActive() {
+  const active = document.activeElement;
+  return Boolean(active && active.closest?.('.chat-header, .chat-controls, .extra-menu, .extra-panel, .composer'));
+}
+
+function bindMobileInstantChatActions() {
+  const conversation = $('conversation');
+  if (!conversation || conversation.dataset.mobileInstantActionsBound === '1') return;
+  conversation.dataset.mobileInstantActionsBound = '1';
+
+  conversation.addEventListener('pointerdown', (event) => {
+    if (!isMobileChatLayout()) return;
+
+    const interactiveTarget = event.target.closest?.('button, select, input, textarea, [data-extra], .message-actions-btn, .message-actions-menu button');
+    if (interactiveTarget) {
+      if (interactiveTarget.matches?.('#chatStatus, #assignedUserSelect')) {
+        markChatMetaControlBusy(9000);
+      } else {
+        pauseMobileChatBackgroundWork(2200);
+      }
+    }
+
+    const extraAction = event.target.closest?.('[data-extra]');
+    if (extraAction) {
+      event.preventDefault();
+      event.stopPropagation();
+      showExtraPanel(extraAction.dataset.extra);
+    }
+  }, { passive: false });
 }
 
 let messagesAutoScrollToken = 0;
@@ -1234,8 +1536,9 @@ const FRONTEND_OZON_SYNC_INTERVAL_MS = 15000;
 const FRONTEND_OZON_SYNC_MIN_GAP_MS = 12000;
 const FRONTEND_OZON_QUESTIONS_SYNC_INTERVAL_MS = 60000;
 const FRONTEND_OZON_QUESTIONS_SYNC_MIN_GAP_MS = 45000;
-const ACTIVE_CHAT_UI_REFRESH_INTERVAL_MS = 10000;
-const ACTIVE_CHAT_UI_REFRESH_MIN_GAP_MS = 8000;
+const ACTIVE_CHAT_UI_REFRESH_INTERVAL_MS = 9000;
+const ACTIVE_CHAT_UI_REFRESH_MIN_GAP_MS = 7000;
+const ACTIVE_CHAT_MESSAGES_REFRESH_INTERVAL_MS = 9000;
 
 function isFrontendSyncAllowed() {
   if (!appInitialized || !currentUser) return false;
@@ -1259,8 +1562,8 @@ async function runFrontendOzonFastSync(options = {}) {
   frontendSyncInFlight = true;
   frontendSyncLastStartedAt = now;
   try {
-    if (!silent) setStatus('Обновляем чаты Ozon...');
-    const result = await api('/api/sync/operator', { method: 'POST' });
+    if (!silent) setStatus('Обновляем чаты маркетплейсов...');
+    const result = await api('/api/sync/operator', { method: 'POST', timeoutMs: 25000 });
     frontendSyncLastSuccessAt = Date.now();
 
     const chatsCount = Number(result?.count || 0);
@@ -1268,13 +1571,18 @@ async function runFrontendOzonFastSync(options = {}) {
     const changed = chatsCount > 0 || messagesCount > 0 || Number(result?.reopened_closed_chats || 0) > 0;
 
     if (activeView === 'chats') {
-      // On shared hosting each chat-list request can take seconds. Do not reload
-      // chats on every polling tick; only refresh when the sync reports a real
-      // update. This keeps opening a dialog from waiting behind background polls.
+      // If sync reports changes, refresh the list. If it reports no changes,
+      // still refresh the list occasionally because backend/background imports
+      // may have already updated local DB while the sync endpoint returns zero.
       if (changed) {
-        await loadChats();
-        if (messagesCount > 0 && currentChatId && !chatOpenInFlight && !(isMobileChatLayout() && mobileChatClosedByUser)) {
-          await openChat(currentChatId, { keepScroll: true, silent: true });
+        await loadChats({ withStats: false, render: !isMobileChatOpen() });
+        if (messagesCount > 0 && currentChatId && !chatOpenInFlight) {
+          await refreshCurrentChatMessagesOnly({ force: true });
+        }
+      } else {
+        await refreshChatListOnly({ force: false });
+        if (currentChatId && !chatOpenInFlight) {
+          await refreshCurrentChatMessagesOnly({ force: false });
         }
       }
     } else if (changed) {
@@ -1353,12 +1661,21 @@ function startFrontendAutoSync() {
   // case /api/sync/operator may return 0 new messages, but the open CRM tab
   // still needs to re-read chats/messages from the local database.
   chatUiRefreshTimer = setInterval(() => {
-    refreshActiveChatUi({ silent: true }).catch(err => console.warn('chat UI refresh timer failed', err));
-  }, ACTIVE_CHAT_UI_REFRESH_INTERVAL_MS);
+    if (activeView !== 'chats') return;
+    refreshChatListOnly({ force: false }).catch(err => console.warn('chat list refresh timer failed', err));
+    refreshCurrentChatMessagesOnly({ force: false }).catch(err => console.warn('active chat messages timer failed', err));
+  }, ACTIVE_CHAT_MESSAGES_REFRESH_INTERVAL_MS);
 }
 
 function runFrontendSyncSoon(reason = '') {
   window.setTimeout(() => {
+    if (activeView === 'chats') {
+      refreshChatListOnly({ force: reason === 'visible' || reason === 'focus' })
+        .catch(err => console.warn('chat list quick refresh failed', err));
+      refreshCurrentChatMessagesOnly({ force: reason === 'visible' || reason === 'focus' })
+        .catch(err => console.warn('active chat quick refresh failed', err));
+    }
+
     if (Date.now() >= suppressFrontendSyncUntil && !outboundSendInFlight) {
       runFrontendOzonFastSync({ silent: true, force: reason === 'startup' }).catch(err => console.warn('frontend sync failed', err));
     }
@@ -1372,6 +1689,7 @@ async function refreshActiveChatUi(options = {}) {
   if (activeView !== 'chats') return null;
   if (frontendSyncInFlight || chatOpenInFlight || activeChatRefreshInFlight) return null;
   if (outboundSendInFlight) return null;
+  if (Date.now() < suppressFrontendSyncUntil || Date.now() < chatInteractionBusyUntil) return null;
 
   const now = Date.now();
   if (!force && now - activeChatRefreshLastStartedAt < ACTIVE_CHAT_UI_REFRESH_MIN_GAP_MS) return null;
@@ -1379,9 +1697,10 @@ async function refreshActiveChatUi(options = {}) {
   activeChatRefreshInFlight = true;
   activeChatRefreshLastStartedAt = now;
   try {
-    await loadChats();
-    if (currentChatId && !(isMobileChatLayout() && mobileChatClosedByUser)) {
-      await openChat(currentChatId, { keepScroll: true, silent: true });
+    await loadChats({ withStats: false, render: !isMobileChatOpen() });
+
+    if (currentChatId && !mobileChatClosedByUser) {
+      await refreshCurrentChatMessagesOnly({ force });
     }
     return true;
   } catch (err) {
@@ -1416,31 +1735,36 @@ async function loadStats() {
   }
 }
 
-async function loadChats() {
+async function loadChats(options = {}) {
+  const { withStats = true, render = true } = options;
   if (chatsLoadPromise) return chatsLoadPromise;
   chatsLoadPromise = (async () => {
     const params = new URLSearchParams();
-  const marketplaceEl = $('marketplaceFilter');
-  const statusEl = $('statusFilter');
-  const funnelEl = $('funnelFilter');
-  const marketplace = marketplaceEl ? marketplaceEl.value : '';
-  const status = statusEl ? statusEl.value : '';
-  const funnelId = funnelEl ? funnelEl.value : '';
-  if (marketplace) params.set('marketplace', marketplace);
-  if (chatScope === 'archive') {
-    params.set('archived', 'true');
-  } else {
-    if (status) params.set('status', status);
-    if (funnelId) params.set('funnel_id', funnelId);
-    if (chatOwnerScope === 'mine') params.set('mine', 'true');
-  }
+    const marketplaceEl = $('marketplaceFilter');
+    const statusEl = $('statusFilter');
+    const funnelEl = $('funnelFilter');
+    const marketplace = marketplaceEl ? marketplaceEl.value : '';
+    const status = statusEl ? statusEl.value : '';
+    const funnelId = funnelEl ? funnelEl.value : '';
+    if (marketplace) params.set('marketplace', marketplace);
+    if (chatScope === 'archive') {
+      params.set('archived', 'true');
+    } else {
+      if (status) params.set('status', status);
+      if (funnelId) params.set('funnel_id', funnelId);
+      if (chatOwnerScope === 'mine') params.set('mine', 'true');
+    }
 
-    chats = await api(`/api/chats?${params.toString()}`);
-    const chatCountLabel = $('chatCountLabel');
-    if (chatCountLabel) chatCountLabel.textContent = String(chats.length);
-    renderChatList();
-    renderScopeTabs();
-    await loadStats();
+    chats = await api(`/api/chats?${params.toString()}`, { timeoutMs: 15000 });
+
+    if (render) {
+      const chatCountLabel = $('chatCountLabel');
+      if (chatCountLabel) chatCountLabel.textContent = String(chats.length);
+      renderChatList();
+      renderScopeTabs();
+    }
+
+    if (withStats) await loadStats();
     return chats;
   })();
   try {
@@ -1487,7 +1811,7 @@ async function refreshVisibleData() {
     // Chat view is the heaviest view on shared hosting. Do not reload the open
     // dialog on passive timers; frontend fast-sync refreshes it only when new
     // messages are imported, and the Refresh button still calls this explicitly.
-    await loadChats();
+    await loadChats({ render: !isMobileChatOpen() });
     await loadSyncStatus();
   } catch (err) {
     console.warn('auto refresh failed', err);
@@ -1564,22 +1888,188 @@ function switchChatOwnerScope(scope) {
   loadChats().catch(err => notify('Ошибка загрузки чатов', String(err.message || err)));
 }
 
-function renderChatList() {
+
+function runWhenBrowserIsIdle(callback, timeout = 350) {
+  if (typeof window.requestIdleCallback === 'function') {
+    window.requestIdleCallback(callback, { timeout });
+    return;
+  }
+  window.setTimeout(callback, Math.min(timeout, 120));
+}
+
+function getChatSummaryById(chatId) {
+  const id = Number(chatId);
+  return (chats || []).find((chat) => Number(chat.id) === id) || null;
+}
+
+function paintChatHeader(chat, options = {}) {
+  if (!chat) return;
+
+  if ($('chatTitle')) $('chatTitle').textContent = `${customerLabel(chat)}`;
+
+  const chatMarketplaceBadge = $('chatMarketplaceBadge');
+  if (chatMarketplaceBadge) {
+    const mp = String(chat.marketplace || '').toLowerCase();
+    chatMarketplaceBadge.textContent = marketplaceNames[chat.marketplace] || chat.marketplace || '';
+    chatMarketplaceBadge.className = `marketplace-pill ${mp}`;
+    chatMarketplaceBadge.classList.toggle('hidden', !chatMarketplaceBadge.textContent);
+  }
+
+  if ($('chatAvatar')) $('chatAvatar').textContent = customerLabel(chat).trim().slice(0, 1).toUpperCase() || 'A';
+
+  if ($('chatSubtitle')) {
+    const subtitle = chatSubtitleParts(chat);
+    $('chatSubtitle').textContent = subtitle || 'Данные по заказу не переданы маркетплейсом';
+  }
+
+  if (options.updateControls !== false) {
+    hydrateChatMetaControls(chat, { force: Boolean(options.forceControls) });
+  }
+
+  if ($('customerNameInput') && document.activeElement !== $('customerNameInput')) {
+    $('customerNameInput').value = chat.customer_name || '';
+  }
+}
+
+function paintChatShellFromSummary(chatId, previousChatId) {
+  const summary = getChatSummaryById(chatId);
+  if (summary) {
+    paintChatHeader(summary, { forceControls: true });
+  }
+
+  const messagesBox = $('messages');
+  if (messagesBox && Number(previousChatId) !== Number(chatId)) {
+    messagesBox.innerHTML = '<div class="empty-card chat-loading-card">Загружаю диалог…</div>';
+  }
+
+  renderAiSelectionBar();
+}
+
+async function refreshChatListOnly(options = {}) {
+  const { force = false } = options;
+  if (!appInitialized || !currentUser) return null;
+  if (document.hidden) return null;
+  if (activeView !== 'chats') return null;
+  if (chatOpenInFlight || outboundSendInFlight) return null;
+  if (Date.now() < suppressFrontendSyncUntil || Date.now() < chatInteractionBusyUntil || isChatMetaControlBusy()) return null;
+
+  const now = Date.now();
+  if (!force && now - chatListRefreshLastStartedAt < 12000) return null;
+  chatListRefreshLastStartedAt = now;
+
+  try {
+    await loadChats({ withStats: false, render: !isMobileChatOpen() });
+    return true;
+  } catch (err) {
+    console.warn('chat list refresh failed', err);
+    return null;
+  }
+}
+
+function chatMessagesSignature(messages) {
+  return (messages || [])
+    .map((message) => `${message.id || ''}:${message.direction || ''}:${message.created_at || ''}:${message.updated_at || ''}:${String(message.text || '').length}`)
+    .join('|');
+}
+
+function shouldKeepMessagesAtBottom(box) {
+  return !box || messagesDistanceFromBottom(box) < 120;
+}
+
+async function refreshCurrentChatMessagesOnly(options = {}) {
+  const { force = false } = options;
+  if (!appInitialized || !currentUser) return null;
+  if (document.hidden) return null;
+  if (activeView !== 'chats') return null;
+  if (!currentChatId) return null;
+  if (chatOpenInFlight || outboundSendInFlight || activeChatMessagesRefreshInFlight) return null;
+  if (!force && isMobileChatLayout() && (isChatOverlayInteractionOpen() || isChatLocalControlActive() || isChatMetaControlBusy())) return null;
+  if (!force && Date.now() < chatInteractionBusyUntil) return null;
+
+  const now = Date.now();
+  if (!force && now - activeChatMessagesRefreshLastStartedAt < ACTIVE_CHAT_UI_REFRESH_MIN_GAP_MS) return null;
+
+  activeChatMessagesRefreshInFlight = true;
+  activeChatMessagesRefreshLastStartedAt = now;
+
+  const chatId = Number(currentChatId);
+  const messagesBox = $('messages');
+  const keepAtBottom = shouldKeepMessagesAtBottom(messagesBox);
+  const mobileLayout = isMobileChatLayout();
+  const messagesLimit = mobileLayout ? 35 : 120;
+
+  try {
+    const chat = await api(`/api/chats/${chatId}?messages_limit=${messagesLimit}`, { timeoutMs: 15000 });
+
+    if (Number(currentChatId) !== chatId) return null;
+
+    currentChat = { ...(currentChat || {}), ...chat };
+    mergeChatSummary(chat);
+    if (!(isMobileChatLayout() && isChatLocalControlActive())) {
+      paintChatHeader(currentChat, { updateControls: false });
+    }
+
+    const messages = currentChat.messages || [];
+    const nextSignature = chatMessagesSignature(messages);
+
+    if (nextSignature !== currentChatMessagesSignature) {
+      currentChatMessagesSignature = nextSignature;
+      renderMessages(messages);
+      renderAiSelectionBar();
+      if (keepAtBottom) scrollMessagesToBottom('refresh-active-chat-messages');
+    }
+
+    if (activeExtraPanel === 'tasks') {
+      runWhenBrowserIsIdle(() => renderTasks(currentChat.tasks || []), 500);
+    }
+
+    return true;
+  } catch (err) {
+    console.warn('active chat messages refresh failed', err);
+    return null;
+  } finally {
+    activeChatMessagesRefreshInFlight = false;
+  }
+}
+
+
+function renderChatList(options = {}) {
+  const { force = false } = options;
   const list = $('chatList');
   if (!list) return;
+
+  const chatCountLabel = $('chatCountLabel');
+  if (chatCountLabel) chatCountLabel.textContent = String((chats || []).length);
+
+  // Critical mobile performance fix:
+  // while the fullscreen dialog is open the list is not visible. Rendering it
+  // after opening a chat was the measured 4+ second freeze on iPhone.
+  if (!force && isMobileChatOpen()) {
+    return;
+  }
+
   list.innerHTML = '';
   if (!chats.length) {
     list.innerHTML = `<div class="chat-item empty-chat-item"><p>${chatScope === 'archive' ? 'В архиве пока нет закрытых чатов.' : 'Активных чатов пока нет. Маркетплейсы обновляются автоматически в фоне.'}</p></div>`;
     return;
   }
+
   const visibleChats = (chats || []).filter(chat => chatScope === 'archive' || !isClosedWorkflowStatus(chat.status, chat.status_label));
-  for (const chat of visibleChats) {
+  const mobileListVisible = isMobileChatLayout() && !isMobileChatOpen();
+
+  // Large DOM lists are very expensive on mobile Safari. Render the newest
+  // portion first; data remains in memory, and filters/refresh can narrow it.
+  const renderLimit = mobileListVisible ? 90 : visibleChats.length;
+  const chatsToRender = visibleChats.slice(0, renderLimit);
+
+  const fragment = document.createDocumentFragment();
+  for (const chat of chatsToRender) {
     const item = document.createElement('div');
     const showWaitingMarker = shouldShowWaitingMarker(chat);
     item.className = `chat-item ${chat.id === currentChatId ? 'active' : ''} ${showWaitingMarker ? 'needs-response' : ''}`;
     item.onclick = () => openChat(chat.id);
     const slaBadge = waitingResponseBadge(chat);
-    const assigneeBadge = chat.assigned_user_id ? `<span class="assignee-chip">${escapeHtml(chat.assigned_user_display_name || chat.assigned_user_username || chat.assigned_to || 'назначен')}</span>` : ''; 
+    const assigneeBadge = chat.assigned_user_id ? `<span class="assignee-chip">${escapeHtml(chat.assigned_user_display_name || chat.assigned_user_username || chat.assigned_to || 'назначен')}</span>` : '';
     const time = formatChatTime(chat.last_message_at || chat.updated_at || chat.created_at);
     item.innerHTML = `
       <div class="chat-item-topline">
@@ -1594,7 +2084,16 @@ function renderChatList() {
         <div class="chat-badges">${statusBadge(chat.status, chat.status_label, chat.status_color)}${slaBadge}${assigneeBadge}</div>
       </div>
     `;
-    list.appendChild(item);
+    fragment.appendChild(item);
+  }
+
+  list.appendChild(fragment);
+
+  if (mobileListVisible && visibleChats.length > chatsToRender.length) {
+    const note = document.createElement('div');
+    note.className = 'chat-item empty-chat-item chat-list-render-limit-note';
+    note.innerHTML = `<p>Показано ${chatsToRender.length} из ${visibleChats.length}. Используйте фильтры, чтобы сузить список.</p>`;
+    list.appendChild(note);
   }
 }
 
@@ -1611,24 +2110,22 @@ async function openChat(chatId, options = {}) {
   const wasNearBottom = messagesBox ? (messagesBox.scrollHeight - messagesBox.scrollTop - messagesBox.clientHeight < 80) : true;
   const mobileLayout = isMobileChatLayout();
 
-  // Keep background polls away while the operator is opening a chat.
-  suppressFrontendSyncUntil = Date.now() + 2500;
+  suppressFrontendSyncUntil = Date.now() + 3500;
+  chatInteractionBusyUntil = Date.now() + 4500;
+  activeChatRefreshLastStartedAt = Date.now();
 
   // Make the tap feel instant: show the chat screen before the API responds.
   $('emptyState')?.classList.add('hidden');
   $('chatPanel')?.classList.remove('hidden');
   setMobileChatOpen(true);
+  paintChatShellFromSummary(chatId, previousChatId);
   requestAnimationFrame(() => setMobileChatOpen(true));
 
   // Desktop needs the active row immediately. On mobile the list is hidden,
   // so repainting it here only makes the transition feel slower.
   if (!mobileLayout) renderChatList();
 
-  if (messagesBox && previousChatId !== currentChatId) {
-    messagesBox.innerHTML = '<div class="empty-card chat-loading-card">Загружаю диалог…</div>';
-  }
-
-  const messagesLimit = mobileLayout ? 60 : 120;
+  const messagesLimit = mobileLayout ? 35 : 120;
 
   let chat;
   chatOpenInFlight = true;
@@ -1657,28 +2154,9 @@ async function openChat(chatId, options = {}) {
     selectedAiMessageId = null;
   }
 
-  if ($('chatTitle')) $('chatTitle').textContent = `${customerLabel(chat)}`;
-  const chatMarketplaceBadge = $('chatMarketplaceBadge');
-  if (chatMarketplaceBadge) {
-    const mp = String(chat.marketplace || '').toLowerCase();
-    chatMarketplaceBadge.textContent = marketplaceNames[chat.marketplace] || chat.marketplace || '';
-    chatMarketplaceBadge.className = `marketplace-pill ${mp}`;
-    if (chatMarketplaceBadge.textContent) {
-      chatMarketplaceBadge.classList.remove('hidden');
-    } else {
-      chatMarketplaceBadge.classList.add('hidden');
-    }
-  }
-  if ($('chatAvatar')) $('chatAvatar').textContent = customerLabel(chat).trim().slice(0, 1).toUpperCase() || 'A';
-  if ($('chatSubtitle')) {
-    const subtitle = chatSubtitleParts(chat);
-    $('chatSubtitle').textContent = subtitle || 'Данные по заказу не переданы маркетплейсом';
-  }
-  renderChatSettingsControls({ keepValues: true });
-  if ($('chatStatus')) $('chatStatus').value = chat.status;
-  if ($('assignedUserSelect')) { $('assignedUserSelect').innerHTML = assigneeOptions(chat.assigned_user_id || '', true); $('assignedUserSelect').value = chat.assigned_user_id || ''; }
-  if ($('customerNameInput')) $('customerNameInput').value = chat.customer_name || '';
+  paintChatHeader(chat, { forceControls: true });
 
+  currentChatMessagesSignature = chatMessagesSignature(chat.messages || []);
   renderMessages(chat.messages || []);
   renderAiSelectionBar();
 
@@ -1687,17 +2165,18 @@ async function openChat(chatId, options = {}) {
     scrollMessagesToBottom('open-chat');
   }
 
-  // Tasks and chat list are secondary for the first mobile frame.
-  // Defer them so message content appears faster.
+  // Tasks are secondary for the first mobile frame.
+  // The chat list is hidden while a mobile dialog is open, so rendering it here
+  // blocks the whole phone UI for seconds on large inboxes. Render it only when
+  // the operator goes back to the list.
   if (isMobileChatLayout()) {
-    requestAnimationFrame(() => {
-      renderTasks(chat.tasks || []);
-      renderChatList();
-    });
+    runWhenBrowserIsIdle(() => renderTasks(chat.tasks || []), 500);
   } else {
     renderTasks(chat.tasks || []);
     renderChatList();
   }
+
+  chatInteractionBusyUntil = Date.now() + 1200;
 }
 
 
@@ -1761,15 +2240,17 @@ function renderMessages(messages) {
   if (!box) return;
   box.innerHTML = '';
   const receiptContext = buildMessageReceiptContext(messages || []);
+
   for (const message of messages) {
     const item = document.createElement('div');
     item.className = `message ${message.direction} ${Number(message.id) === Number(selectedAiMessageId) ? 'ai-selected-message' : ''}`;
     item.dataset.messageId = message.id;
 
-    const meta = document.createElement('div');
-    meta.className = 'message-meta';
-    const directionText = message.direction === 'inbound' ? 'клиент' : message.direction === 'outbound' ? 'мы' : 'заметка';
-    meta.textContent = `${directionText}${message.author ? ` · ${message.author}` : ''}${message.created_at ? ` · ${formatDateTime(message.created_at)}` : ''}`;
+    const images = extractImageUrls(message);
+    if (images.length) item.classList.add('message-has-images');
+    const displayText = cleanMessageTextForDisplay(message.text || '', images);
+    const bubble = document.createElement('div');
+    bubble.className = `message-bubble ${images.length ? 'message-bubble-has-images' : ''}`.trim();
 
     if (message.direction === 'inbound') {
       const aiWrap = document.createElement('span');
@@ -1784,6 +2265,7 @@ function renderMessages(messages) {
 
       const menu = document.createElement('span');
       menu.className = 'message-actions-menu hidden';
+
       const aiBtn = document.createElement('button');
       aiBtn.type = 'button';
       aiBtn.textContent = 'ИИ ответ';
@@ -1809,11 +2291,14 @@ function renderMessages(messages) {
 
       aiWrap.appendChild(menuBtn);
       aiWrap.appendChild(menu);
-      meta.appendChild(aiWrap);
+      bubble.appendChild(aiWrap);
     }
 
-
     if (message.direction === 'internal') {
+      const meta = document.createElement('div');
+      meta.className = 'message-meta';
+      meta.textContent = `${message.author ? message.author : 'заметка'}${message.created_at ? ` · ${formatDateTime(message.created_at)}` : ''}`;
+
       const noteActions = document.createElement('span');
       noteActions.className = 'internal-note-actions';
 
@@ -1842,17 +2327,14 @@ function renderMessages(messages) {
       noteActions.appendChild(editBtn);
       noteActions.appendChild(deleteBtn);
       meta.appendChild(noteActions);
+      item.appendChild(meta);
     }
-
-    const images = extractImageUrls(message);
-    const displayText = cleanMessageTextForDisplay(message.text || '', images);
-    item.appendChild(meta);
 
     if (displayText) {
       const text = document.createElement('div');
       text.className = 'message-text';
       renderTextWithLinks(text, displayText);
-      item.appendChild(text);
+      bubble.appendChild(text);
     }
 
     if (images.length) {
@@ -1885,16 +2367,30 @@ function renderMessages(messages) {
         card.appendChild(fallback);
         gallery.appendChild(card);
       }
-      item.appendChild(gallery);
+      bubble.appendChild(gallery);
     }
 
-    const receipt = messageReceiptInfo(message, receiptContext);
-    if (receipt) {
-      const receiptEl = document.createElement('div');
-      receiptEl.className = `message-receipt ${receipt.read ? 'is-read' : 'is-sent'}`;
-      receiptEl.title = receipt.title || receipt.label;
-      receiptEl.innerHTML = `<span class="receipt-checks">${escapeHtml(receipt.icon)}</span><span>${escapeHtml(receipt.label)}</span>`;
-      item.appendChild(receiptEl);
+    item.appendChild(bubble);
+
+    if (message.direction !== 'internal') {
+      const footer = document.createElement('div');
+      footer.className = 'message-footer';
+
+      const timeEl = document.createElement('span');
+      timeEl.className = 'message-time';
+      timeEl.textContent = formatChatTime(message.created_at || message.updated_at || '');
+      footer.appendChild(timeEl);
+
+      const receipt = messageReceiptInfo(message, receiptContext);
+      if (receipt && message.direction === 'outbound') {
+        const receiptEl = document.createElement('div');
+        receiptEl.className = `message-receipt ${receipt.read ? 'is-read' : 'is-sent'}`;
+        receiptEl.title = receipt.title || receipt.label;
+        receiptEl.innerHTML = `<span class="receipt-checks">${escapeHtml(receipt.icon)}</span><span class="receipt-label">${escapeHtml(receipt.label)}</span>`;
+        footer.appendChild(receiptEl);
+      }
+
+      item.appendChild(footer);
     }
 
     box.appendChild(item);
@@ -1941,11 +2437,16 @@ async function saveInternalNoteEdit(message, text, btn = null) {
   if (!cleanText) return notify('Заметка не сохранена', 'Текст заметки не может быть пустым.');
   if (btn) btn.disabled = true;
   try {
-    await api(`/api/chats/${currentChatId}/notes/${message.id}`, {
+    const chatIdForNote = Number(currentChatId);
+    await api(`/api/chats/${chatIdForNote}/notes/${message.id}`, {
       method: 'PATCH',
       body: JSON.stringify({ text: cleanText }),
     });
-    await openChat(currentChatId);
+    if (isMobileChatLayout()) {
+      await refreshCurrentChatMessagesOnly({ force: true });
+    } else {
+      await openChat(chatIdForNote);
+    }
     notify('Заметка обновлена');
   } catch (err) {
     notify('Заметка не сохранена', String(err.message || err));
@@ -1959,8 +2460,13 @@ async function deleteInternalNote(message) {
   const confirmed = window.confirm('Удалить эту внутреннюю заметку?');
   if (!confirmed) return;
   try {
-    await api(`/api/chats/${currentChatId}/notes/${message.id}`, { method: 'DELETE' });
-    await openChat(currentChatId);
+    const chatIdForNote = Number(currentChatId);
+    await api(`/api/chats/${chatIdForNote}/notes/${message.id}`, { method: 'DELETE' });
+    if (isMobileChatLayout()) {
+      await refreshCurrentChatMessagesOnly({ force: true });
+    } else {
+      await openChat(chatIdForNote);
+    }
     notify('Заметка удалена');
   } catch (err) {
     notify('Заметка не удалена', String(err.message || err));
@@ -3111,16 +3617,44 @@ function closeActiveExtraPanel() {
 }
 
 function toggleExtraMenu(force) {
+  pauseMobileChatBackgroundWork(1800);
+
   const menu = $('extraMenu');
   const btn = $('extraMenuBtn');
   if (!menu) return;
-  const shouldOpen = typeof force === 'boolean' ? force : menu.classList.contains('hidden');
-  if (shouldOpen && activeExtraPanel) closeActiveExtraPanel();
+
+  const isMenuOpen = !menu.classList.contains('hidden');
+  let shouldOpen;
+
+  if (typeof force === 'boolean') {
+    shouldOpen = force;
+  } else {
+    // Если открыт вложенный блок, повторное нажатие по кнопке меню
+    // должно закрыть всё, а не открыть меню заново.
+    if (activeExtraPanel && !isMenuOpen) {
+      closeActiveExtraPanel();
+      menu.classList.add('hidden');
+      if (btn) btn.setAttribute('aria-expanded', 'false');
+      return;
+    }
+
+    shouldOpen = !isMenuOpen;
+  }
+
+  if (shouldOpen && activeExtraPanel) {
+    closeActiveExtraPanel();
+  }
+
   menu.classList.toggle('hidden', !shouldOpen);
-  if (btn) btn.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
+
+  if (btn) {
+    btn.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
+  }
 }
 
 function showExtraPanel(panelName) {
+  pauseMobileChatBackgroundWork(2600);
+
   activeExtraPanel = activeExtraPanel === panelName ? '' : panelName;
   const panel = $('extraPanel');
   if (panel) {
@@ -3129,6 +3663,7 @@ function showExtraPanel(panelName) {
     panel.classList.toggle('note-panel-open', activeExtraPanel === 'note');
     panel.classList.toggle('customer-panel-open', activeExtraPanel === 'customer');
   }
+
   $('tasksSection')?.classList.toggle('hidden', activeExtraPanel !== 'tasks');
   $('noteSection')?.classList.toggle('hidden', activeExtraPanel !== 'note');
   $('customerSection')?.classList.toggle('hidden', activeExtraPanel !== 'customer');
@@ -4559,29 +5094,80 @@ function init() {
   $('taskTypesSettingsList')?.addEventListener('change', handleTaskTypeSettingsChange);
   bind('saveChatSettingsBtn', 'click', saveAllChatStatuses);
   bind('saveChatSettingsBottomBtn', 'click', saveAllChatStatuses);
+  const extraMenuBtn = $('extraMenuBtn');
+  if (extraMenuBtn && extraMenuBtn.dataset.instantMenuBound !== '1') {
+    extraMenuBtn.dataset.instantMenuBound = '1';
+    extraMenuBtn.addEventListener('pointerdown', (event) => {
+      if (!isMobileChatLayout()) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      extraMenuPointerHandledAt = Date.now();
+      toggleExtraMenu();
+    }, { passive: false });
+  }
   bind('extraMenuBtn', 'click', (event) => {
     event.stopPropagation();
+
+    // На мобильном Safari после pointerdown прилетает синтетический click.
+    // Если его не отсечь, меню открывается/закрывается дважды.
+    if (isMobileChatLayout() && Date.now() - extraMenuPointerHandledAt < 700) {
+      return;
+    }
+
     toggleExtraMenu();
   });
   bind('aiGenerateBtn', 'click', generateAiReplyForSelected);
   bind('aiGenerateMenuBtn', 'click', () => { toggleExtraMenu(false); generateAiReplyForSelected(); });
   bind('aiClearSelectionBtn', 'click', clearAiSelection);
-  document.addEventListener('click', (event) => {
+  document.addEventListener('pointerdown', (event) => {
     const menu = $('extraMenu');
     const btn = $('extraMenuBtn');
+    const panel = $('extraPanel');
+
     if (!menu || !btn) return;
-    if (!menu.contains(event.target) && !btn.contains(event.target)) toggleExtraMenu(false);
-  });
+
+    const target = event.target;
+    const clickedInsideMenu =
+      menu.contains(target) ||
+      btn.contains(target) ||
+      panel?.contains(target);
+
+    if (!clickedInsideMenu) {
+      toggleExtraMenu(false);
+      closeActiveExtraPanel();
+    }
+  }, true);
   document.querySelectorAll('[data-extra]').forEach(button => {
-    button.addEventListener('click', () => showExtraPanel(button.dataset.extra));
+    if (button.dataset.extraBound === '1') return;
+    button.dataset.extraBound = '1';
+    button.addEventListener('click', (event) => {
+      if (isMobileChatLayout()) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      showExtraPanel(button.dataset.extra);
+    });
   });
   document.querySelectorAll('[data-view="tasks"]').forEach(button => {
     button.addEventListener('click', () => showView('tasks'));
   });
 
   bind('saveChatBtn', 'click', persistCurrentChatMeta);
-  bind('chatStatus', 'change', scheduleCurrentChatMetaSave);
-  bind('assignedUserSelect', 'change', scheduleCurrentChatMetaSave);
+  ['chatStatus', 'assignedUserSelect'].forEach((controlId) => {
+    const control = $(controlId);
+    if (!control || control.dataset.metaControlBound === '1') return;
+    control.dataset.metaControlBound = '1';
+    ['pointerdown', 'touchstart', 'focus', 'mousedown'].forEach((eventName) => {
+      control.addEventListener(eventName, () => markChatMetaControlBusy(9000), { passive: true });
+    });
+    control.addEventListener('change', () => {
+      markChatMetaControlBusy(9000);
+      scheduleCurrentChatMetaSave();
+    });
+  });
   bind('chatHeaderMenuBtn', 'click', () => {
     notify('Настройки чата', 'Статус и ответственный сохраняются автоматически.');
   });
@@ -4642,6 +5228,12 @@ function init() {
     messageForm.addEventListener('submit', async (event) => {
       event.preventDefault();
       if (!currentChatId) return;
+      if (outboundSendInFlight) return;
+
+      const now = Date.now();
+      if (now - outboundSendLastStartedAt < 1200) return;
+      outboundSendLastStartedAt = now;
+
       const text = $('messageText').value.trim();
       const imageFiles = selectedChatImageFiles.slice();
       if (!text && !imageFiles.length) return;
@@ -4650,30 +5242,29 @@ function init() {
       const attachBtn = $('attachImageBtn');
       if (sendBtn) sendBtn.disabled = true;
       if (attachBtn) attachBtn.disabled = true;
+
       outboundSendInFlight = true;
-      suppressFrontendSyncUntil = Date.now() + 8000;
+      suppressFrontendSyncUntil = Date.now() + 20000;
+      setStatus('Отправляем сообщение…');
+
       try {
-        if (imageFiles.length) {
-          const formData = new FormData();
-          imageFiles.forEach((file) => formData.append('images', file));
-          formData.append('caption', text || '');
-          await apiForm(`/api/chats/${currentChatId}/attachments`, formData);
-        } else {
-          await api(`/api/chats/${currentChatId}/messages`, {
-            method: 'POST',
-            body: JSON.stringify({ text, author: 'manager' }),
-          });
-        }
+        const chatIdForSend = Number(currentChatId);
+        await sendCurrentChatMessageWithRetry(chatIdForSend, { text, imageFiles });
+
         $('messageText').value = '';
         clearComposerAttachments();
         autosizeComposerTextarea($('messageText'));
+        setStatus('Сообщение отправлено');
+
         await loadChats();
-        await openChat(currentChatId);
+        if (Number(currentChatId) === chatIdForSend) {
+          await openChat(chatIdForSend);
+        }
       } catch (err) {
-        notify('Сообщение не отправлено', String(err.message || err));
+        notify('Сообщение не отправлено', friendlySendError(err));
       } finally {
         outboundSendInFlight = false;
-        suppressFrontendSyncUntil = Date.now() + 4000;
+        suppressFrontendSyncUntil = Date.now() + 6000;
         if (sendBtn) sendBtn.disabled = false;
         if (attachBtn) attachBtn.disabled = false;
       }
@@ -4804,12 +5395,17 @@ function init() {
       if (!currentChatId) return;
       const text = $('noteText').value.trim();
       if (!text) return;
-      await api(`/api/chats/${currentChatId}/notes`, {
+      const chatIdForNote = Number(currentChatId);
+      await api(`/api/chats/${chatIdForNote}/notes`, {
         method: 'POST',
         body: JSON.stringify({ text, author: 'manager' }),
       });
       $('noteText').value = '';
-      await openChat(currentChatId);
+      if (isMobileChatLayout()) {
+        await refreshCurrentChatMessagesOnly({ force: true });
+      } else {
+        await openChat(chatIdForNote);
+      }
     });
   }
 

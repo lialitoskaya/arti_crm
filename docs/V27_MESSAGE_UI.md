@@ -1,0 +1,1 @@
+Message dialog UI adjusted to match screenshot reference.
