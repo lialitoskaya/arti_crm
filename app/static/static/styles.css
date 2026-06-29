@@ -2499,3 +2499,37 @@ textarea {
   }
 }
 
+
+/* Arti CRM — v31 chat routes and marketplace deeplink */
+#chatSubtitle {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0;
+}
+
+.marketplace-chat-link {
+  color: var(--crm-blue-text);
+  text-decoration: none;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.marketplace-chat-link:hover {
+  text-decoration: underline;
+}
+
+
+/* Arti CRM — v32 clean open chat header */
+#chatSubtitle.hidden {
+  display: none !important;
+}
+
+#chatSubtitle {
+  margin-top: 2px;
+}
+
+.marketplace-chat-link {
+  font-size: 12px;
+}
+

@@ -791,6 +791,65 @@ function chatSubtitleParts(chat) {
   return parts.join(' · ');
 }
 
+function directMarketplaceChatUrl(chat) {
+  if (!chat) return '';
+
+  const rawMarketplace = String(chat.marketplace || '').toLowerCase();
+  const externalChatId = String(chat.external_chat_id || chat.chat_id || '').trim();
+
+  const metadata = chat.metadata && typeof chat.metadata === 'object' ? chat.metadata : {};
+  const explicitUrl =
+    chat.marketplace_chat_url ||
+    chat.external_chat_url ||
+    metadata.marketplace_chat_url ||
+    metadata.external_chat_url ||
+    metadata.chatUrl ||
+    metadata.chat_url ||
+    metadata.url ||
+    metadata.link;
+
+  if (explicitUrl && /^https?:\/\//i.test(String(explicitUrl))) {
+    return String(explicitUrl);
+  }
+
+  if (!externalChatId) return '';
+
+  if (rawMarketplace === 'ozon') {
+    return `https://seller.ozon.ru/app/messenger/?group=customers_v2&id=${encodeURIComponent(externalChatId)}`;
+  }
+
+  if (rawMarketplace === 'wildberries' || rawMarketplace === 'wb') {
+    const wbChatId = externalChatId.includes(':')
+      ? externalChatId.split(':').pop().trim()
+      : externalChatId;
+    if (!wbChatId) return '';
+    return `https://seller.wildberries.ru/chat-with-clients?chatId=${encodeURIComponent(wbChatId)}`;
+  }
+
+  return '';
+}
+
+function renderChatSubtitle(chat) {
+  const subtitleEl = $('chatSubtitle');
+  if (!subtitleEl) return;
+
+  subtitleEl.innerHTML = '';
+
+  const url = directMarketplaceChatUrl(chat);
+  subtitleEl.classList.toggle('hidden', !url);
+
+  if (!url) return;
+
+  const link = document.createElement('a');
+  link.className = 'marketplace-chat-link';
+  link.href = url;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.textContent = 'открыть чат';
+  link.title = 'Открыть диалог на маркетплейсе';
+  subtitleEl.appendChild(link);
+}
+
 
 function pluralRu(value, one, few, many) {
   const n = Math.abs(Number(value || 0));
@@ -1357,6 +1416,7 @@ function backToChatListMobile(event) {
   openChatRequestSeq += 1;
   setMobileChatOpen(false);
   renderChatList({ force: true });
+  syncRouteForView('chats');
 }
 
 function pauseMobileChatBackgroundWork(ms = 1800) {
@@ -1915,10 +1975,7 @@ function paintChatHeader(chat, options = {}) {
 
   if ($('chatAvatar')) $('chatAvatar').textContent = customerLabel(chat).trim().slice(0, 1).toUpperCase() || 'A';
 
-  if ($('chatSubtitle')) {
-    const subtitle = chatSubtitleParts(chat);
-    $('chatSubtitle').textContent = subtitle || 'Данные по заказу не переданы маркетплейсом';
-  }
+  renderChatSubtitle(chat);
 
   if (options.updateControls !== false) {
     hydrateChatMetaControls(chat, { force: Boolean(options.forceControls) });
@@ -2100,6 +2157,9 @@ async function openChat(chatId, options = {}) {
   mobileChatClosedByUser = false;
   const previousChatId = currentChatId;
   currentChatId = Number(chatId);
+  if (options.syncRoute !== false) {
+    syncRouteForChat(chatId, { replace: Boolean(options.replaceRoute) });
+  }
   if (previousChatId !== currentChatId) {
     selectedAiMessageId = null;
     setReplyTemplatesPanel(false);
@@ -4301,6 +4361,29 @@ function getViewFromLocationHash() {
   return viewFromRouteValue(window.location.hash || '');
 }
 
+function getChatIdFromRouteValue(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const clean = raw
+    .replace(/^#/, '')
+    .replace(/^\/?/, '')
+    .split(/[?&]/)[0]
+    .trim();
+
+  const parts = clean.split('/').filter(Boolean);
+  const route = String(parts[0] || '').toLowerCase();
+  const rawChatId = parts[1];
+
+  if (!rawChatId || (route !== 'chats' && route !== 'chat')) return null;
+
+  const chatId = Number(decodeURIComponent(rawChatId));
+  return Number.isFinite(chatId) && chatId > 0 ? chatId : null;
+}
+
+function getChatIdFromLocationHash() {
+  return getChatIdFromRouteValue(window.location.hash || '');
+}
+
 function getInitialRouteView() {
   const hashView = getViewFromLocationHash();
   if (hashView) return hashView;
@@ -4326,6 +4409,27 @@ function syncRouteForView(view, { replace = false } = {}) {
   rememberRouteView(normalizedView);
   const targetHash = `#/${routeForView(normalizedView)}`;
   if (window.location.hash === targetHash) return;
+  const targetUrl = `${window.location.pathname}${window.location.search}${targetHash}`;
+  if (replace && window.history?.replaceState) {
+    window.history.replaceState(null, '', targetUrl);
+    return;
+  }
+  if (window.history?.pushState) {
+    window.history.pushState(null, '', targetUrl);
+    return;
+  }
+  window.location.hash = targetHash;
+}
+
+function syncRouteForChat(chatId, { replace = false } = {}) {
+  const numericChatId = Number(chatId);
+  if (!Number.isFinite(numericChatId) || numericChatId <= 0) return;
+
+  rememberRouteView('chats');
+
+  const targetHash = `#/chats/${encodeURIComponent(String(numericChatId))}`;
+  if (window.location.hash === targetHash) return;
+
   const targetUrl = `${window.location.pathname}${window.location.search}${targetHash}`;
   if (replace && window.history?.replaceState) {
     window.history.replaceState(null, '', targetUrl);
@@ -4947,6 +5051,7 @@ function init() {
   if (appInitialized) return;
   appInitialized = true;
   activeView = getInitialRouteView();
+  const initialRouteChatId = getChatIdFromLocationHash();
   document.body.dataset.activeView = activeView || 'chats';
   loadChatSettings({ keepValues: true }).catch(err => console.warn('chat settings init failed', err));
   loadTaskTypes({ silent: true }).catch(err => console.warn('task types init failed', err));
@@ -5425,11 +5530,20 @@ function init() {
     });
   }
 
-  showView(activeView, { replaceRoute: true });
+  showView(
+    activeView,
+    initialRouteChatId && activeView === 'chats'
+      ? { syncRoute: false }
+      : { replaceRoute: true }
+  );
 
   loadAssignees()
-    .then(() => {
-      if (activeView === 'chats') return loadChats();
+    .then(async () => {
+      if (activeView !== 'chats') return null;
+      await loadChats();
+      if (initialRouteChatId) {
+        await openChat(initialRouteChatId, { syncRoute: false, replaceRoute: true });
+      }
       return null;
     })
     .catch(err => console.warn('initial assignees load failed', err));
@@ -5474,8 +5588,27 @@ if (document.readyState === 'loading') {
 
 window.addEventListener('hashchange', () => {
   const routeView = getViewFromLocationHash();
-  if (!routeView || routeView === activeView) return;
-  showView(routeView, { syncRoute: false });
+  const routeChatId = getChatIdFromLocationHash();
+
+  if (!routeView) return;
+
+  if (routeView !== activeView) {
+    showView(routeView, { syncRoute: false });
+  }
+
+  if (routeView === 'chats') {
+    if (routeChatId && Number(routeChatId) !== Number(currentChatId)) {
+      openChat(routeChatId, { syncRoute: false }).catch(err => notify('Не удалось открыть чат по ссылке', String(err.message || err)));
+      return;
+    }
+
+    if (!routeChatId && isMobileChatOpen()) {
+      mobileChatClosedByUser = true;
+      openChatRequestSeq += 1;
+      setMobileChatOpen(false);
+      renderChatList({ force: true });
+    }
+  }
 });
 
 
