@@ -2480,3 +2480,13 @@ textarea {
   }
 }
 
+
+/* Arti CRM — v29 remove image open label */
+.message.message-has-images .image-fallback {
+  display: none !important;
+}
+
+.message.message-has-images .image-card {
+  cursor: zoom-in;
+}
+

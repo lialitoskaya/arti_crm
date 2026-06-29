@@ -2359,12 +2359,7 @@ function renderMessages(messages) {
         img.onerror = () => card.classList.add('image-error');
         prepareLazyChatImage(img, safeImageUrl);
 
-        const fallback = document.createElement('span');
-        fallback.textContent = 'Открыть в полном размере';
-        fallback.className = 'image-fallback';
-
         card.appendChild(img);
-        card.appendChild(fallback);
         gallery.appendChild(card);
       }
       bubble.appendChild(gallery);
