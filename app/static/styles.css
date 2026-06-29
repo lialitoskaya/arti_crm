@@ -2046,8 +2046,6 @@ textarea {
   #chatsView.mobile-chat-mode > .conversation .chat-controls,
   #chatsView > .conversation.mobile-chat-open .chat-controls {
     width: 100%;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
     gap: 8px;
   }
 
@@ -2531,5 +2529,38 @@ textarea {
 
 .marketplace-chat-link {
   font-size: 12px;
+}
+
+
+/* Arti CRM — v33 Ozon order links inside messages */
+.ozon-order-link {
+  color: var(--crm-blue-text);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.ozon-order-link:hover {
+  text-decoration: underline;
+}
+
+
+/* Arti CRM — v35 desktop chat menu position fix
+   The extra menu was moved into .chat-controls.
+   Keep the current header layout, but make the dropdown anchor to the controls row. */
+.chat-header {
+  position: relative;
+  overflow: visible;
+  z-index: 80;
+}
+
+.chat-controls {
+  position: relative;
+  overflow: visible;
+}
+
+.chat-controls .extra-menu {
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 120;
 }
 

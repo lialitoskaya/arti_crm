@@ -4,11 +4,11 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Arti CRM</title>
-  <meta name="arti-build-version" content="v32-clean-chat-header-20260629" />
+  <meta name="arti-build-version" content="v35-desktop-chat-menu-position-fix-20260629" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/styles.css?v=v32-clean-chat-header-20260629" />
+  <link rel="stylesheet" href="/static/styles.css?v=v35-desktop-chat-menu-position-fix-20260629" />
 
 </head>
 <body class="auth-pending">
@@ -150,13 +150,6 @@
                     </div>
                     <p id="chatSubtitle"></p>
                   </div>
-                  <button id="extraMenuBtn" class="icon-btn" type="button" aria-label="Дополнительные функции" title="Дополнительные функции">⋯</button>
-                  <div id="extraMenu" class="extra-menu hidden" role="menu">
-                    <button type="button" data-extra="tasks">Задачи по чату</button>
-                    <button type="button" data-extra="note">Внутренняя заметка</button>
-                    <button type="button" data-extra="customer">Имя клиента</button>
-                    <button id="aiGenerateMenuBtn" type="button">✨ ИИ ответ на выбранное</button>
-                  </div>
                 </div>
               </div>
               <div class="chat-controls">
@@ -164,6 +157,13 @@
                   <option value="new">Новый</option>
                 </select>
                 <select id="assignedUserSelect" aria-label="Ответственный за чат"><option value="">Не назначен</option></select>
+                <button id="extraMenuBtn" class="icon-btn" type="button" aria-label="Дополнительные функции" title="Дополнительные функции">⋯</button>
+                  <div id="extraMenu" class="extra-menu hidden" role="menu">
+                    <button type="button" data-extra="tasks">Задачи по чату</button>
+                    <button type="button" data-extra="note">Внутренняя заметка</button>
+                    <button type="button" data-extra="customer">Имя клиента</button>
+                    <button id="aiGenerateMenuBtn" type="button">✨ ИИ ответ на выбранное</button>
+                </div>
               </div>
             </div>
 
@@ -800,6 +800,6 @@
 
   <div id="notificationToasts" class="notification-toast-stack" aria-live="polite"></div>
 
-  <script src="/static/app.js?v=v32-clean-chat-header-20260629"></script>
+  <script src="/static/app.js?v=v35-desktop-chat-menu-position-fix-20260629"></script>
 </body>
 </html>

@@ -2391,7 +2391,7 @@ function renderMessages(messages) {
     if (displayText) {
       const text = document.createElement('div');
       text.className = 'message-text';
-      renderTextWithLinks(text, displayText);
+      renderMessageTextWithLinks(text, message, displayText);
       bubble.appendChild(text);
     }
 
@@ -2815,6 +2815,146 @@ function imagePreviewSrc(url) {
     return url;
   }
   return url;
+}
+
+function escapeRegExp(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function rawValueByPath(value, path) {
+  let current = value;
+  for (const key of path) {
+    if (!current || typeof current !== 'object') return '';
+    current = current[key];
+  }
+  return current == null ? '' : String(current).trim();
+}
+
+function looksLikeOzonOrderNumber(value) {
+  const clean = String(value || '').trim();
+  if (!clean) return false;
+  if (clean.length < 5 || clean.length > 80) return false;
+  if (!/\d/.test(clean)) return false;
+  if (/\s/.test(clean)) return false;
+  return /^[A-Za-zА-Яа-я0-9][A-Za-zА-Яа-я0-9._/-]*$/.test(clean);
+}
+
+function firstOzonOrderFromDataArray(value, depth = 0) {
+  if (!value || depth > 7) return '';
+
+  if (Array.isArray(value)) {
+    // Ozon can send a `data` array when the message is sent from an order.
+    // In that case the first element is the full posting/order number,
+    // including suffixes like -1, -2, etc.
+    if (value.length >= 2 && looksLikeOzonOrderNumber(value[0])) {
+      return String(value[0]).trim();
+    }
+
+    for (const item of value) {
+      const found = firstOzonOrderFromDataArray(item, depth + 1);
+      if (found) return found;
+    }
+
+    return '';
+  }
+
+  if (typeof value !== 'object') return '';
+
+  for (const [key, nested] of Object.entries(value)) {
+    const normalizedKey = normalizeRawKey(key);
+    if (normalizedKey === 'data' && Array.isArray(nested) && nested.length >= 2 && looksLikeOzonOrderNumber(nested[0])) {
+      return String(nested[0]).trim();
+    }
+
+    const found = firstOzonOrderFromDataArray(nested, depth + 1);
+    if (found) return found;
+  }
+
+  return '';
+}
+
+function extractOzonOrderNumber(message) {
+  if (!message) return '';
+  const marketplace = String(message.marketplace || message.source || '').toLowerCase();
+  if (marketplace && marketplace !== 'ozon') return '';
+
+  const raw = message.raw && typeof message.raw === 'object' ? message.raw : {};
+
+  // Priority 1: full order/posting number from Ozon `data` array.
+  // This is more accurate than context.order_number because context can omit
+  // suffixes such as -1, -2.
+  const fullOrderFromData = firstOzonOrderFromDataArray(raw);
+  if (fullOrderFromData) return fullOrderFromData;
+
+  // Priority 2: fallback only to explicit context fields.
+  // We still do not guess from random numbers in the message text.
+  const candidates = [
+    rawValueByPath(raw, ['context', 'order_number']),
+    rawValueByPath(raw, ['context', 'orderNumber']),
+    rawValueByPath(raw, ['_chat_item', 'context', 'order_number']),
+    rawValueByPath(raw, ['_chat_item', 'context', 'orderNumber']),
+    rawValueByPath(raw, ['payload', 'context', 'order_number']),
+    rawValueByPath(raw, ['payload', 'context', 'orderNumber']),
+    rawValueByPath(raw, ['message', 'context', 'order_number']),
+    rawValueByPath(raw, ['message', 'context', 'orderNumber']),
+  ].filter(looksLikeOzonOrderNumber);
+
+  return candidates[0] || '';
+}
+
+function ozonPostingUrl(orderNumber) {
+  const clean = String(orderNumber || '').trim();
+  return clean ? `https://seller.ozon.ru/app/postings/${encodeURIComponent(clean)}` : '';
+}
+
+function renderMessageTextWithLinks(container, message, value) {
+  const text = String(value || '');
+  const orderNumber = extractOzonOrderNumber(message);
+  const orderUrl = ozonPostingUrl(orderNumber);
+
+  if (!orderNumber || !orderUrl || !text.includes(orderNumber)) {
+    renderTextWithLinks(container, text);
+    return;
+  }
+
+  const tokenRegex = new RegExp(`(https?:\\/\\/[^\\s<>"]+)|(${escapeRegExp(orderNumber)})`, 'g');
+  let lastIndex = 0;
+  let match;
+
+  while ((match = tokenRegex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      container.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+    }
+
+    if (match[1]) {
+      const rawUrl = match[1];
+      const url = rawUrl.replace(/[),.;]+$/, '');
+      const trailing = rawUrl.slice(url.length);
+      const a = document.createElement('a');
+      const imageLike = isLikelyImageUrl(url);
+      a.href = imageLike ? imagePreviewSrc(url) : url;
+      a.target = '_blank';
+      a.rel = 'noreferrer';
+      a.textContent = imageLike ? 'открыть изображение' : url;
+      container.appendChild(a);
+      if (trailing) container.appendChild(document.createTextNode(trailing));
+    } else {
+      const a = document.createElement('a');
+      a.href = orderUrl;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.className = 'ozon-order-link';
+      a.textContent = match[2];
+      a.title = 'Открыть отправление Ozon';
+      container.appendChild(a);
+    }
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < text.length) {
+    container.appendChild(document.createTextNode(text.slice(lastIndex)));
+  }
 }
 
 
