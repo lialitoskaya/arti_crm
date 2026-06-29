@@ -1,4 +1,4 @@
-Arti CRM v29 image preview no open label fix
+Arti CRM v30 mobile extra actions fix
 
 Заменить только:
 - app/static/app.js
@@ -10,10 +10,18 @@ Arti CRM v29 image preview no open label fix
 - app/static/static/styles.css
 - app/static/static/index.html
 
-Что изменено:
-- убран текстовый блок "Открыть в полном размере" внутри превью изображения;
-- изображение остаётся кликабельным и открывается по нажатию;
-- v28 с крупным читаемым превью без обрезки сохранён.
+Что исправлено:
+- пункты меню открытого чата в мобильной версии снова открывают свои панели;
+- кнопки с data-extra теперь обрабатываются напрямую через pointerdown;
+- делегированный обработчик через conversation больше не перехватывает эти пункты;
+- добавлена защита от synthetic click после pointerdown на iOS Safari;
+- внешний pointerdown больше не закрывает панель при нажатии на пункт меню.
+
+Сохранено:
+- v25 ускорение мобильной версии;
+- v26 switcher-логика меню;
+- v27 оформление сообщений;
+- v28/v29 крупные превью изображений без лишней подписи.
 
 Версия статики:
-v29-image-preview-no-open-label-20260629
+v30-mobile-extra-actions-fix-20260629
