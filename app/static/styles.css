@@ -7985,11 +7985,7 @@ button#saveChatSettingsBottomBtn.crm-light-btn {
 }
 
 #messageForm #replyTemplatesToggleBtn.composer-template-btn {
-<<<<<<< HEAD
-  grid-column: 1 !important;
-=======
   grid-column: 2 !important;
->>>>>>> 1de50c7 (Improve CRM task workflow, chat notes, and composer UI)
   width: 30px !important;
   min-width: 30px !important;
   max-width: 30px !important;
@@ -8193,8 +8189,6 @@ button#saveChatSettingsBottomBtn.crm-light-btn {
     display: none !important;
   }
 }
-<<<<<<< HEAD
-=======
 
 /* v104 tasks visual phase 1: scoped redesign only, no global navigation/layout overrides */
 #tasksView.tasks-redesign-page {
@@ -10970,4 +10964,3 @@ button#saveChatSettingsBottomBtn.crm-light-btn {
     max-height: 40px !important;
   }
 }
->>>>>>> 1de50c7 (Improve CRM task workflow, chat notes, and composer UI)

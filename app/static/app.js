@@ -88,10 +88,7 @@ let syncStatusLoadPromise = null;
 let questionsSyncPromise = null;
 let questionsSyncLastStartedAt = 0;
 let replyTemplates = [];
-<<<<<<< HEAD
-=======
 let taskTypes = [];
->>>>>>> 1de50c7 (Improve CRM task workflow, chat notes, and composer UI)
 let replyTemplatesLoaded = false;
 let replyTemplatesPanelOpen = false;
 let replyTemplateSaving = false;

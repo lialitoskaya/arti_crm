@@ -24,11 +24,7 @@ from app.connectors.ozon import OzonConnector
 from app.connectors.wildberries import WildberriesConnector
 from app.connectors.yandex_market import YandexMarketConnector
 from app.db import get_connection, init_db
-<<<<<<< HEAD
-from app.schemas import AiReplyCreate, ChatCreate, ChatUpdate, InternalNoteCreate, LoginCreate, MessageCreate, ReviewReplyCreate, QuestionAnswerCreate, TaskCreate, TaskUpdate, UserCreate, UserPasswordUpdate, UserUpdate, ProfileUpdate, KnowledgeCategoryCreate, KnowledgeArticleCreate, KnowledgeArticleUpdate, ChatFunnelCreate, ChatFunnelUpdate, ChatStatusCreate, ChatStatusUpdate, ReplyTemplateCreate
-=======
 from app.schemas import AiReplyCreate, ChatCreate, ChatUpdate, InternalNoteCreate, InternalNoteUpdate, LoginCreate, MessageCreate, ReviewReplyCreate, QuestionAnswerCreate, TaskCreate, TaskUpdate, UserCreate, UserPasswordUpdate, UserUpdate, ProfileUpdate, KnowledgeCategoryCreate, KnowledgeArticleCreate, KnowledgeArticleUpdate, ChatFunnelCreate, ChatFunnelUpdate, ChatStatusCreate, ChatStatusUpdate, ReplyTemplateCreate, TaskTypeCreate, TaskTypeUpdate
->>>>>>> 1de50c7 (Improve CRM task workflow, chat notes, and composer UI)
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
