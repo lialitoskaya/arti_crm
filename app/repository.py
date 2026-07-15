@@ -1621,6 +1621,31 @@ def add_message(
 
     with get_connection() as conn:
         message_id: int
+
+        # v104: hard idempotency guard for marketplace sync. The app may run
+        # background sync and operator-triggered sync close to each other. If a
+        # message with the same marketplace id is already in the local DB, update
+        # it and return instead of allowing a UNIQUE constraint failure to abort
+        # the whole Ozon/Yandex/WB synchronization pass.
+        if clean_external_id:
+            existing_by_external_id = conn.execute(
+                "SELECT id FROM messages WHERE chat_id=? AND external_message_id=?",
+                (int(chat_id), clean_external_id),
+            ).fetchone()
+            if existing_by_external_id:
+                conn.execute(
+                    """
+                    UPDATE messages
+                    SET direction=?, author=COALESCE(NULLIF(?, ''), author),
+                        text=?, raw_json=?, created_at=COALESCE(?, created_at)
+                    WHERE id=?
+                    """,
+                    (direction, author, text, raw_json, created_at, existing_by_external_id["id"]),
+                )
+                message_id = int(existing_by_external_id["id"])
+                refresh_chat_last_message(conn, chat_id)
+                return message_id
+
         if direction == "outbound" and not clean_external_id and _raw_marks_crm_sent(raw_json):
             # Reverse race guard: if autosync already imported the marketplace
             # echo before this send request saved its local row, update that echo
@@ -1823,11 +1848,33 @@ def add_message(
 
         cur = conn.execute(
             """
-            INSERT INTO messages (chat_id, external_message_id, direction, author, text, created_at, raw_json)
+            INSERT OR IGNORE INTO messages (chat_id, external_message_id, direction, author, text, created_at, raw_json)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (chat_id, clean_external_id, direction, author, text, created_at, raw_json),
         )
+
+        # If another sync worker inserted the same marketplace message between
+        # our SELECT and INSERT, SQLite ignores the insert. Update and return the
+        # existing row instead of raising UNIQUE constraint failed.
+        if clean_external_id and int(cur.rowcount or 0) == 0:
+            existing_after_insert = conn.execute(
+                "SELECT id FROM messages WHERE chat_id=? AND external_message_id=?",
+                (int(chat_id), clean_external_id),
+            ).fetchone()
+            if existing_after_insert:
+                conn.execute(
+                    """
+                    UPDATE messages
+                    SET direction=?, author=COALESCE(NULLIF(?, ''), author),
+                        text=?, raw_json=?, created_at=COALESCE(?, created_at)
+                    WHERE id=?
+                    """,
+                    (direction, author, text, raw_json, created_at, existing_after_insert["id"]),
+                )
+                message_id = int(existing_after_insert["id"])
+                refresh_chat_last_message(conn, chat_id)
+                return message_id
 
         message_id = int(cur.lastrowid)
         refresh_chat_last_message(conn, chat_id)

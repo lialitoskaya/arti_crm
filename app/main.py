@@ -32,7 +32,7 @@ CHAT_ATTACHMENTS_DIR = Path(os.getenv("CRM_CHAT_ATTACHMENTS_DIR", str(Path.cwd()
 MAX_CHAT_IMAGE_BYTES = int(os.getenv("CRM_MAX_CHAT_IMAGE_MB", "12")) * 1024 * 1024
 ALLOWED_CHAT_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 
-CRM_BUILD_VERSION = "v103_analytics_ui_polish_2026-06-18"
+CRM_BUILD_VERSION = "v104_backend_sync_idempotency_2026-06-29"
 
 app = FastAPI(title="Arti CRM", version="1.0.3")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -111,6 +111,24 @@ connectors = {
     "yandex": YandexMarketConnector(),
     "wildberries": WildberriesConnector(),
 }
+
+
+def _marketplace_sync_lock(marketplace: str) -> asyncio.Lock:
+    """Return a per-marketplace lock shared by background and frontend sync.
+
+    The frontend operator endpoint and the background worker can run close to
+    each other on shared hosting. For Ozon this used to create duplicate message
+    insert races and crash the whole sync with UNIQUE constraint failed.
+    """
+    locks = getattr(app.state, "marketplace_sync_locks", None)
+    if not isinstance(locks, dict):
+        locks = {}
+        app.state.marketplace_sync_locks = locks
+    lock = locks.get(marketplace)
+    if not isinstance(lock, asyncio.Lock):
+        lock = asyncio.Lock()
+        locks[marketplace] = lock
+    return lock
 
 
 _GENERIC_AUTHOR_NAMES = {
@@ -903,7 +921,7 @@ async def _sync_ozon_fast_inbox_unlocked(*, background: bool = True) -> dict[str
         else:
             histories_skipped += 1
 
-    concurrency = _env_int("OZON_FAST_MESSAGE_FETCH_CONCURRENCY", 10, minimum=1, maximum=20)
+    concurrency = _env_int("OZON_FAST_MESSAGE_FETCH_CONCURRENCY", 4, minimum=1, maximum=8)
     semaphore = asyncio.Semaphore(concurrency)
 
     async def fetch_messages(chat_id: int, unified_chat: Any, existing_chat: dict[str, Any] | None) -> tuple[int, Any, dict[str, Any] | None, list[Any] | None, str | None]:
@@ -982,11 +1000,17 @@ async def _sync_ozon_fast_inbox_unlocked(*, background: bool = True) -> dict[str
     return result
 
 
+async def _sync_ozon_fast_inbox_locked(*, background: bool = True) -> dict[str, Any]:
+    lock = _marketplace_sync_lock("ozon")
+    async with lock:
+        return await _sync_ozon_fast_inbox_unlocked(background=background)
+
+
 @app.get("/api/debug/ozon/fast-sync")
 @app.post("/api/debug/ozon/fast-sync")
 async def debug_ozon_fast_sync() -> dict[str, Any]:
     """Run the lightweight Ozon new/recent chats sync once."""
-    return await _sync_ozon_fast_inbox_unlocked(background=False)
+    return await _sync_ozon_fast_inbox_locked(background=False)
 
 
 def _background_overrides_for_marketplace(marketplace: str, connector: Any) -> dict[str, Any]:
@@ -1071,12 +1095,22 @@ async def _sync_marketplace_unlocked(marketplace: str, *, background: bool = Fal
         else:
             histories_skipped += 1
 
-    concurrency = _env_int(
-        "MARKETPLACE_MESSAGE_FETCH_CONCURRENCY",
-        8 if background else 6,
-        minimum=1,
-        maximum=20,
-    )
+    if marketplace == "yandex":
+        # Yandex Market returns 420 METHOD_FAILURE when more than 4 history
+        # requests are made in parallel for one businessId. Keep a safe default
+        # below the hard limit; it can still be overridden through .env.
+        concurrency = _env_int("YANDEX_MESSAGE_FETCH_CONCURRENCY", 3, minimum=1, maximum=4)
+    elif marketplace == "wildberries":
+        concurrency = _env_int("WB_MESSAGE_FETCH_CONCURRENCY", 2, minimum=1, maximum=4)
+    elif marketplace == "ozon":
+        concurrency = _env_int("OZON_MESSAGE_FETCH_CONCURRENCY", 4, minimum=1, maximum=8)
+    else:
+        concurrency = _env_int(
+            "MARKETPLACE_MESSAGE_FETCH_CONCURRENCY",
+            4 if background else 3,
+            minimum=1,
+            maximum=8,
+        )
     semaphore = asyncio.Semaphore(concurrency)
 
     async def fetch_messages(chat_id: int, unified_chat: Any, existing_chat: dict[str, Any] | None) -> tuple[int, Any, dict[str, Any] | None, list[Any] | None, str | None]:
@@ -1238,9 +1272,13 @@ async def _sync_ozon_questions_unlocked(*, background: bool = False) -> dict[str
 
 
 async def _sync_marketplace_locked(marketplace: str) -> dict[str, Any]:
+    # Keep the old global lock for manual /api/sync/{marketplace}, but also use
+    # the marketplace-specific lock so manual sync cannot overlap with the
+    # background/frontend worker for the same external API.
     lock: asyncio.Lock = app.state.sync_lock
     async with lock:
-        result = await _sync_marketplace_unlocked(marketplace)
+        async with _marketplace_sync_lock(marketplace):
+            result = await _sync_marketplace_unlocked(marketplace)
         app.state.last_sync = result
         return result
 
@@ -1331,9 +1369,10 @@ async def _sync_operator_frontend_unlocked() -> dict[str, Any]:
         last_poll_at[marketplace] = now
         try:
             if marketplace == "ozon" and _env_bool("OZON_FAST_INBOX_SYNC_ENABLED", True):
-                result = await _sync_ozon_fast_inbox_unlocked(background=True)
+                result = await _sync_ozon_fast_inbox_locked(background=True)
             else:
-                result = await _sync_marketplace_unlocked(marketplace, background=True)
+                async with _marketplace_sync_lock(marketplace):
+                    result = await _sync_marketplace_unlocked(marketplace, background=True)
 
             total_chats += int(result.get("count") or 0)
             total_messages += int(result.get("messages_count") or 0)
@@ -1479,9 +1518,10 @@ async def _background_sync_loop() -> None:
         async def run_marketplace_sync(marketplace: str) -> tuple[str, dict[str, Any]]:
             try:
                 if marketplace == "ozon" and _env_bool("OZON_FAST_INBOX_SYNC_ENABLED", True):
-                    result = await _sync_ozon_fast_inbox_unlocked(background=True)
+                    result = await _sync_ozon_fast_inbox_locked(background=True)
                 else:
-                    result = await _sync_marketplace_unlocked(marketplace, background=True)
+                    async with _marketplace_sync_lock(marketplace):
+                        result = await _sync_marketplace_unlocked(marketplace, background=True)
                 return marketplace, {"enabled": True, "configured": True, "status": "ok", "result": result}
             except asyncio.CancelledError:
                 raise
@@ -1565,6 +1605,11 @@ async def on_startup() -> None:
     app.state.frontend_operator_sync_lock = asyncio.Lock()
     app.state.frontend_operator_sync_last_poll_at = {}
     app.state.last_frontend_operator_sync = {}
+    app.state.marketplace_sync_locks = {
+        "ozon": asyncio.Lock(),
+        "yandex": asyncio.Lock(),
+        "wildberries": asyncio.Lock(),
+    }
     _ensure_wb_events_auto_plan_from_env()
     app.state.background_sync_task = asyncio.create_task(_background_sync_loop())
     app.state.wb_events_import_planner_task = asyncio.create_task(_wb_events_import_planner_loop())
