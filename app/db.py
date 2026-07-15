@@ -23,9 +23,14 @@ def _resolve_db_path() -> str:
 
 @contextmanager
 def get_connection() -> Iterator[sqlite3.Connection]:
-    conn = sqlite3.connect(_resolve_db_path())
+    conn = sqlite3.connect(_resolve_db_path(), timeout=15)
     conn.row_factory = sqlite3.Row
     try:
+        conn.execute("PRAGMA busy_timeout=15000")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA temp_store=MEMORY")
         yield conn
         conn.commit()
     except Exception:
@@ -124,6 +129,37 @@ def init_db() -> None:
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
                 FOREIGN KEY(chat_id) REFERENCES chats(id) ON DELETE CASCADE,
                 FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS push_subscriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                endpoint TEXT NOT NULL UNIQUE,
+                subscription_json TEXT NOT NULL,
+                user_agent TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                failure_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_success_at TEXT,
+                last_error_at TEXT,
+                last_error TEXT,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS push_outbox (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                notification_id INTEGER,
+                user_id INTEGER NOT NULL,
+                payload_json TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at TEXT,
+                sent_at TEXT,
+                last_error TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(notification_id) REFERENCES notifications(id) ON DELETE CASCADE,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             );
 
 
@@ -447,6 +483,41 @@ def init_db() -> None:
             """
         )
 
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS push_subscriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                endpoint TEXT NOT NULL UNIQUE,
+                subscription_json TEXT NOT NULL,
+                user_agent TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                failure_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_success_at TEXT,
+                last_error_at TEXT,
+                last_error TEXT,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS push_outbox (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                notification_id INTEGER,
+                user_id INTEGER NOT NULL,
+                payload_json TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at TEXT,
+                sent_at TEXT,
+                last_error TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(notification_id) REFERENCES notifications(id) ON DELETE CASCADE,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+            """
+        )
+
         # Analytics and large-history indexes.
         # These are safe on existing SQLite databases and make daily/hourly
         # dashboards faster when messages grow to tens of thousands.
@@ -456,6 +527,10 @@ def init_db() -> None:
                 ON messages(direction, created_at);
             CREATE INDEX IF NOT EXISTS idx_messages_chat_direction_created_at
                 ON messages(chat_id, direction, created_at);
+            CREATE INDEX IF NOT EXISTS idx_messages_chat_created_id
+                ON messages(chat_id, created_at DESC, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_tasks_chat_created_id
+                ON tasks(chat_id, created_at DESC, id DESC);
             CREATE INDEX IF NOT EXISTS idx_chats_marketplace_status_last_message
                 ON chats(marketplace, status, last_message_at);
             CREATE INDEX IF NOT EXISTS idx_chats_marketplace_last_message
@@ -466,6 +541,14 @@ def init_db() -> None:
                 ON notifications(chat_id);
             CREATE INDEX IF NOT EXISTS idx_notifications_task
                 ON notifications(task_id);
+            CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user_active
+                ON push_subscriptions(user_id, is_active);
+            CREATE INDEX IF NOT EXISTS idx_push_subscriptions_endpoint
+                ON push_subscriptions(endpoint);
+            CREATE INDEX IF NOT EXISTS idx_push_outbox_pending
+                ON push_outbox(sent_at, next_attempt_at, attempts, created_at);
+            CREATE INDEX IF NOT EXISTS idx_push_outbox_user
+                ON push_outbox(user_id);
             CREATE INDEX IF NOT EXISTS idx_tasks_status_type
                 ON tasks(status, task_type_id);
             CREATE INDEX IF NOT EXISTS idx_task_types_active_sort

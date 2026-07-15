@@ -11,12 +11,18 @@ __pycache__/
 venv/
 env/
 
-# Local database
-crm.sqlite3
-crm.sqlite3-*
+# Local SQLite databases
+*.sqlite
+*.sqlite-*
 *.sqlite3
 *.sqlite3-*
 *.db
+
+# Chat attachments and other runtime uploads
+chat_attachments/
+
+# Local marketplace diagnostic data
+ozon_chat_history_probe.json
 
 # Secrets
 .env

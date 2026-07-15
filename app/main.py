@@ -7,6 +7,10 @@ import os
 import re
 import time
 import uuid
+import hmac
+import hashlib
+import secrets
+from datetime import datetime, timedelta, timezone
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -14,7 +18,7 @@ from urllib.parse import urlparse
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from app import repository as repo
@@ -32,7 +36,7 @@ CHAT_ATTACHMENTS_DIR = Path(os.getenv("CRM_CHAT_ATTACHMENTS_DIR", str(Path.cwd()
 MAX_CHAT_IMAGE_BYTES = int(os.getenv("CRM_MAX_CHAT_IMAGE_MB", "12")) * 1024 * 1024
 ALLOWED_CHAT_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 
-CRM_BUILD_VERSION = "v104_backend_sync_idempotency_2026-06-29"
+CRM_BUILD_VERSION = "v80-login-bruteforce-lockout-20260708"
 
 app = FastAPI(title="Arti CRM", version="1.0.3")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -40,13 +44,262 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 AUTH_COOKIE_NAME = "arti_crm_session"
 AUTH_DISABLED = os.getenv("CRM_AUTH_DISABLED", "0").strip().lower() in {"1", "true", "yes", "on", "да"}
 
+# v75 security hardening: keep browser-visible state separate from server secrets.
+CSRF_COOKIE_NAME = "arti_crm_csrf"
+CSRF_HEADER_NAME = "x-csrf-token"
+UNSAFE_HTTP_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+SENSITIVE_PUBLIC_PATH_RE = re.compile(
+    r"(^|/)(\.env|\.git|__pycache__|secrets?|backup|backups)(/|$)|"
+    r"\.(?:db|sqlite|sqlite3|log|bak|backup|zip|rar|7z|tar|gz|pem|key)$",
+    re.IGNORECASE,
+)
+SENSITIVE_ENV_NAMES = (
+    "OZON_API_KEY", "OZON_CLIENT_ID", "WB_ANALYTICS_TOKEN", "WB_STATISTICS_TOKEN", "WB_API_TOKEN",
+    "YANDEX_MARKET_API_KEY", "YANDEX_API_KEY", "WEB_PUSH_VAPID_PRIVATE_KEY", "VAPID_PRIVATE_KEY",
+    "CRM_BACKGROUND_TICK_TOKEN", "SECRET_KEY", "DATABASE_URL",
+)
+
+
+def _security_env_bool(name: str, default: bool = True) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on", "да"}
+
+
+def _security_env_int(name: str, default: int, *, minimum: int = 1, maximum: int = 86400) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except Exception:
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _is_truthy(raw: str | None) -> bool:
+    return str(raw or "").strip().lower() in {"1", "true", "yes", "on", "да"}
+
+
+def _request_is_https(request: Request | None = None) -> bool:
+    if request is None:
+        return False
+    if str(request.url.scheme).lower() == "https":
+        return True
+    forwarded_proto = (request.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip().lower()
+    if forwarded_proto == "https":
+        return True
+    if (request.headers.get("x-forwarded-ssl") or "").strip().lower() == "on":
+        return True
+    if (request.headers.get("x-forwarded-protocol") or "").strip().lower() == "https":
+        return True
+    if (request.headers.get("x-url-scheme") or "").strip().lower() == "https":
+        return True
+    return False
+
+
+def _public_base_url_env() -> str:
+    return (os.getenv("CRM_PUBLIC_BASE_URL") or os.getenv("PUBLIC_BASE_URL") or "").strip().rstrip("/")
+
+
+def _public_site_is_https() -> bool:
+    return _public_base_url_env().lower().startswith("https://")
+
+
+def _force_https_enabled() -> bool:
+    raw = os.getenv("CRM_FORCE_HTTPS")
+    if raw is not None:
+        return _is_truthy(raw)
+    return _public_site_is_https()
+
+
+def _cookie_secure_enabled(request: Request | None = None) -> bool:
+    raw = os.getenv("CRM_COOKIE_SECURE")
+    if raw is not None:
+        return _is_truthy(raw)
+
+    # Production-safe default: auth cookies should be Secure. Shared hosting/proxies can hide
+    # HTTPS from the ASGI app, so relying only on request.url.scheme is not enough.
+    # For local HTTP development explicitly set CRM_COOKIE_SECURE=0.
+    if _request_is_https(request) or _public_site_is_https() or _force_https_enabled():
+        return True
+    if _is_truthy(os.getenv("CRM_ALLOW_INSECURE_COOKIES")):
+        return False
+    return True
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for") or ""
+    if forwarded:
+        return forwarded.split(",", 1)[0].strip() or "unknown"
+    return request.client.host if request.client else "unknown"
+
+
+def _mask_sensitive(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    text = value
+    for name in SENSITIVE_ENV_NAMES:
+        secret = os.getenv(name)
+        if secret and len(secret) >= 6:
+            text = text.replace(secret, "****")
+    text = re.sub(r"(?i)(authorization\s*[:=]\s*(?:bearer\s+)?)[^\s,;\\\"']+", r"\1****", text)
+    text = re.sub(r"(?i)((?:api[-_]?key|token|session|cookie|password|secret)\s*[:=]\s*)[^\s,;\\\"']+", r"\1****", text)
+    text = re.sub(r"(?i)([?&](?:token|api_key|key|password|secret)=)[^&\s]+", r"\1****", text)
+    return text
+
+
+def _safe_error_detail(detail: Any) -> Any:
+    if isinstance(detail, str):
+        return _mask_sensitive(detail)[:1200]
+    if isinstance(detail, dict):
+        return {str(k): _safe_error_detail(v) for k, v in detail.items()}
+    if isinstance(detail, list):
+        return [_safe_error_detail(v) for v in detail[:20]]
+    return detail
+
+
+def _csrf_secret() -> bytes:
+    # Prefer a dedicated secret, then the general app secret. The fallback keeps local dev working,
+    # but production should set CRM_CSRF_SECRET or SECRET_KEY.
+    raw = (
+        os.getenv("CRM_CSRF_SECRET")
+        or os.getenv("SECRET_KEY")
+        or os.getenv("WEB_PUSH_VAPID_PRIVATE_KEY")
+        or os.getenv("VAPID_PRIVATE_KEY")
+        or "arti-crm-dev-change-this-csrf-secret"
+    )
+    return raw.encode("utf-8")
+
+
+def _csrf_token_for_session(session_token: str | None) -> str:
+    if not session_token:
+        return ""
+    digest = hmac.new(_csrf_secret(), f"csrf:v2:{session_token}".encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"v2.{digest}"
+
+
+def _delete_cookie_secure(response: Response, key: str, request: Request | None = None, *, httponly: bool = True) -> None:
+    response.delete_cookie(
+        key,
+        path="/",
+        secure=_cookie_secure_enabled(request),
+        httponly=httponly,
+        samesite=os.getenv("CRM_COOKIE_SAMESITE", "lax"),
+    )
+
+
+def _delete_legacy_csrf_cookie(response: Response, request: Request | None = None) -> None:
+    # v75-v77 used a browser-readable double-submit CSRF cookie.
+    # v78+ switches to a session-bound token returned by /api/security/csrf.
+    # Do not emit a Set-Cookie deletion header on every response: scanners treat any cookie
+    # without Secure as a finding, and unnecessary Set-Cookie also hurts caching.
+    if request is not None and CSRF_COOKIE_NAME not in request.cookies:
+        return
+    _delete_cookie_secure(response, CSRF_COOKIE_NAME, request, httponly=True)
+
+
+def _csrf_exempt_path(path: str) -> bool:
+    normalized = path.rstrip("/") or "/"
+    return normalized in {"/api/auth/login", "/api/auth/me", "/api/background/tick"}
+
+
+def _validate_csrf(request: Request) -> None:
+    if AUTH_DISABLED or not _security_env_bool("CRM_CSRF_ENABLED", True):
+        return
+    if request.method.upper() not in UNSAFE_HTTP_METHODS:
+        return
+    if not request.url.path.startswith("/api/") or _csrf_exempt_path(request.url.path):
+        return
+    session_token = request.cookies.get(AUTH_COOKIE_NAME) or ""
+    header_token = request.headers.get(CSRF_HEADER_NAME) or request.headers.get("X-CSRF-Token") or ""
+    expected_token = _csrf_token_for_session(session_token)
+    if not expected_token or not header_token or not hmac.compare_digest(expected_token, header_token):
+        raise HTTPException(status_code=403, detail="Запрос отклонён защитой CSRF. Обновите страницу и повторите действие.")
+
+
+def _rate_limit_bucket() -> dict[str, list[float]]:
+    bucket = getattr(app.state, "security_rate_limits", None)
+    if not isinstance(bucket, dict):
+        bucket = {}
+        app.state.security_rate_limits = bucket
+    return bucket
+
+
+def _rate_limit(request: Request, key: str, *, limit: int, window_seconds: int) -> None:
+    if not _security_env_bool("CRM_RATE_LIMIT_ENABLED", True):
+        return
+    now = time.time()
+    client_key = f"{key}:{_client_ip(request)}"
+    bucket = _rate_limit_bucket()
+    hits = [ts for ts in bucket.get(client_key, []) if now - ts < window_seconds]
+    if len(hits) >= limit:
+        raise HTTPException(status_code=429, detail="Слишком много запросов. Подождите и повторите.")
+    hits.append(now)
+    bucket[client_key] = hits
+
+
+def _audit_action(request: Request, response: Response) -> None:
+    if not _security_env_bool("CRM_AUDIT_LOG_ENABLED", True):
+        return
+    if request.method.upper() not in UNSAFE_HTTP_METHODS or not request.url.path.startswith("/api/"):
+        return
+    if response.status_code >= 500:
+        return
+    try:
+        user = getattr(request.state, "user", None)
+        repo.write_audit_log(
+            user_id=int(user["id"]) if isinstance(user, dict) and user.get("id") not in (None, "") else None,
+            username=(user.get("username") if isinstance(user, dict) else None),
+            action=f"{request.method.upper()} {request.url.path}",
+            path=request.url.path,
+            method=request.method.upper(),
+            ip=_client_ip(request),
+            user_agent=request.headers.get("user-agent"),
+            metadata={"status_code": response.status_code},
+        )
+    except Exception:
+        pass
+
+
+@app.exception_handler(HTTPException)
+async def _security_http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": _safe_error_detail(exc.detail)},
+        headers=exc.headers,
+    )
+
+
+@app.exception_handler(Exception)
+async def _security_unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    # Keep raw tracebacks and secrets out of API responses. Server logs can still be inspected separately.
+    return JSONResponse(status_code=500, content={"detail": "Внутренняя ошибка сервера"})
+
+
+@app.middleware("http")
+async def security_guard_middleware(request: Request, call_next):
+    if SENSITIVE_PUBLIC_PATH_RE.search(request.url.path):
+        return JSONResponse(status_code=404, content={"detail": "Not found"})
+    try:
+        _validate_csrf(request)
+    except HTTPException as exc:
+        response = JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+        _delete_legacy_csrf_cookie(response, request)
+        _apply_security_headers(request, response)
+        return response
+    response = await call_next(request)
+    _delete_legacy_csrf_cookie(response, request)
+    _audit_action(request, response)
+    _apply_security_headers(request, response)
+    return response
+
 
 def _auth_public_path(path: str) -> bool:
+    normalized_path = path.rstrip("/") or "/"
     return (
-        path == "/"
-        or path == "/health"
-        or path.startswith("/static/")
-        or path in {"/api/auth/login", "/api/auth/me"}
+        normalized_path == "/"
+        or normalized_path == "/health"
+        or normalized_path.startswith("/static/")
+        or normalized_path in {"/api/auth/login", "/api/auth/me", "/api/background/tick"}
     )
 
 
@@ -57,17 +310,70 @@ async def require_auth_for_api(request: Request, call_next):
     token = request.cookies.get(AUTH_COOKIE_NAME)
     user = repo.get_user_by_session(token)
     if not user:
-        return Response(
+        response = Response(
             content=json.dumps({"detail": "Требуется авторизация"}, ensure_ascii=False),
             status_code=401,
             media_type="application/json",
         )
+        _delete_legacy_csrf_cookie(response, request)
+        _apply_security_headers(request, response)
+        return response
     request.state.user = user
     return await call_next(request)
 
 
+def _apply_security_headers(request: Request, response: Response) -> None:
+    # Use direct assignment instead of setdefault: hosting/proxy defaults must not remove
+    # browser protections from the final response seen by scanners and users.
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=()"
+    response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "script-src-elem 'self'; "
+        "script-src-attr 'none'; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'; "
+        "frame-ancestors 'none'; "
+        "connect-src 'self'; "
+        "img-src 'self' data: blob:; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' data: https://fonts.gstatic.com; "
+        "manifest-src 'self'; "
+        "worker-src 'self'; "
+        "upgrade-insecure-requests"
+    )
+    if _cookie_secure_enabled(request) or _force_https_enabled():
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+
+
+def _https_redirect_response(request: Request) -> RedirectResponse | None:
+    if not _force_https_enabled() or _request_is_https(request):
+        return None
+    if request.url.path == "/health":
+        return None
+    public_base = _public_base_url_env()
+    if public_base.lower().startswith("https://"):
+        target = f"{public_base}{request.url.path}"
+        if request.url.query:
+            target += f"?{request.url.query}"
+    else:
+        target = str(request.url.replace(scheme="https"))
+    response = RedirectResponse(url=target, status_code=308)
+    _apply_security_headers(request, response)
+    return response
+
+
 @app.middleware("http")
 async def add_fastfox_cache_headers(request: Request, call_next):
+    redirect = _https_redirect_response(request)
+    if redirect is not None:
+        return redirect
+
     response = await call_next(request)
     path = request.url.path
     if path.startswith("/static/"):
@@ -78,6 +384,8 @@ async def add_fastfox_cache_headers(request: Request, call_next):
         # Uploaded chat images are immutable filenames. Cache them privately so
         # opening chats with many images does not download the same files again.
         response.headers.setdefault("Cache-Control", "private, max-age=86400")
+
+    _apply_security_headers(request, response)
     return response
 
 
@@ -95,6 +403,240 @@ def _require_admin(request: Request) -> dict[str, Any]:
     if not user or user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Нужны права администратора")
     return user
+
+
+def _web_push_public_key() -> str:
+    return (os.getenv("WEB_PUSH_VAPID_PUBLIC_KEY") or os.getenv("VAPID_PUBLIC_KEY") or "").strip()
+
+
+def _web_push_private_key() -> str:
+    return (os.getenv("WEB_PUSH_VAPID_PRIVATE_KEY") or os.getenv("VAPID_PRIVATE_KEY") or "").strip()
+
+
+def _web_push_subject() -> str:
+    return (os.getenv("WEB_PUSH_VAPID_SUBJECT") or os.getenv("VAPID_SUBJECT") or "mailto:artitechno.official@gmail.com").strip()
+
+
+def _web_push_enabled() -> bool:
+    return _env_bool("WEB_PUSH_ENABLED", True)
+
+
+def _web_push_configured() -> bool:
+    return bool(_web_push_enabled() and _web_push_public_key() and _web_push_private_key())
+
+
+def _public_base_url(request: Request | None = None) -> str:
+    env_url = _public_base_url_env()
+    if env_url:
+        return env_url
+    if request is not None:
+        return str(request.base_url).rstrip("/")
+    return ""
+
+
+def _absolute_push_url(relative_or_absolute: str, *, base_url: str = "") -> str:
+    raw = str(relative_or_absolute or "/").strip() or "/"
+    if raw.startswith("http://") or raw.startswith("https://"):
+        return raw
+    base = base_url or (os.getenv("CRM_PUBLIC_BASE_URL") or os.getenv("PUBLIC_BASE_URL") or "").strip().rstrip("/")
+    if not base:
+        return raw
+    if raw.startswith("/#"):
+        return base + raw[1:]
+    if raw.startswith("/"):
+        return base + raw
+    return base + "/" + raw
+
+
+async def _send_web_push_subscription(subscription: dict[str, Any], payload: dict[str, Any]) -> None:
+    if not _web_push_configured():
+        raise RuntimeError("WEB_PUSH VAPID keys are not configured")
+    try:
+        from pywebpush import webpush  # type: ignore
+    except Exception as exc:
+        raise RuntimeError("pywebpush is not installed. Install: pip install pywebpush") from exc
+
+    data = json.dumps(payload, ensure_ascii=False)
+    await asyncio.to_thread(
+        webpush,
+        subscription_info=subscription,
+        data=data,
+        vapid_private_key=_web_push_private_key(),
+        vapid_claims={"sub": _web_push_subject()},
+        ttl=_env_int("WEB_PUSH_TTL_SECONDS", 3600, minimum=60, maximum=86400),
+    )
+
+
+async def _send_web_push_to_user(user_id: int, payload: dict[str, Any], *, base_url: str = "") -> dict[str, Any]:
+    subscriptions = repo.list_push_subscriptions(int(user_id), active_only=True)
+    if not subscriptions:
+        return {"ok": False, "sent": 0, "subscriptions": 0, "error": "no active push subscriptions"}
+
+    sent = 0
+    errors: list[str] = []
+    payload = dict(payload or {})
+    payload.setdefault("title", "Arti CRM")
+    payload.setdefault("body", "Новое уведомление")
+    payload.setdefault("icon", "/static/icons/app-icon-192.png")
+    payload.setdefault("badge", "/static/icons/app-icon-192.png")
+    payload["url"] = _absolute_push_url(payload.get("url") or "/", base_url=base_url)
+
+    for item in subscriptions:
+        endpoint = item.get("endpoint") or ""
+        subscription = item.get("subscription") or {}
+        try:
+            await _send_web_push_subscription(subscription, payload)
+            repo.mark_push_subscription_result(endpoint, ok=True)
+            sent += 1
+        except Exception as exc:
+            response = getattr(exc, "response", None)
+            status_code = int(getattr(response, "status_code", 0) or 0)
+            deactivate = status_code in {404, 410}
+            error = str(exc)
+            repo.mark_push_subscription_result(endpoint, ok=False, error=error, deactivate=deactivate)
+            errors.append(error[:300])
+
+    return {"ok": sent > 0, "sent": sent, "subscriptions": len(subscriptions), "errors": errors[:3]}
+
+
+async def _drain_push_outbox_once() -> dict[str, Any]:
+    if not _web_push_configured():
+        return {"ok": False, "configured": False, "sent": 0, "error": "VAPID keys are not configured"}
+
+    items = repo.get_pending_push_outbox(_env_int("WEB_PUSH_OUTBOX_BATCH_SIZE", 50, minimum=1, maximum=200))
+    sent_items = 0
+    failed_items = 0
+    skipped_items = 0
+    for item in items:
+        payload = item.get("payload") or {}
+        result = await _send_web_push_to_user(int(item["user_id"]), payload)
+        if result.get("sent", 0) > 0:
+            repo.mark_push_outbox_sent(int(item["id"]))
+            sent_items += 1
+        elif result.get("error") == "no active push subscriptions":
+            repo.mark_push_outbox_sent(int(item["id"]))
+            skipped_items += 1
+        else:
+            repo.mark_push_outbox_failed(int(item["id"]), "; ".join(result.get("errors") or [result.get("error") or "push failed"]))
+            failed_items += 1
+    return {"ok": True, "configured": True, "total": len(items), "sent": sent_items, "failed": failed_items, "skipped": skipped_items}
+
+
+async def _push_outbox_loop() -> None:
+    if not _web_push_enabled():
+        app.state.last_push_outbox = {"enabled": False}
+        return
+    await asyncio.sleep(5)
+    interval = _env_int("WEB_PUSH_OUTBOX_INTERVAL_SECONDS", 3, minimum=1, maximum=300)
+    while True:
+        try:
+            app.state.last_push_outbox = await _drain_push_outbox_once()
+            app.state.last_push_outbox["interval_seconds"] = interval
+            app.state.last_push_outbox["enabled"] = True
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            app.state.last_push_outbox = {"enabled": True, "ok": False, "error": str(exc), "interval_seconds": interval}
+        await asyncio.sleep(interval)
+
+
+def _background_tick_token() -> str:
+    return (
+        os.getenv("CRM_BACKGROUND_TICK_TOKEN")
+        or os.getenv("WEB_PUSH_BACKGROUND_TICK_TOKEN")
+        or os.getenv("BACKGROUND_TICK_TOKEN")
+        or ""
+    ).strip()
+
+
+def _require_background_tick_access(request: Request, token: str | None = None) -> None:
+    expected = _background_tick_token()
+    if expected:
+        provided = (token or request.headers.get("x-crm-tick-token") or "").strip()
+        if provided != expected:
+            raise HTTPException(status_code=403, detail="Invalid background tick token")
+        return
+
+    # If no token is configured, allow only an authenticated CRM user.
+    # For an external cron/uptime monitor, set CRM_BACKGROUND_TICK_TOKEN in .env.
+    _current_user(request)
+
+
+def _background_tick_lock() -> asyncio.Lock:
+    lock = getattr(app.state, "background_tick_lock", None)
+    if not isinstance(lock, asyncio.Lock):
+        lock = asyncio.Lock()
+        app.state.background_tick_lock = lock
+    return lock
+
+
+async def _run_background_tick_once(*, source: str = "manual") -> dict[str, Any]:
+    lock = _background_tick_lock()
+    if lock.locked():
+        return {
+            "ok": True,
+            "status": "already_running",
+            "source": source,
+            "last": getattr(app.state, "last_external_background_tick", None),
+        }
+
+    started_at = time.time()
+    result: dict[str, Any] = {
+        "ok": True,
+        "status": "finished",
+        "source": source,
+        "started_at": started_at,
+        "marketplaces": {},
+    }
+
+    async with lock:
+        try:
+            if _env_bool("OZON_BACKGROUND_SYNC", True):
+                try:
+                    result["marketplaces"]["ozon"] = await _sync_ozon_fast_inbox_locked(background=True)
+                except Exception as exc:
+                    result["marketplaces"]["ozon"] = {"ok": False, "error": str(exc)}
+
+            if _env_bool("OZON_QUESTIONS_BACKGROUND_SYNC", True):
+                try:
+                    result["marketplaces"]["ozon_questions"] = await _sync_ozon_questions_unlocked(background=True)
+                except Exception as exc:
+                    result["marketplaces"]["ozon_questions"] = {"ok": False, "error": str(exc)}
+
+            # v51: after importing marketplace data, run an idempotent
+            # notification catch-up. This covers cases where the message was
+            # inserted before the chat unread metadata was updated, or when
+            # existing local rows became waiting-for-reply during sync.
+            try:
+                result["notification_catchup"] = {
+                    "messages": repo.enqueue_missing_message_notifications(
+                        _env_int("CRM_NOTIFICATION_CATCHUP_MESSAGE_LIMIT", 200, minimum=1, maximum=1000)
+                    ),
+                    "questions": repo.enqueue_missing_question_notifications(
+                        _env_int("CRM_NOTIFICATION_CATCHUP_QUESTION_LIMIT", 200, minimum=1, maximum=1000)
+                    ),
+                }
+            except Exception as exc:
+                result["notification_catchup"] = {"ok": False, "error": str(exc)}
+
+            if _web_push_enabled():
+                try:
+                    result["push_outbox"] = await _drain_push_outbox_once()
+                except Exception as exc:
+                    result["push_outbox"] = {"ok": False, "error": str(exc)}
+
+            result["duration_seconds"] = round(time.time() - started_at, 2)
+            app.state.last_external_background_tick = result
+            return result
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            result["ok"] = False
+            result["status"] = "error"
+            result["error"] = str(exc)
+            result["duration_seconds"] = round(time.time() - started_at, 2)
+            app.state.last_external_background_tick = result
+            return result
 
 
 @app.middleware("http")
@@ -883,8 +1425,13 @@ async def _sync_ozon_fast_inbox_unlocked(*, background: bool = True) -> dict[str
     if not getattr(connector, "client_id", "") or not getattr(connector, "api_key", ""):
         return {"ok": False, "marketplace": "ozon", "configured": False, "count": 0}
 
-    connector.sync_max_chats = _env_int("OZON_FAST_SYNC_MAX_CHATS", 300, minimum=20, maximum=1000)
-    connector.sync_pages_per_variant = _env_int("OZON_FAST_SYNC_PAGES_PER_VARIANT", 3, minimum=1, maximum=20)
+    # Operator/background polling must be quick. Deep archive recovery should
+    # use manual/debug sync with explicit env limits, not the opened CRM tab.
+    default_max_chats = _env_int("OZON_OPERATOR_FAST_SYNC_MAX_CHATS", 50, minimum=20, maximum=1000) if background else 300
+    default_pages_per_variant = _env_int("OZON_OPERATOR_FAST_SYNC_PAGES_PER_VARIANT", 1, minimum=1, maximum=20) if background else 3
+
+    connector.sync_max_chats = _env_int("OZON_FAST_SYNC_MAX_CHATS", default_max_chats, minimum=20, maximum=1000)
+    connector.sync_pages_per_variant = _env_int("OZON_FAST_SYNC_PAGES_PER_VARIANT", default_pages_per_variant, minimum=1, maximum=20)
     connector.sync_variant_mode = os.getenv("OZON_FAST_SYNC_VARIANT_MODE", "fast")
     connector.sync_include_closed = False
     connector.history_pages = _env_int("OZON_FAST_HISTORY_PAGES", 1, minimum=1, maximum=5)
@@ -1422,7 +1969,7 @@ def _background_min_interval_for_marketplace(marketplace: str) -> int:
     if marketplace == "yandex":
         return _env_int("YANDEX_BACKGROUND_SYNC_MIN_INTERVAL_SECONDS", 30, minimum=10, maximum=1800)
     if marketplace == "ozon":
-        return _env_int("OZON_BACKGROUND_SYNC_MIN_INTERVAL_SECONDS", 20, minimum=5, maximum=3600)
+        return _env_int("OZON_BACKGROUND_SYNC_MIN_INTERVAL_SECONDS", 8, minimum=3, maximum=3600)
     return _env_int("MARKETPLACE_BACKGROUND_SYNC_INTERVAL", 15, minimum=5, maximum=3600)
 
 
@@ -1561,11 +2108,25 @@ async def _background_sync_loop() -> None:
                 except Exception as exc:
                     per_marketplace["ozon_questions"] = {"enabled": True, "configured": True, "status": "error", "error": str(exc)}
 
+        notification_catchup: dict[str, Any] | None = None
+        try:
+            notification_catchup = {
+                "messages": repo.enqueue_missing_message_notifications(
+                    _env_int("CRM_NOTIFICATION_CATCHUP_MESSAGE_LIMIT", 200, minimum=1, maximum=1000)
+                ),
+                "questions": repo.enqueue_missing_question_notifications(
+                    _env_int("CRM_NOTIFICATION_CATCHUP_QUESTION_LIMIT", 200, minimum=1, maximum=1000)
+                ),
+            }
+        except Exception as exc:
+            notification_catchup = {"ok": False, "error": str(exc)}
+
         app.state.last_background_sync = {
             "enabled": True,
             "interval_seconds": interval,
             "status": "ok" if all(v.get("status") in {"ok", "skipped", "throttled", "cooldown"} or v.get("enabled") is False for v in per_marketplace.values()) else "partial_error",
             "marketplaces": per_marketplace,
+            "notification_catchup": notification_catchup,
         }
         await asyncio.sleep(interval)
 
@@ -1573,6 +2134,11 @@ async def _background_sync_loop() -> None:
 @app.on_event("startup")
 async def on_startup() -> None:
     init_db()
+    try:
+        repo.ensure_security_tables()
+        repo.ensure_login_security_tables()
+    except Exception as exc:
+        print(f"[Arti CRM] Security table migration failed: {_mask_sensitive(str(exc))}")
     admin_user = os.getenv("CRM_ADMIN_USERNAME", "admin")
     admin_pass = os.getenv("CRM_ADMIN_PASSWORD", "admin123")
     created_admin = repo.ensure_initial_admin(admin_user, admin_pass, os.getenv("CRM_ADMIN_DISPLAY_NAME", "Администратор"))
@@ -1603,6 +2169,7 @@ async def on_startup() -> None:
     app.state.last_reviews_sync = {}
     app.state.last_questions_sync = {}
     app.state.frontend_operator_sync_lock = asyncio.Lock()
+    app.state.background_tick_lock = asyncio.Lock()
     app.state.frontend_operator_sync_last_poll_at = {}
     app.state.last_frontend_operator_sync = {}
     app.state.marketplace_sync_locks = {
@@ -1613,11 +2180,12 @@ async def on_startup() -> None:
     _ensure_wb_events_auto_plan_from_env()
     app.state.background_sync_task = asyncio.create_task(_background_sync_loop())
     app.state.wb_events_import_planner_task = asyncio.create_task(_wb_events_import_planner_loop())
+    app.state.push_outbox_task = asyncio.create_task(_push_outbox_loop())
 
 
 @app.on_event("shutdown")
 async def on_shutdown() -> None:
-    for task_name in ("background_sync_task", "wb_events_import_planner_task"):
+    for task_name in ("background_sync_task", "wb_events_import_planner_task", "push_outbox_task"):
         task = getattr(app.state, task_name, None)
         if task:
             task.cancel()
@@ -1639,30 +2207,77 @@ def health() -> dict[str, str]:
 
 @app.post("/api/auth/login")
 def auth_login(payload: LoginCreate, request: Request, response: Response) -> dict[str, Any]:
-    user = repo.authenticate_user(payload.username, payload.password)
+    # v80: persistent brute-force protection. The previous guard was in-memory and
+    # could be bypassed by restart/multiple workers or look like infinite guessing.
+    username = (payload.username or "").strip()
+    client_ip = _client_ip(request)
+    user_agent = request.headers.get("user-agent")
+    max_attempts = _security_env_int("CRM_LOGIN_MAX_ATTEMPTS", 5, minimum=1, maximum=50)
+    window_seconds = _security_env_int("CRM_LOGIN_WINDOW_SECONDS", 600, minimum=60, maximum=86400)
+    lockout_seconds = _security_env_int("CRM_LOGIN_LOCKOUT_SECONDS", 900, minimum=60, maximum=86400)
+
+    lockout = repo.get_login_lockout(username, client_ip)
+    if lockout.get("locked"):
+        retry_after = int(lockout.get("retry_after_seconds") or lockout_seconds)
+        raise HTTPException(
+            status_code=429,
+            detail=f"Слишком много неверных попыток входа. Повторите через {max(1, retry_after // 60)} мин.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    # A short in-memory IP throttle remains as an additional anti-spam layer.
+    _rate_limit(
+        request,
+        "auth-login",
+        limit=_security_env_int("CRM_LOGIN_RATE_LIMIT", 20, minimum=1, maximum=200),
+        window_seconds=_security_env_int("CRM_LOGIN_RATE_WINDOW_SECONDS", 600, minimum=60, maximum=86400),
+    )
+
+    user = repo.authenticate_user(username, payload.password)
     if not user:
+        state = repo.record_login_failure(
+            username,
+            client_ip,
+            user_agent,
+            max_attempts=max_attempts,
+            window_seconds=window_seconds,
+            lockout_seconds=lockout_seconds,
+        )
+        if state.get("locked"):
+            retry_after = int(state.get("retry_after_seconds") or lockout_seconds)
+            raise HTTPException(
+                status_code=429,
+                detail=f"Слишком много неверных попыток входа. Вход временно заблокирован на {max(1, retry_after // 60)} мин.",
+                headers={"Retry-After": str(retry_after)},
+            )
         raise HTTPException(status_code=401, detail="Неверный логин или пароль")
+
+    repo.record_login_success(username, client_ip, user_agent)
+    session_ttl_seconds = _security_env_int("CRM_SESSION_TTL_SECONDS", 14 * 24 * 60 * 60, minimum=1800, maximum=60 * 24 * 60 * 60)
     token = repo.create_session(
         int(user["id"]),
         user_agent=request.headers.get("user-agent"),
-        ip=request.client.host if request.client else None,
+        ip=_client_ip(request),
+        seconds=session_ttl_seconds,
     )
     response.set_cookie(
         AUTH_COOKIE_NAME,
         token,
         httponly=True,
-        samesite="lax",
-        secure=os.getenv("CRM_COOKIE_SECURE", "0").strip().lower() in {"1", "true", "yes", "on"},
-        max_age=14 * 24 * 60 * 60,
+        samesite=os.getenv("CRM_COOKIE_SAMESITE", "lax"),
+        secure=_cookie_secure_enabled(request),
+        max_age=session_ttl_seconds,
         path="/",
     )
+    _delete_legacy_csrf_cookie(response, request)
     return {"ok": True, "user": user}
 
 
 @app.post("/api/auth/logout")
 def auth_logout(request: Request, response: Response) -> dict[str, Any]:
     repo.revoke_session(request.cookies.get(AUTH_COOKIE_NAME))
-    response.delete_cookie(AUTH_COOKIE_NAME, path="/")
+    _delete_cookie_secure(response, AUTH_COOKIE_NAME, request, httponly=True)
+    _delete_cookie_secure(response, CSRF_COOKIE_NAME, request, httponly=True)
     return {"ok": True}
 
 
@@ -1675,6 +2290,19 @@ def auth_me(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=401, detail="Требуется авторизация")
     return {"authenticated": True, "user": user}
 
+
+
+@app.get("/api/security/csrf")
+def security_csrf(request: Request, response: Response) -> dict[str, Any]:
+    # Safe same-origin endpoint: returns a session-bound CSRF token for app.js to keep in memory.
+    # It does not create a browser-readable CSRF cookie, so cookie scanners should only see
+    # the HttpOnly auth session cookie after login.
+    session_token = request.cookies.get(AUTH_COOKIE_NAME) or ""
+    token = _csrf_token_for_session(session_token)
+    if not token:
+        raise HTTPException(status_code=401, detail="Требуется авторизация")
+    _delete_legacy_csrf_cookie(response, request)
+    return {"ok": True, "csrf_token": token}
 
 
 @app.patch("/api/auth/profile")
@@ -2765,6 +3393,688 @@ def sync_status() -> dict[str, Any]:
     }
 
 
+
+
+
+def _supply_env_first(*names: str) -> str:
+    for name in names:
+        value = (os.getenv(name) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _supply_float(value: Any, default: float = 0.0) -> float:
+    if value in (None, ""):
+        return default
+    try:
+        return float(str(value).replace(",", "."))
+    except Exception:
+        return default
+
+
+def _supply_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(round(_supply_float(value, float(default))))
+    except Exception:
+        return default
+
+
+def _supply_pick(data: dict[str, Any], keys: list[str], default: Any = "") -> Any:
+    for key in keys:
+        if key in data and data.get(key) not in (None, ""):
+            return data.get(key)
+    return default
+
+
+def _supply_secret_present(value: str) -> bool:
+    return bool(str(value or "").strip())
+
+
+def _supply_status() -> dict[str, Any]:
+    ozon_client_id = _supply_env_first("OZON_CLIENT_ID")
+    ozon_api_key = _supply_env_first("OZON_API_KEY")
+    wb_analytics_token = _supply_env_first("WB_ANALYTICS_TOKEN", "WB_SUPPLY_ANALYTICS_TOKEN")
+    wb_statistics_token = _supply_env_first("WB_STATISTICS_TOKEN")
+    ym_api_key = _supply_env_first("YANDEX_MARKET_API_KEY", "YANDEX_API_KEY", "YANDEX_MARKET_TOKEN", "YANDEX_TOKEN")
+    ym_campaign_id = _supply_env_first("YANDEX_MARKET_CAMPAIGN_ID", "YANDEX_CAMPAIGN_ID")
+    return {
+        "ozon": {
+            "configured": _supply_secret_present(ozon_client_id) and _supply_secret_present(ozon_api_key),
+            "required_env": ["OZON_CLIENT_ID", "OZON_API_KEY"],
+        },
+        "wildberries": {
+            "configured": _supply_secret_present(wb_analytics_token),
+            "required_env": ["WB_ANALYTICS_TOKEN — токен WB категории Analytics"],
+            "optional_env": ["WB_STATISTICS_TOKEN — токен WB категории Statistics для продаж/день"],
+            "analytics_token_present": _supply_secret_present(wb_analytics_token),
+            "statistics_token_present": _supply_secret_present(wb_statistics_token),
+        },
+        "yandex": {
+            "configured": _supply_secret_present(ym_api_key) and _supply_secret_present(ym_campaign_id),
+            "required_env": ["YANDEX_MARKET_API_KEY", "YANDEX_MARKET_CAMPAIGN_ID"],
+        },
+    }
+
+
+async def _supply_http_json(method: str, url: str, *, headers: dict[str, str] | None = None, params: dict[str, Any] | None = None, json_body: Any = None, timeout: float = 60.0) -> Any:
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.request(method, url, headers=headers or {}, params=params, json=json_body)
+    if response.status_code >= 400:
+        text = _mask_sensitive(response.text[:700])
+        raise RuntimeError(f"{method} {url} -> HTTP {response.status_code}: {text}")
+    if response.status_code == 204 or not response.content:
+        return None
+    return response.json()
+
+
+def _supply_days_ago_iso(days: int) -> str:
+    days = max(1, min(int(days or 30), 90))
+    return (datetime.now(timezone.utc) - timedelta(days=days)).date().isoformat()
+
+
+def _supply_cache_file() -> Path:
+    return Path(os.getenv("SUPPLY_PLANNING_CACHE_FILE", ".supply_planning_cache.json"))
+
+
+def _supply_cache_ttl_seconds(marketplace: str) -> int:
+    marketplace_key = re.sub(r"[^A-Z0-9_]", "_", str(marketplace or "").upper())
+    specific = os.getenv(f"SUPPLY_{marketplace_key}_CACHE_TTL_SECONDS")
+    default = os.getenv("SUPPLY_CACHE_TTL_SECONDS", "1800")
+    return _env_int(f"SUPPLY_{marketplace_key}_CACHE_TTL_SECONDS", int(specific or default or 1800), minimum=60, maximum=86400)
+
+
+def _supply_cache_key(marketplace: str, *, sales_days: int = 30, target_days: int = 45) -> str:
+    return f"{str(marketplace or '').lower()}|sales_days={int(sales_days or 30)}|target_days={int(target_days or 45)}"
+
+
+def _supply_read_cache() -> dict[str, Any]:
+    path = _supply_cache_file()
+    try:
+        if not path.exists():
+            return {}
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _supply_write_cache(cache: dict[str, Any]) -> None:
+    path = _supply_cache_file()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(path)
+    except Exception:
+        pass
+
+
+def _supply_cache_get(key: str, *, max_age_seconds: int | None = None) -> dict[str, Any] | None:
+    cache = _supply_read_cache()
+    item = cache.get(key)
+    if not isinstance(item, dict):
+        return None
+    saved_at = _supply_float(item.get("saved_at"), 0)
+    if max_age_seconds is not None and saved_at > 0 and (time.time() - saved_at) > max_age_seconds:
+        return None
+    result = item.get("result")
+    return result if isinstance(result, dict) else None
+
+
+def _supply_cache_set(key: str, result: dict[str, Any]) -> None:
+    cache = _supply_read_cache()
+    safe_result = dict(result)
+    safe_result["cached"] = False
+    safe_result["cache_saved_at"] = datetime.now(timezone.utc).isoformat()
+    cache[key] = {"saved_at": time.time(), "result": safe_result}
+    _supply_write_cache(cache)
+
+
+def _supply_cached_result(key: str, *, max_age_seconds: int | None = None, reason: str = "") -> dict[str, Any] | None:
+    cached = _supply_cache_get(key, max_age_seconds=max_age_seconds)
+    if not cached:
+        return None
+    result = dict(cached)
+    result["ok"] = True
+    result["cached"] = True
+    result["cache_reason"] = reason
+    result["note"] = (str(result.get("note") or "").rstrip() + " Данные показаны из кэша, чтобы не тратить лимит WB.").strip()
+    if reason:
+        result["note"] += f" Причина: {reason}."
+    return result
+
+
+class SupplyRateLimitError(RuntimeError):
+    def __init__(self, message: str, *, retry_after_seconds: int = 0):
+        super().__init__(message)
+        self.retry_after_seconds = max(0, int(retry_after_seconds or 0))
+
+
+def _supply_retry_after_seconds(response: httpx.Response) -> int:
+    value = response.headers.get("x-ratelimit-retry") or response.headers.get("retry-after") or ""
+    try:
+        return max(0, int(float(str(value).strip())))
+    except Exception:
+        return 0
+
+
+async def _supply_http_json_wb(method: str, url: str, *, headers: dict[str, str] | None = None, params: dict[str, Any] | None = None, json_body: Any = None, timeout: float = 90.0) -> Any:
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.request(method, url, headers=headers or {}, params=params, json=json_body)
+    if response.status_code == 429:
+        text = _mask_sensitive(response.text[:700])
+        retry_after = _supply_retry_after_seconds(response)
+        raise SupplyRateLimitError(f"{method} {url} -> HTTP 429: {text}", retry_after_seconds=retry_after)
+    if response.status_code >= 400:
+        text = _mask_sensitive(response.text[:700])
+        raise RuntimeError(f"{method} {url} -> HTTP {response.status_code}: {text}")
+    if response.status_code == 204 or not response.content:
+        return None
+    return response.json()
+
+
+def _supply_compose_row(*, marketplace: str, sku: Any, product: Any = "", warehouse: Any = "", current_stock: Any = 0, avg_daily_sales: Any = 0, in_transit: Any = 0, target_days: int = 45, delivery_days: Any = "") -> dict[str, Any]:
+    return {
+        "marketplace": marketplace,
+        "sku": str(sku or "").strip(),
+        "product": str(product or "").strip(),
+        "warehouse": str(warehouse or "").strip(),
+        "currentStock": str(max(0, _supply_int(current_stock, 0))),
+        "avgDailySales": str(round(max(0.0, _supply_float(avg_daily_sales, 0.0)), 2)).rstrip("0").rstrip("."),
+        "deliveryDays": str(delivery_days if str(delivery_days or "").strip() else ""),
+        "targetStockDays": str(max(1, int(target_days or 45))),
+        "inTransit": str(max(0, _supply_int(in_transit, 0))),
+    }
+
+
+def _supply_row_sort_key(row: dict[str, Any]) -> tuple[str, str, str, str]:
+    return (
+        str(row.get("marketplace") or ""),
+        str(row.get("sku") or ""),
+        str(row.get("warehouse") or ""),
+        str(row.get("product") or ""),
+    )
+
+
+
+async def _supply_fetch_ozon_sales_map(headers: dict[str, str], *, sales_days: int) -> tuple[dict[str, float], str]:
+    """Return average daily Ozon sales by SKU from analytics/data when the token has access."""
+    days = max(1, min(int(sales_days or 30), 90))
+    date_from = _supply_days_ago_iso(days)
+    date_to = datetime.now(timezone.utc).date().isoformat()
+    sales: dict[str, float] = {}
+    error = ""
+    limit = _env_int("SUPPLY_OZON_SALES_LIMIT", 1000, minimum=1, maximum=1000)
+    max_pages = _env_int("SUPPLY_OZON_SALES_MAX_PAGES", 20, minimum=1, maximum=200)
+    offset = 0
+    for _ in range(max_pages):
+        try:
+            data = await _supply_http_json(
+                "POST",
+                "https://api-seller.ozon.ru/v1/analytics/data",
+                headers=headers,
+                json_body={
+                    "date_from": date_from,
+                    "date_to": date_to,
+                    "metrics": ["ordered_units"],
+                    "dimension": ["sku"],
+                    "filters": [],
+                    "sort": [{"key": "ordered_units", "order": "DESC"}],
+                    "limit": limit,
+                    "offset": offset,
+                },
+                timeout=90,
+            )
+        except Exception as exc:
+            error = str(exc)[:700]
+            break
+        result = data.get("result", data) if isinstance(data, dict) else {}
+        items = result.get("data") if isinstance(result, dict) else []
+        if not isinstance(items, list) or not items:
+            break
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            dimensions = item.get("dimensions") or []
+            sku = ""
+            if isinstance(dimensions, list) and dimensions:
+                first = dimensions[0] if isinstance(dimensions[0], dict) else {}
+                sku = str(first.get("id") or first.get("name") or "").strip()
+            metrics = item.get("metrics") or []
+            qty = 0.0
+            if isinstance(metrics, list) and metrics:
+                qty = _supply_float(metrics[0], 0.0)
+            if sku:
+                sales[sku] = sales.get(sku, 0.0) + max(0.0, qty) / days
+        if len(items) < limit:
+            break
+        offset += limit
+    return sales, error
+
+
+def _supply_ozon_extract_rows(data: Any) -> list[dict[str, Any]]:
+    if not isinstance(data, dict):
+        return []
+    result = data.get("result", data)
+    if not isinstance(result, dict):
+        return []
+    for key in ("rows", "items", "stocks", "data"):
+        value = result.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+async def _supply_fetch_ozon(*, sales_days: int, target_days: int) -> dict[str, Any]:
+    client_id = _supply_env_first("OZON_CLIENT_ID")
+    api_key = _supply_env_first("OZON_API_KEY")
+    if not client_id or not api_key:
+        return {"ok": False, "marketplace": "ozon", "configured": False, "rows": [], "error": "OZON_CLIENT_ID/OZON_API_KEY are not configured"}
+
+    headers = {"Client-Id": client_id, "Api-Key": api_key, "Content-Type": "application/json", "Accept": "application/json"}
+    limit = _env_int("SUPPLY_OZON_STOCK_LIMIT", 1000, minimum=1, maximum=1000)
+    max_pages = _env_int("SUPPLY_OZON_STOCK_MAX_PAGES", 10, minimum=1, maximum=100)
+
+    rows_raw: list[dict[str, Any]] = []
+    errors: list[str] = []
+
+    async def fetch_stock_on_warehouses() -> bool:
+        offset = 0
+        got_any = False
+        for _ in range(max_pages):
+            payload = {"limit": limit, "offset": offset}
+            data = await _supply_http_json(
+                "POST",
+                "https://api-seller.ozon.ru/v2/analytics/stock_on_warehouses",
+                headers=headers,
+                json_body=payload,
+                timeout=90,
+            )
+            batch = _supply_ozon_extract_rows(data)
+            if not batch:
+                break
+            rows_raw.extend(batch)
+            got_any = True
+            if len(batch) < limit:
+                break
+            offset += limit
+        return got_any
+
+    async def fetch_manage_stocks_fallback() -> bool:
+        offset = 0
+        got_any = False
+        for _ in range(max_pages):
+            payload = {"limit": limit, "offset": offset, "filter": {}}
+            data = await _supply_http_json(
+                "POST",
+                "https://api-seller.ozon.ru/v1/analytics/manage/stocks",
+                headers=headers,
+                json_body=payload,
+                timeout=90,
+            )
+            batch = _supply_ozon_extract_rows(data)
+            if not batch:
+                break
+            rows_raw.extend(batch)
+            got_any = True
+            if len(batch) < limit:
+                break
+            offset += limit
+        return got_any
+
+    for loader in (fetch_stock_on_warehouses, fetch_manage_stocks_fallback):
+        try:
+            if await loader():
+                break
+        except Exception as exc:
+            errors.append(str(exc)[:700])
+
+    if not rows_raw:
+        return {
+            "ok": False,
+            "marketplace": "ozon",
+            "configured": True,
+            "rows": [],
+            "error": "Ozon не вернул остатки по складам. " + ("; ".join(errors[:2]) if errors else "Проверьте права API-ключа на аналитику/остатки."),
+        }
+
+    sales_map, sales_error = await _supply_fetch_ozon_sales_map(headers, sales_days=sales_days)
+
+    parsed: list[dict[str, Any]] = []
+    for item in rows_raw:
+        sku = _supply_pick(item, ["sku", "item_code", "offer_id", "offerId", "product_id", "productId"])
+        if not sku:
+            continue
+        stock = _supply_pick(item, ["free_to_sell_amount", "available_stock_count", "valid_stock_count", "present", "stock", "quantity", "available", "count"], 0)
+        warehouse = _supply_pick(item, ["warehouse_name", "warehouse", "warehouseName", "cluster_name", "cluster", "name"], "Склад Ozon")
+        product = _supply_pick(item, ["item_name", "product_name", "productName", "name", "offer_name"], sku)
+        parsed.append({
+            "sku": str(sku).strip(),
+            "product": product,
+            "warehouse": warehouse,
+            "stock": max(0, _supply_int(stock, 0)),
+        })
+
+    totals: dict[str, int] = {}
+    counts: dict[str, int] = {}
+    for item in parsed:
+        sku = item["sku"]
+        totals[sku] = totals.get(sku, 0) + int(item.get("stock") or 0)
+        counts[sku] = counts.get(sku, 0) + 1
+
+    rows: list[dict[str, Any]] = []
+    for item in parsed:
+        sku = item["sku"]
+        sku_avg = sales_map.get(sku, 0.0)
+        if sku_avg > 0:
+            total_stock = totals.get(sku, 0)
+            if total_stock > 0:
+                avg = sku_avg * (int(item.get("stock") or 0) / total_stock)
+            else:
+                avg = sku_avg / max(1, counts.get(sku, 1))
+        else:
+            avg = 0.0
+        rows.append(_supply_compose_row(
+            marketplace="ozon",
+            sku=sku,
+            product=item.get("product") or sku,
+            warehouse=item.get("warehouse") or "Склад Ozon",
+            current_stock=item.get("stock") or 0,
+            avg_daily_sales=avg,
+            target_days=target_days,
+        ))
+
+    rows.sort(key=_supply_row_sort_key)
+    return {
+        "ok": True,
+        "marketplace": "ozon",
+        "configured": True,
+        "rows": rows,
+        "rows_count": len(rows),
+        "sales_error": sales_error,
+        "stock_errors": errors,
+        "note": "Ozon: остатки загружены по складам/кластерам. Продажи/день рассчитаны из analytics/data по SKU и распределены между складами пропорционально текущему остатку, если Ozon вернул продажи.",
+    }
+
+
+async def _supply_fetch_wildberries(*, sales_days: int, target_days: int) -> dict[str, Any]:
+    # Для остатков на складах WB нужен именно токен категории Analytics.
+    # Не используем общий WB_API_TOKEN или токен чатов: WB вернёт 401 token scope not allowed.
+    stock_token = _supply_env_first("WB_ANALYTICS_TOKEN", "WB_SUPPLY_ANALYTICS_TOKEN")
+    sales_token = _supply_env_first("WB_STATISTICS_TOKEN", "WB_ANALYTICS_TOKEN", "WB_SUPPLY_ANALYTICS_TOKEN")
+    if not stock_token:
+        return {
+            "ok": False,
+            "marketplace": "wildberries",
+            "configured": False,
+            "rows": [],
+            "error": "Для поставок WB нужен отдельный токен категории Analytics. Создайте токен в WB API и укажите его в WB_ANALYTICS_TOKEN. WB_API_TOKEN/WB_BUYERS_CHAT_TOKEN от чатов для этого метода не подходят.",
+            "token_scope_required": "Analytics",
+            "required_env": ["WB_ANALYTICS_TOKEN"],
+        }
+
+    cache_key = _supply_cache_key("wildberries", sales_days=sales_days, target_days=target_days)
+    cache_ttl = _supply_cache_ttl_seconds("wildberries")
+    cached_fresh = _supply_cached_result(cache_key, max_age_seconds=cache_ttl, reason=f"кэш младше {cache_ttl // 60} мин")
+    if cached_fresh:
+        return cached_fresh
+
+    stock_headers = {"Authorization": stock_token, "Content-Type": "application/json", "Accept": "application/json"}
+    stock_limit = _env_int("SUPPLY_WB_STOCK_LIMIT", 250000, minimum=1, maximum=250000)
+
+    try:
+        data = await _supply_http_json_wb(
+            "POST",
+            "https://seller-analytics-api.wildberries.ru/api/analytics/v1/stocks-report/wb-warehouses",
+            headers=stock_headers,
+            json_body={"nmIds": [], "chrtIds": [], "limit": stock_limit, "offset": 0},
+            timeout=90,
+        )
+    except SupplyRateLimitError as exc:
+        cached_any = _supply_cached_result(cache_key, max_age_seconds=None, reason="WB вернул 429 Too Many Requests")
+        if cached_any:
+            cached_any["rate_limited"] = True
+            cached_any["retry_after_seconds"] = exc.retry_after_seconds
+            if exc.retry_after_seconds:
+                cached_any["note"] += f" Повторный живой запрос WB лучше делать через {exc.retry_after_seconds} сек."
+            return cached_any
+        return {
+            "ok": False,
+            "marketplace": "wildberries",
+            "configured": True,
+            "rows": [],
+            "error": "WB вернул 429 Too Many Requests: превышен общий лимит запросов по кабинету. Подождите cooldown и не нажимайте обновление повторно. " + str(exc)[:700],
+            "rate_limited": True,
+            "retry_after_seconds": exc.retry_after_seconds,
+        }
+    except Exception as exc:
+        error_text = str(exc)[:900]
+        if "HTTP 401" in error_text and "token scope not allowed" in error_text:
+            cached_any = _supply_cached_result(cache_key, max_age_seconds=None, reason="WB вернул 401 token scope not allowed")
+            if cached_any:
+                cached_any["auth_warning"] = True
+                cached_any["token_scope_required"] = "Analytics"
+                cached_any["note"] += " Живой запрос WB не выполнен: у токена нет категории Analytics."
+                return cached_any
+            return {
+                "ok": False,
+                "marketplace": "wildberries",
+                "configured": True,
+                "rows": [],
+                "error": "WB вернул 401 token scope not allowed: у токена нет доступа к категории Analytics. Создайте новый WB API-токен с категорией Analytics и укажите его в переменной WB_ANALYTICS_TOKEN. Не используйте WB_API_TOKEN или WB_BUYERS_CHAT_TOKEN от чатов.",
+                "token_scope_required": "Analytics",
+                "how_to_fix": "WB Seller → Профиль/Настройки → API интеграции → Создать токен → категория Analytics → сохранить токен в .env как WB_ANALYTICS_TOKEN → перезапустить CRM.",
+                "raw_error": error_text,
+            }
+        return {
+            "ok": False,
+            "marketplace": "wildberries",
+            "configured": True,
+            "rows": [],
+            "error": "WB не вернул остатки по складам: " + error_text,
+        }
+
+    stock_items = []
+    if isinstance(data, dict):
+        stock_items = ((data.get("data") or {}).get("items") or data.get("items") or [])
+    if not isinstance(stock_items, list):
+        stock_items = []
+
+    sales_map: dict[tuple[str, str], float] = {}
+    sales_error = ""
+    if not sales_token:
+        sales_error = "WB_STATISTICS_TOKEN не настроен, поэтому продажи/день могут быть 0. Для продаж нужен токен WB категории Statistics."
+    else:
+        try:
+            sales_from = _supply_days_ago_iso(sales_days)
+            sales_data = await _supply_http_json_wb(
+                "GET",
+                "https://statistics-api.wildberries.ru/api/v1/supplier/sales",
+                headers={"Authorization": sales_token, "Accept": "application/json"},
+                params={"dateFrom": sales_from},
+                timeout=90,
+            )
+            if isinstance(sales_data, list):
+                for sale in sales_data:
+                    if not isinstance(sale, dict):
+                        continue
+                    sku = str(_supply_pick(sale, ["nmId", "supplierArticle", "barcode", "techSize"]) or "").strip()
+                    warehouse = str(_supply_pick(sale, ["warehouseName", "warehouse_name"], "") or "").strip()
+                    if not sku or not warehouse:
+                        continue
+                    sign = -1 if str(sale.get("saleID") or "").upper().startswith("R") else 1
+                    qty = abs(_supply_float(_supply_pick(sale, ["quantity"], 1), 1)) * sign
+                    sales_map[(sku, warehouse)] = sales_map.get((sku, warehouse), 0.0) + qty
+        except SupplyRateLimitError as exc:
+            sales_error = "WB вернул 429 по продажам. Остатки загружены, продажи/день могут быть 0. Повторить живой запрос лучше позже" + (f" через {exc.retry_after_seconds} сек." if exc.retry_after_seconds else ".")
+        except Exception as exc:
+            sales_error_raw = str(exc)[:500]
+            if "HTTP 401" in sales_error_raw and "token scope not allowed" in sales_error_raw:
+                sales_error = "Токен для продаж WB не имеет категории Statistics. Остатки загружены, но продажи/день могут быть 0. Укажите WB_STATISTICS_TOKEN."
+            else:
+                sales_error = sales_error_raw
+
+    rows: list[dict[str, Any]] = []
+    for item in stock_items:
+        if not isinstance(item, dict):
+            continue
+        sku = str(_supply_pick(item, ["nmId", "supplierArticle", "barcode", "chrtId"]) or "").strip()
+        if not sku:
+            continue
+        warehouse = str(_supply_pick(item, ["warehouseName", "officeName"], "Склад WB") or "Склад WB").strip()
+        region = str(item.get("regionName") or "").strip()
+        warehouse_label = f"{warehouse} · {region}" if region and region not in warehouse else warehouse
+        sold = max(0.0, sales_map.get((sku, warehouse), 0.0))
+        avg = sold / max(1, min(int(sales_days or 30), 90))
+        rows.append(_supply_compose_row(
+            marketplace="wildberries",
+            sku=sku,
+            product=_supply_pick(item, ["vendorCode", "subjectName", "brandName"], sku),
+            warehouse=warehouse_label,
+            current_stock=_supply_pick(item, ["quantity"], 0),
+            avg_daily_sales=avg,
+            target_days=target_days,
+        ))
+    rows.sort(key=_supply_row_sort_key)
+    result = {"ok": True, "marketplace": "wildberries", "configured": True, "rows": rows, "rows_count": len(rows), "sales_error": sales_error, "cached": False, "note": "WB: импортированы текущие остатки по складам WB через токен категории Analytics; продажи/день рассчитаны по продажам за выбранный период, если настроен токен с доступом к статистике продаж."}
+    _supply_cache_set(cache_key, result)
+    return result
+
+
+def _supply_yandex_headers() -> dict[str, str]:
+    api_key = _supply_env_first("YANDEX_MARKET_API_KEY", "YANDEX_API_KEY", "YANDEX_MARKET_TOKEN", "YANDEX_TOKEN")
+    oauth_token = _supply_env_first("YANDEX_OAUTH_TOKEN")
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    if api_key:
+        headers["Api-Key"] = api_key
+    elif oauth_token:
+        headers["Authorization"] = f"OAuth {oauth_token}"
+    return headers
+
+
+async def _supply_fetch_yandex_warehouse_names(headers: dict[str, str]) -> dict[str, str]:
+    try:
+        data = await _supply_http_json("GET", "https://api.partner.market.yandex.ru/v2/warehouses", headers=headers, timeout=30)
+        result = data.get("result", data) if isinstance(data, dict) else {}
+        warehouses = result.get("warehouses") if isinstance(result, dict) else []
+        names = {}
+        if isinstance(warehouses, list):
+            for item in warehouses:
+                if isinstance(item, dict) and item.get("id") is not None:
+                    names[str(item.get("id"))] = str(item.get("name") or f"Склад {item.get('id')}")
+        return names
+    except Exception:
+        return {}
+
+
+async def _supply_fetch_yandex(*, target_days: int) -> dict[str, Any]:
+    campaign_id = _supply_env_first("YANDEX_MARKET_CAMPAIGN_ID", "YANDEX_CAMPAIGN_ID")
+    headers = _supply_yandex_headers()
+    if not campaign_id or not (headers.get("Api-Key") or headers.get("Authorization")):
+        return {"ok": False, "marketplace": "yandex", "configured": False, "rows": [], "error": "YANDEX_MARKET_API_KEY/YANDEX_MARKET_CAMPAIGN_ID are not configured"}
+    warehouse_names = await _supply_fetch_yandex_warehouse_names(headers)
+    rows: list[dict[str, Any]] = []
+    page_token = ""
+    limit = _env_int("SUPPLY_YANDEX_STOCK_LIMIT", 200, minimum=1, maximum=200)
+    max_pages = _env_int("SUPPLY_YANDEX_STOCK_MAX_PAGES", 20, minimum=1, maximum=200)
+    for _ in range(max_pages):
+        params: dict[str, Any] = {"limit": limit}
+        if page_token:
+            params["pageToken"] = page_token
+        data = await _supply_http_json(
+            "POST",
+            f"https://api.partner.market.yandex.ru/v2/campaigns/{campaign_id}/offers/stocks",
+            headers=headers,
+            params=params,
+            json_body={"withTurnover": True, "archived": False},
+            timeout=60,
+        )
+        result = data.get("result", data) if isinstance(data, dict) else {}
+        warehouses = result.get("warehouses") if isinstance(result, dict) else []
+        if not isinstance(warehouses, list):
+            warehouses = []
+        for wh in warehouses:
+            if not isinstance(wh, dict):
+                continue
+            warehouse_id = str(wh.get("warehouseId") or wh.get("id") or "").strip()
+            warehouse_label = warehouse_names.get(warehouse_id) or (f"Склад {warehouse_id}" if warehouse_id else "Склад Яндекс")
+            offers = wh.get("offers") or []
+            if not isinstance(offers, list):
+                continue
+            for offer in offers:
+                if not isinstance(offer, dict):
+                    continue
+                sku = str(offer.get("offerId") or offer.get("shopSku") or "").strip()
+                if not sku:
+                    continue
+                stocks = offer.get("stocks") or []
+                current = 0
+                if isinstance(stocks, list):
+                    available = [s for s in stocks if isinstance(s, dict) and str(s.get("type") or "").upper() == "AVAILABLE"]
+                    fit = [s for s in stocks if isinstance(s, dict) and str(s.get("type") or "").upper() == "FIT"]
+                    source = available or fit or [s for s in stocks if isinstance(s, dict)]
+                    current = sum(_supply_int(s.get("count"), 0) for s in source)
+                turnover_days = _supply_float(((offer.get("turnoverSummary") or {}) if isinstance(offer.get("turnoverSummary"), dict) else {}).get("turnoverDays"), 0)
+                avg = current / turnover_days if current > 0 and turnover_days > 0 else 0
+                rows.append(_supply_compose_row(
+                    marketplace="yandex",
+                    sku=sku,
+                    product=sku,
+                    warehouse=warehouse_label,
+                    current_stock=current,
+                    avg_daily_sales=avg,
+                    target_days=target_days,
+                ))
+        paging = result.get("paging") if isinstance(result, dict) else {}
+        page_token = str((paging or {}).get("nextPageToken") or "").strip() if isinstance(paging, dict) else ""
+        if not page_token:
+            break
+    rows.sort(key=_supply_row_sort_key)
+    return {"ok": True, "marketplace": "yandex", "configured": True, "rows": rows, "rows_count": len(rows), "note": "Яндекс: импортированы остатки; продажи/день рассчитаны из turnoverDays, если Маркет вернул оборачиваемость."}
+
+
+@app.get("/api/supply-planning/status")
+def supply_planning_api_status(request: Request) -> dict[str, Any]:
+    _current_user(request)
+    return {"ok": True, "configured": _supply_status()}
+
+
+@app.api_route("/api/supply-planning/sync", methods=["GET", "POST"])
+@app.api_route("/api/supply-planning/sync/", methods=["GET", "POST"])
+async def supply_planning_sync(request: Request) -> dict[str, Any]:
+    _current_user(request)
+    _rate_limit(
+        request,
+        "supply-sync",
+        limit=_security_env_int("CRM_SUPPLY_SYNC_RATE_LIMIT", 6, minimum=1, maximum=120),
+        window_seconds=_security_env_int("CRM_SUPPLY_SYNC_RATE_WINDOW_SECONDS", 300, minimum=60, maximum=86400),
+    )
+    params = request.query_params
+    marketplace = str(params.get("marketplace") or "all").strip().lower()
+    sales_days = _env_int("SUPPLY_DEFAULT_SALES_DAYS", int(params.get("sales_days") or 30), minimum=1, maximum=90)
+    target_days = _env_int("SUPPLY_DEFAULT_TARGET_DAYS", int(params.get("target_days") or 45), minimum=1, maximum=365)
+    requested = ["ozon", "wildberries", "yandex"] if marketplace in {"", "all"} else [marketplace]
+    results: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
+    for item in requested:
+        try:
+            if item == "ozon":
+                result = await _supply_fetch_ozon(sales_days=sales_days, target_days=target_days)
+            elif item in {"wildberries", "wb"}:
+                result = await _supply_fetch_wildberries(sales_days=sales_days, target_days=target_days)
+            elif item in {"yandex", "ym", "yandex_market"}:
+                result = await _supply_fetch_yandex(target_days=target_days)
+            else:
+                result = {"ok": False, "marketplace": item, "configured": False, "rows": [], "error": "unknown marketplace"}
+        except Exception as exc:
+            result = {"ok": False, "marketplace": item, "configured": True, "rows": [], "error": _mask_sensitive(str(exc))[:1200]}
+        results.append({k: v for k, v in result.items() if k != "rows"})
+        rows.extend(result.get("rows") or [])
+    rows.sort(key=_supply_row_sort_key)
+    return {"ok": True, "rows": rows, "rows_count": len(rows), "sales_days": sales_days, "target_days": target_days, "results": results, "configured": _supply_status()}
+
+
 @app.get("/api/stats")
 def stats() -> dict[str, Any]:
     return repo.stats()
@@ -3281,10 +4591,25 @@ def delete_chat_status(status_id: int, request: Request) -> dict[str, Any]:
 
 
 @app.get("/api/chats")
-def list_chats(request: Request, status: str | None = None, marketplace: str | None = None, archived: bool = False, mine: bool = False, funnel_id: int | None = None) -> list[dict[str, Any]]:
+def list_chats(
+    request: Request,
+    status: str | None = None,
+    marketplace: str | None = None,
+    archived: bool = False,
+    mine: bool = False,
+    funnel_id: int | None = None,
+    q: str | None = None,
+) -> list[dict[str, Any]]:
     user = _current_user(request)
     assigned_user_id = int(user["id"]) if mine else None
-    return repo.list_chats(status=status, marketplace=marketplace, archived=archived, assigned_user_id=assigned_user_id, funnel_id=funnel_id)
+    return repo.list_chats(
+        status=status,
+        marketplace=marketplace,
+        archived=archived,
+        assigned_user_id=assigned_user_id,
+        funnel_id=funnel_id,
+        q=q,
+    )
 
 
 @app.get("/api/chats/{chat_id}")
@@ -3315,6 +4640,117 @@ def api_mark_all_notifications_read(request: Request) -> dict[str, Any]:
     user = _current_user(request)
     count = repo.mark_all_notifications_read(int(user["id"]))
     return {"ok": True, "marked": count, "unread_count": 0}
+
+
+@app.get("/api/push/public-key")
+def api_push_public_key(request: Request) -> dict[str, Any]:
+    _current_user(request)
+    public_key = _web_push_public_key()
+    return {
+        "enabled": _web_push_enabled(),
+        "configured": bool(public_key and _web_push_private_key()),
+        "public_key": public_key,
+        "subject": _web_push_subject(),
+        "desktop_supported": True,
+        "mobile_supported": True,
+    }
+
+
+@app.post("/api/push/subscribe")
+async def api_push_subscribe(request: Request) -> dict[str, Any]:
+    user = _current_user(request)
+    payload = await request.json()
+    subscription = payload.get("subscription") if isinstance(payload, dict) and isinstance(payload.get("subscription"), dict) else payload
+    if not isinstance(subscription, dict) or not subscription.get("endpoint"):
+        raise HTTPException(status_code=400, detail="Некорректная push-подписка")
+    try:
+        saved = repo.save_push_subscription(
+            int(user["id"]),
+            subscription,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "subscription_id": saved.get("id"), "configured": _web_push_configured()}
+
+
+@app.post("/api/push/unsubscribe")
+async def api_push_unsubscribe(request: Request) -> dict[str, Any]:
+    user = _current_user(request)
+    payload = await request.json()
+    endpoint = payload.get("endpoint") if isinstance(payload, dict) else None
+    count = repo.delete_push_subscription(int(user["id"]), endpoint=endpoint)
+    return {"ok": True, "disabled": count}
+
+
+@app.post("/api/push/test")
+async def api_push_test(request: Request) -> dict[str, Any]:
+    _rate_limit(
+        request,
+        "push-test",
+        limit=_security_env_int("CRM_PUSH_TEST_RATE_LIMIT", 3, minimum=1, maximum=60),
+        window_seconds=_security_env_int("CRM_PUSH_TEST_RATE_WINDOW_SECONDS", 60, minimum=30, maximum=3600),
+    )
+    user = _current_user(request)
+    payload = {
+        "title": "Тестовое уведомление Arti CRM",
+        "body": "Если вы видите это уведомление, Web Push работает на этом устройстве.",
+        "tag": f"arti-crm-test-{int(time.time())}",
+        "url": "/#/chats",
+        "type": "test",
+    }
+    result = await _send_web_push_to_user(int(user["id"]), payload, base_url=_public_base_url(request))
+    return {"ok": bool(result.get("sent")), "configured": _web_push_configured(), **result}
+
+
+@app.get("/api/push/status")
+def api_push_status(request: Request) -> dict[str, Any]:
+    user = _current_user(request)
+    storage: dict[str, Any] = {"ok": False}
+    subscriptions: list[dict[str, Any]] = []
+    storage_error = ""
+    try:
+        storage = repo.ensure_push_storage()
+        subscriptions = repo.list_push_subscriptions(int(user["id"]), active_only=True)
+    except Exception as exc:
+        # Do not hide the problem behind a plain 500. The status page is the
+        # diagnostic page, so it must return the exact storage error.
+        storage_error = str(exc)
+
+    return {
+        "ok": not bool(storage_error),
+        "enabled": _web_push_enabled(),
+        "configured": _web_push_configured(),
+        "public_key_present": bool(_web_push_public_key()),
+        "private_key_present": bool(_web_push_private_key()),
+        "subject": _web_push_subject(),
+        "subscriptions": len(subscriptions),
+        "storage": storage,
+        "storage_error": storage_error,
+        "last_push_outbox": getattr(app.state, "last_push_outbox", None),
+        "last_background_sync": getattr(app.state, "last_background_sync", None),
+        "last_external_background_tick": getattr(app.state, "last_external_background_tick", None),
+        "background_tick_token_configured": bool(_background_tick_token()),
+    }
+
+
+@app.get("/api/background/tick")
+@app.post("/api/background/tick")
+async def api_background_tick(request: Request, token: str | None = None) -> dict[str, Any]:
+    """External cron/uptime monitor endpoint.
+
+    On shared hosting, the Python process and browser JS timers can sleep when
+    nobody has the CRM open. This endpoint lets an external scheduler wake the
+    server, poll marketplaces, and drain Web Push outbox without opening CRM.
+    """
+    _rate_limit(
+        request,
+        "background-tick",
+        limit=_security_env_int("CRM_BACKGROUND_TICK_RATE_LIMIT", 60, minimum=1, maximum=1000),
+        window_seconds=_security_env_int("CRM_BACKGROUND_TICK_RATE_WINDOW_SECONDS", 3600, minimum=60, maximum=86400),
+    )
+    _require_background_tick_access(request, token=token)
+    return await _run_background_tick_once(source="api")
 
 
 @app.patch("/api/chats/{chat_id}")
@@ -3667,6 +5103,58 @@ def create_task(payload: TaskCreate, request: Request) -> dict[str, Any]:
     return task
 
 
+@app.post("/api/tasks/standalone")
+def create_standalone_task(payload: dict[str, Any], request: Request) -> dict[str, Any]:
+    current_user = _current_user(request)
+    title = str(payload.get("title") or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Task title is required")
+
+    def _optional_int(value: Any) -> int | None:
+        if value in (None, "", 0, "0"):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    assigned_user_id = _optional_int(payload.get("assigned_user_id"))
+    task_type_id = _optional_int(payload.get("task_type_id"))
+    due_at = str(payload.get("due_at") or "").strip() or None
+    description = str(payload.get("description") or "").strip() or None
+
+    try:
+        task_id = repo.create_standalone_task(
+            title=title,
+            description=description,
+            task_type_id=task_type_id,
+            assigned_user_id=assigned_user_id,
+            due_at=due_at,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    task = repo.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=500, detail="Task was created but could not be loaded")
+
+    if assigned_user_id:
+        actor = current_user.get("display_name") or current_user.get("username") or "CRM"
+        repo.create_notification(
+            user_id=int(assigned_user_id),
+            type="new_task",
+            title="Новая задача",
+            body=f"{actor}: {task.get('title') or 'Задача'}",
+            chat_id=None,
+            task_id=int(task_id),
+            entity_type="task",
+            entity_id=str(task_id),
+            dedupe_key=f"task-created:{task_id}:user:{assigned_user_id}",
+            metadata={"created_by_user_id": current_user.get("id"), "standalone": True},
+        )
+    return task
+
+
 @app.patch("/api/tasks/{task_id}")
 def update_task(task_id: int, payload: TaskUpdate, request: Request) -> dict[str, Any]:
     user = _current_user(request)
@@ -3676,6 +5164,29 @@ def update_task(task_id: int, payload: TaskUpdate, request: Request) -> dict[str
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     return task
+
+
+def _delete_task_or_404(task_id: int, request: Request) -> dict[str, Any]:
+    _current_user(request)
+    try:
+        ok = repo.delete_task(task_id)
+    except Exception as exc:
+        # Keep the client error readable instead of leaking a raw server traceback.
+        raise HTTPException(status_code=500, detail=f"Task delete failed: {_mask_sensitive(str(exc))}") from exc
+    if not ok:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return {"ok": True}
+
+
+@app.delete("/api/tasks/{task_id}")
+def delete_task(task_id: int, request: Request) -> dict[str, Any]:
+    return _delete_task_or_404(task_id, request)
+
+
+@app.post("/api/tasks/{task_id}/delete")
+def delete_task_post(task_id: int, request: Request) -> dict[str, Any]:
+    # POST fallback is safer on some hosting/proxy setups where DELETE can be blocked.
+    return _delete_task_or_404(task_id, request)
 
 
 @app.get("/api/knowledge/categories")
@@ -3783,14 +5294,75 @@ def api_create_reply_template(payload: ReplyTemplateCreate, request: Request) ->
         raise HTTPException(status_code=400, detail=str(exc))
 
 
-@app.post("/api/sync/operator")
-async def sync_operator_frontend() -> dict[str, Any]:
+def _frontend_operator_sync_lock() -> asyncio.Lock:
     lock: asyncio.Lock = getattr(app.state, "frontend_operator_sync_lock", None)
     if lock is None:
         lock = asyncio.Lock()
         app.state.frontend_operator_sync_lock = lock
+    return lock
+
+
+async def _run_frontend_operator_sync_task() -> dict[str, Any]:
+    lock = _frontend_operator_sync_lock()
+    if lock.locked():
+        return {
+            "ok": True,
+            "mode": "operator_frontend_async",
+            "status": "already_running",
+            "background": True,
+            "last": getattr(app.state, "last_frontend_operator_sync", None),
+        }
+
+    started_at = time.time()
     async with lock:
-        return await _sync_operator_frontend_unlocked()
+        try:
+            payload = await _sync_operator_frontend_unlocked()
+            payload["async_status"] = "finished"
+            payload["duration_seconds"] = round(time.time() - started_at, 2)
+            app.state.last_frontend_operator_sync = payload
+            return payload
+        except Exception as exc:
+            payload = {
+                "ok": False,
+                "mode": "operator_frontend_async",
+                "async_status": "error",
+                "duration_seconds": round(time.time() - started_at, 2),
+                "error": str(exc),
+                "background": True,
+            }
+            app.state.last_frontend_operator_sync = payload
+            return payload
+
+
+@app.post("/api/sync/operator")
+async def sync_operator_frontend(wait: bool = False) -> dict[str, Any]:
+    # Default mode is async: the browser should not wait 20-30 seconds for
+    # marketplace APIs. It starts sync and keeps refreshing local DB separately.
+    if wait:
+        return await _run_frontend_operator_sync_task()
+
+    task: asyncio.Task | None = getattr(app.state, "frontend_operator_sync_task", None)
+    if task and not task.done():
+        return {
+            "ok": True,
+            "mode": "operator_frontend_async",
+            "status": "running",
+            "queued": False,
+            "background": True,
+            "last": getattr(app.state, "last_frontend_operator_sync", None),
+        }
+
+    task = asyncio.create_task(_run_frontend_operator_sync_task())
+    app.state.frontend_operator_sync_task = task
+
+    return {
+        "ok": True,
+        "mode": "operator_frontend_async",
+        "status": "started",
+        "queued": True,
+        "background": True,
+        "last": getattr(app.state, "last_frontend_operator_sync", None),
+    }
 
 
 @app.post("/api/sync/{marketplace}")

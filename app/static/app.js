@@ -8,6 +8,12 @@ let chatUiRefreshTimer = null;
 let frontendSyncInFlight = false;
 let activeChatRefreshInFlight = false;
 let outboundSendInFlight = false;
+let outboundSendLastStartedAt = 0;
+let chatInteractionBusyUntil = 0;
+let chatListRefreshLastStartedAt = 0;
+let activeChatMessagesRefreshInFlight = false;
+let activeChatMessagesRefreshLastStartedAt = 0;
+let currentChatMessagesSignature = '';
 let suppressFrontendSyncUntil = 0;
 let frontendSyncLastStartedAt = 0;
 let frontendSyncLastSuccessAt = 0;
@@ -17,10 +23,11 @@ let chatImageLazyObserver = null;
 let chatImageLazyObserverRoot = null;
 let activeView = 'chats';
 const ROUTE_STORAGE_KEY = 'artiCrm.activeView';
-const VALID_VIEWS = ['chats', 'analytics', 'tasks', 'reviews', 'questions', 'knowledge', 'users', 'techSettings', 'profile'];
+const VALID_VIEWS = ['chats', 'analytics', 'supplyPlanning', 'tasks', 'reviews', 'questions', 'knowledge', 'users', 'techSettings', 'profile'];
 const VIEW_ROUTES = {
   chats: 'chats',
   analytics: 'analytics',
+  supplyPlanning: 'supply',
   tasks: 'tasks',
   reviews: 'reviews',
   questions: 'questions',
@@ -29,11 +36,144 @@ const VIEW_ROUTES = {
   techSettings: 'settings',
   profile: 'profile',
 };
+
+const CRM_THEME_STORAGE_KEY = 'artiCrm.uiTheme';
+const CRM_CSRF_HEADER_NAME = 'X-CSRF-Token';
+let csrfToken = '';
+// Arti CRM — v82-login-csrf-public-fix-20260710: login is CSRF-exempt; do not request a session CSRF token before the first login.
+
+function readCookieValue(name) {
+  try {
+    const prefix = `${encodeURIComponent(name)}=`;
+    const item = document.cookie.split('; ').find((part) => part.startsWith(prefix));
+    return item ? decodeURIComponent(item.slice(prefix.length)) : '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function isUnsafeHttpMethod(method = 'GET') {
+  return ['POST', 'PUT', 'PATCH', 'DELETE'].includes(String(method || 'GET').toUpperCase());
+}
+
+function isCsrfPublicPath(path = '') {
+  const normalized = String(path || '').split('?', 1)[0].replace(/\/+$/, '') || '/';
+  return normalized === '/api/auth/login'
+    || normalized === '/api/auth/me'
+    || normalized === '/api/background/tick';
+}
+
+function withCsrfHeader(headers = {}, method = 'GET', path = '') {
+  const next = { ...(headers || {}) };
+  if (isUnsafeHttpMethod(method) && csrfToken && !isCsrfPublicPath(path)) {
+    next[CRM_CSRF_HEADER_NAME] = csrfToken;
+  }
+  return next;
+}
+
+// v78-csp-session-csrf-cookie-fix-20260708: keep CSRF token in memory instead of a readable cookie.
+let csrfRefreshPromise = null;
+
+function isCsrfApiError(errorOrStatus, detail = '') {
+  const status = typeof errorOrStatus === 'number' ? errorOrStatus : Number(errorOrStatus?.status || 0);
+  const message = String(
+    detail ||
+    errorOrStatus?.detail ||
+    errorOrStatus?.message ||
+    errorOrStatus?.body ||
+    ''
+  );
+  return status === 403 && /(csrf|x-csrf-token|Запрос отклонён защитой CSRF)/i.test(message);
+}
+
+async function refreshCsrfToken() {
+  if (csrfRefreshPromise) return csrfRefreshPromise;
+  csrfRefreshPromise = fetch('/api/security/csrf', {
+    method: 'GET',
+    cache: 'no-store',
+    credentials: 'same-origin',
+    headers: { 'Accept': 'application/json' },
+  })
+    .then(async (response) => {
+      if (response.status === 401) {
+        showLogin();
+        throw new Error('Требуется авторизация');
+      }
+      if (!response.ok) {
+        const body = await response.text().catch(() => '');
+        throw new Error(`Не удалось обновить CSRF-токен: ${response.status} ${body}`);
+      }
+      const payload = await response.json().catch(() => ({}));
+      csrfToken = String(payload.csrf_token || '');
+      if (!csrfToken) throw new Error('Сервер не вернул CSRF-токен');
+      return csrfToken;
+    })
+    .finally(() => {
+      csrfRefreshPromise = null;
+    });
+  return csrfRefreshPromise;
+}
+
+async function ensureCsrfTokenForUnsafeMethod(method = 'GET', path = '') {
+  if (!isUnsafeHttpMethod(method) || isCsrfPublicPath(path)) return true;
+  if (csrfToken) return true;
+  await refreshCsrfToken();
+  return true;
+}
+
+function readPreferredCrmTheme() {
+  try {
+    const saved = localStorage.getItem(CRM_THEME_STORAGE_KEY);
+    if (saved === 'dark' || saved === 'light') return saved;
+    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) return 'dark';
+  } catch (_) {}
+  return 'light';
+}
+
+function updateCrmThemeUi(theme = document.documentElement.dataset.theme || 'light') {
+  const isDark = theme === 'dark';
+  document.documentElement.style.colorScheme = isDark ? 'dark' : 'light';
+  document.querySelectorAll('[data-theme-label]').forEach((el) => {
+    el.textContent = isDark ? 'Светлая тема' : 'Тёмная тема';
+  });
+  document.querySelectorAll('[data-theme-description]').forEach((el) => {
+    el.textContent = isDark ? 'Переключить на светлую CRM' : 'Переключить на тёмную CRM';
+  });
+  const btn = document.getElementById('themeToggleBtn');
+  if (btn) {
+    btn.classList.toggle('theme-is-dark', isDark);
+    btn.setAttribute('aria-label', isDark ? 'Включить светлую тему' : 'Включить тёмную тему');
+    btn.title = isDark ? 'Включить светлую тему' : 'Включить тёмную тему';
+  }
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', isDark ? '#0d111a' : '#f6f8fc');
+}
+
+function applyCrmTheme(theme, { persist = false } = {}) {
+  const nextTheme = theme === 'dark' ? 'dark' : 'light';
+  document.documentElement.dataset.theme = nextTheme;
+  if (persist) {
+    try { localStorage.setItem(CRM_THEME_STORAGE_KEY, nextTheme); } catch (_) {}
+  }
+  updateCrmThemeUi(nextTheme);
+}
+
+function toggleCrmTheme() {
+  const current = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+  applyCrmTheme(current === 'dark' ? 'light' : 'dark', { persist: true });
+}
+
+applyCrmTheme(readPreferredCrmTheme());
+
 const ROUTE_VIEWS = {
   chats: 'chats',
   chat: 'chats',
   analytics: 'analytics',
   analytic: 'analytics',
+  supply: 'supplyPlanning',
+  supplies: 'supplyPlanning',
+  planning: 'supplyPlanning',
+  supplyplanning: 'supplyPlanning',
   tasks: 'tasks',
   task: 'tasks',
   reviews: 'reviews',
@@ -51,6 +191,8 @@ const ROUTE_VIEWS = {
   profile: 'profile',
 };
 let activeExtraPanel = '';
+let extraMenuPointerHandledAt = 0;
+let extraActionPointerHandledAt = 0;
 let chatScope = 'active';
 let selectedAiMessageId = null;
 let aiGenerating = false;
@@ -65,6 +207,13 @@ let currentUser = null;
 let assignees = [];
 let usersCache = [];
 let chatOwnerScope = 'all';
+let chatMessageSearch = '';
+let chatSearchTimer = null;
+const CHAT_LIST_MOBILE_INITIAL_LIMIT = 90;
+const CHAT_LIST_MOBILE_PAGE_SIZE = 60;
+let chatListMobileRenderLimit = CHAT_LIST_MOBILE_INITIAL_LIMIT;
+let chatListLastRenderKey = '';
+let chatListInfiniteScrollBound = false;
 let knowledgeCategories = [];
 let knowledgeArticles = [];
 let currentKnowledgeCategoryId = null;
@@ -73,14 +222,35 @@ let currentKnowledgeArticle = null;
 let knowledgeMode = "empty";
 let appInitialized = false;
 let analyticsLoadedOnce = false;
+let supplyPlanningRows = [];
+let supplyPlanningLoaded = false;
+let supplyPlanningApiSyncInFlight = false;
 let notifications = [];
 let notificationsUnreadCount = 0;
 let notificationsTimer = null;
+let alertsTimer = null;
 let notificationsPanelOpen = false;
 let notificationToastIds = [];
 let notificationSeenUnreadIds = new Set();
 let notificationsBootstrapDone = false;
 let lastBrowserNotificationAt = 0;
+const SOUND_NOTIFICATIONS_STORAGE_KEY = 'artiCrm.soundNotifications.enabled';
+const PUSH_NOTIFICATIONS_STORAGE_KEY = 'artiCrm.pushNotifications.enabled';
+const SUPPLY_PLANNING_STORAGE_KEY = 'artiCrm.supplyPlanning.v3';
+const DEFAULT_SUPPLY_PLANNING_TARGET_DAYS = 45;
+let soundNotificationsEnabled = localStorage.getItem(SOUND_NOTIFICATIONS_STORAGE_KEY) !== 'false';
+let pushNotificationsEnabled = localStorage.getItem(PUSH_NOTIFICATIONS_STORAGE_KEY) !== 'false';
+let pwaServiceWorkerRegistration = null;
+let pwaServiceWorkerRegisterPromise = null;
+let pushPublicKeyPromise = null;
+let notificationAudioContext = null;
+let notificationSoundUnlocked = false;
+let lastNotificationSoundAt = 0;
+let lastCrmBrowserNotificationAt = 0;
+let chatSoundBaselineDone = false;
+let knownChatSoundKeys = new Set();
+let questionSoundBaselineDone = false;
+let knownQuestionSoundKeys = new Set();
 let notificationsLoadPromise = null;
 let chatsLoadPromise = null;
 let statsLoadPromise = null;
@@ -101,6 +271,9 @@ let currentChatMetaSaveTimer = null;
 let selectedChatImageFiles = [];
 let openChatRequestSeq = 0;
 let taskSearchTimer = null;
+let chatMetaControlsHydratedForChatId = null;
+let chatMetaControlsSignatureValue = '';
+let chatMetaControlBusyUntil = 0;
 
 function mergeChatSummary(updated) {
   if (!updated || !updated.id) return;
@@ -111,7 +284,88 @@ function mergeChatSummary(updated) {
 }
 
 function refreshChatListInBackground() {
-  loadChats().catch(err => console.warn('background chat list refresh failed', err));
+  const refresh = () => loadChats({ withStats: false, render: !isMobileChatOpen() }).catch(err => console.warn('background chat list refresh failed', err));
+  if (isMobileChatOpen()) {
+    runWhenBrowserIsIdle(refresh, 1400);
+    return;
+  }
+  refresh();
+}
+
+function markChatMetaControlBusy(ms = 7000) {
+  const until = Date.now() + ms;
+  chatMetaControlBusyUntil = Math.max(chatMetaControlBusyUntil || 0, until);
+  pauseMobileChatBackgroundWork(ms);
+}
+
+function isChatMetaControlBusy() {
+  return Date.now() < chatMetaControlBusyUntil;
+}
+
+function chatStatusOptionsSignature() {
+  return (chatSettings.statuses || [])
+    .map((status) => `${status.id || ''}:${status.key || ''}:${status.title || ''}:${status.is_active}:${status.sort_order || 0}`)
+    .join('|');
+}
+
+function assigneeOptionsSignature() {
+  return (assignees || [])
+    .map((user) => `${user.id || ''}:${assigneeDisplay(user)}:${user.role || ''}`)
+    .join('|');
+}
+
+function chatMetaControlsSignature() {
+  return `${chatStatusOptionsSignature()}::${assigneeOptionsSignature()}`;
+}
+
+function hydrateChatMetaControls(chat, options = {}) {
+  const { force = false, updateOptions = true } = options;
+  if (!chat) return;
+
+  const chatStatus = $('chatStatus');
+  const assignedUserSelect = $('assignedUserSelect');
+  const chatId = Number(chat.id || currentChatId || 0);
+  const signature = chatMetaControlsSignature();
+
+  const active = document.activeElement;
+  const userIsUsingMetaControl = Boolean(
+    active && (active === chatStatus || active === assignedUserSelect)
+  );
+
+  // Main mobile fix: do not rebuild native iOS selects while the operator is
+  // opening/using them. Rebuilding <select>.innerHTML during active use makes
+  // the picker feel like it loads for seconds and can drop the tap.
+  if (!force && userIsUsingMetaControl) {
+    markChatMetaControlBusy(7000);
+    return;
+  }
+
+  const shouldRebuildOptions = updateOptions && (
+    force ||
+    chatMetaControlsHydratedForChatId !== chatId ||
+    chatMetaControlsSignatureValue !== signature
+  );
+
+  if (chatStatus) {
+    const nextStatus = chat.status || chatStatus.value || 'new';
+    if (shouldRebuildOptions) {
+      chatStatus.innerHTML = statusOptions(nextStatus, true, '');
+    }
+    if (!userIsUsingMetaControl) chatStatus.value = nextStatus;
+  }
+
+  if (assignedUserSelect) {
+    const nextAssignee = chat.assigned_user_id || '';
+    if (shouldRebuildOptions) {
+      assignedUserSelect.innerHTML = assigneeOptions(nextAssignee, true);
+    }
+    if (!userIsUsingMetaControl) assignedUserSelect.value = nextAssignee;
+  }
+
+  if (shouldRebuildOptions) {
+    chatMetaControlsHydratedForChatId = chatId;
+    chatMetaControlsSignatureValue = signature;
+  }
 }
 
 async function persistCurrentChatMeta() {
@@ -133,7 +387,10 @@ async function persistCurrentChatMeta() {
     assigned_to: assignedUserId ? (assigneeOption?.textContent || '').trim() : null,
   };
   mergeChatSummary(optimistic);
-  renderChatList();
+  hydrateChatMetaControls({ ...currentChat, ...optimistic }, { updateOptions: false });
+  if (!(isMobileChatLayout() && document.body.classList.contains('mobile-chat-open'))) {
+    renderChatList();
+  }
 
   try {
     const updated = await api(`/api/chats/${chatId}`, {
@@ -147,7 +404,9 @@ async function persistCurrentChatMeta() {
     if (isClosedWorkflowStatus(updated.status || newStatus, updated.status_label || optimistic.status_label) && chatScope !== 'archive') {
       chats = (chats || []).filter((chat) => Number(chat.id) !== Number(chatId));
     }
-    renderChatList();
+    if (!(isMobileChatLayout() && document.body.classList.contains('mobile-chat-open'))) {
+      renderChatList();
+    }
 
     if (isClosedWorkflowStatus(updated?.status || newStatus, updated?.status_label || optimistic.status_label) && chatScope !== 'archive') {
       currentChatId = null;
@@ -232,6 +491,354 @@ function notify(title, data) {
   console.log(title, data);
   alert(`${title}\n\n${text}`);
 }
+
+function setSoundNotificationsEnabled(enabled) {
+  soundNotificationsEnabled = Boolean(enabled);
+  localStorage.setItem(SOUND_NOTIFICATIONS_STORAGE_KEY, soundNotificationsEnabled ? 'true' : 'false');
+  if (soundNotificationsEnabled) unlockNotificationSound();
+}
+
+function unlockNotificationSound() {
+  if (!soundNotificationsEnabled || notificationSoundUnlocked) return;
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return;
+  try {
+    if (!notificationAudioContext) notificationAudioContext = new AudioContextClass();
+    if (notificationAudioContext.state === 'suspended') {
+      notificationAudioContext.resume().catch(() => {});
+    }
+    notificationSoundUnlocked = true;
+  } catch (_) {}
+}
+
+function playNotificationSound(kind = 'message') {
+  if (!soundNotificationsEnabled) return;
+  const nowMs = Date.now();
+  if (nowMs - lastNotificationSoundAt < 1500) return;
+  lastNotificationSoundAt = nowMs;
+
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return;
+
+  try {
+    if (!notificationAudioContext) notificationAudioContext = new AudioContextClass();
+    const ctx = notificationAudioContext;
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+
+    const now = ctx.currentTime;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.055, now + 0.018);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.38);
+    gain.connect(ctx.destination);
+
+    const frequencies = kind === 'question' ? [660, 880] : [820, 1120];
+    frequencies.forEach((frequency, index) => {
+      const oscillator = ctx.createOscillator();
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(frequency, now + index * 0.12);
+      oscillator.connect(gain);
+      oscillator.start(now + index * 0.12);
+      oscillator.stop(now + index * 0.12 + 0.18);
+    });
+  } catch (err) {
+    console.warn('notification sound failed', err);
+  }
+}
+
+async function registerPwaServiceWorker() {
+  if (!('serviceWorker' in navigator)) return null;
+  if (pwaServiceWorkerRegistration) return pwaServiceWorkerRegistration;
+  if (pwaServiceWorkerRegisterPromise) return pwaServiceWorkerRegisterPromise;
+
+  pwaServiceWorkerRegisterPromise = navigator.serviceWorker.register('/static/sw.js?v=v63-knowledge-category-clean-markup-20260703')
+    .then((registration) => {
+      pwaServiceWorkerRegistration = registration;
+      return registration;
+    })
+    .catch((err) => {
+      console.warn('PWA service worker registration failed', err);
+      return null;
+    });
+
+  return pwaServiceWorkerRegisterPromise;
+}
+
+function setPushNotificationsEnabled(enabled) {
+  pushNotificationsEnabled = Boolean(enabled);
+  localStorage.setItem(PUSH_NOTIFICATIONS_STORAGE_KEY, pushNotificationsEnabled ? 'true' : 'false');
+}
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; i += 1) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
+async function getPushPublicKey() {
+  if (pushPublicKeyPromise) return pushPublicKeyPromise;
+  pushPublicKeyPromise = api('/api/push/public-key', { timeoutMs: 10000 })
+    .then((data) => {
+      if (!data?.enabled) return '';
+      if (!data?.configured || !data?.public_key) return '';
+      return String(data.public_key || '').trim();
+    })
+    .catch((err) => {
+      console.warn('push public key failed', err);
+      return '';
+    });
+  return pushPublicKeyPromise;
+}
+
+function browserSupportsWebPush() {
+  return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+}
+
+function updatePushNotificationUi() {
+  const btn = $('notificationsBtn');
+  if (!btn) return;
+  const enabled = browserSupportsWebPush() && Notification.permission === 'granted' && pushNotificationsEnabled;
+  btn.classList.toggle('notifications-enabled', enabled);
+  btn.title = enabled ? 'Уведомления включены' : 'Нажмите, чтобы включить уведомления';
+}
+
+async function subscribeCrmPushNotifications({ silent = true } = {}) {
+  if (!browserSupportsWebPush()) {
+    if (!silent) notify('Уведомления', 'Этот браузер не поддерживает Web Push.');
+    updatePushNotificationUi();
+    return { ok: false, reason: 'unsupported' };
+  }
+
+  if (Notification.permission !== 'granted') {
+    updatePushNotificationUi();
+    return { ok: false, reason: Notification.permission || 'default' };
+  }
+
+  const publicKey = await getPushPublicKey();
+  if (!publicKey) {
+    if (!silent) notify('Push не настроен', 'На сервере не заданы WEB_PUSH_VAPID_PUBLIC_KEY и WEB_PUSH_VAPID_PRIVATE_KEY.');
+    updatePushNotificationUi();
+    return { ok: false, reason: 'not_configured' };
+  }
+
+  const registration = await registerPwaServiceWorker();
+  if (!registration?.pushManager) {
+    updatePushNotificationUi();
+    return { ok: false, reason: 'no_push_manager' };
+  }
+
+  let subscription = await registration.pushManager.getSubscription();
+  if (!subscription) {
+    subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(publicKey),
+    });
+  }
+
+  await api('/api/push/subscribe', {
+    method: 'POST',
+    body: JSON.stringify(subscription.toJSON()),
+    timeoutMs: 15000,
+  });
+
+  setPushNotificationsEnabled(true);
+  updatePushNotificationUi();
+  if (!silent) setStatus('Push-уведомления включены для этого устройства');
+  return { ok: true };
+}
+
+async function requestCrmNotificationPermission() {
+  await registerPwaServiceWorker();
+
+  if (!browserSupportsWebPush()) {
+    notify('Уведомления', 'Этот браузер не поддерживает системные Web Push-уведомления.');
+    return 'unsupported';
+  }
+
+  if (Notification.permission === 'denied') {
+    setPushNotificationsEnabled(false);
+    updatePushNotificationUi();
+    notify('Уведомления отключены', 'Разрешите уведомления для сайта в настройках Safari/браузера.');
+    return 'denied';
+  }
+
+  let permission = Notification.permission;
+  if (permission !== 'granted') {
+    try {
+      permission = await Notification.requestPermission();
+    } catch (err) {
+      console.warn('Notification permission request failed', err);
+      updatePushNotificationUi();
+      return 'default';
+    }
+  }
+
+  setPushNotificationsEnabled(permission === 'granted');
+  if (permission === 'granted') {
+    await subscribeCrmPushNotifications({ silent: false });
+  } else {
+    setStatus('Push-уведомления не включены');
+  }
+  updatePushNotificationUi();
+  return permission;
+}
+
+function crmNotificationUrl(kind, entityId = '') {
+  const base = window.location.origin || '';
+  if (kind === 'question') return `${base}/#/questions${entityId ? `/${encodeURIComponent(entityId)}` : ''}`;
+  if (kind === 'message') return `${base}/#/chats${entityId ? `/${encodeURIComponent(entityId)}` : ''}`;
+  return `${base}/`;
+}
+
+async function showCrmBrowserNotification(kind, title, body, options = {}) {
+  if (!pushNotificationsEnabled) return;
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+
+  const now = Date.now();
+  if (now - lastCrmBrowserNotificationAt < 2500) return;
+  lastCrmBrowserNotificationAt = now;
+
+  const payload = {
+    body: body || 'Arti CRM',
+    tag: options.tag || `arti-crm-${kind}`,
+    renotify: true,
+    badge: '/static/icons/app-icon-192.png',
+    icon: '/static/icons/app-icon-192.png',
+    data: {
+      url: options.url || crmNotificationUrl(kind, options.entityId || ''),
+      kind,
+      entityId: options.entityId || '',
+    },
+  };
+
+  try {
+    const registration = await registerPwaServiceWorker();
+    if (registration?.showNotification) {
+      await registration.showNotification(title || 'Arti CRM', payload);
+      return;
+    }
+
+    const notification = new Notification(title || 'Arti CRM', payload);
+    notification.onclick = () => {
+      window.focus();
+      const url = payload.data?.url || '/';
+      if (url) window.location.href = url;
+      notification.close();
+    };
+  } catch (err) {
+    console.warn('browser notification failed', err);
+  }
+}
+
+function installNotificationSoundUnlock() {
+  const unlock = () => {
+    unlockNotificationSound();
+    registerPwaServiceWorker();
+    if (browserSupportsWebPush() && Notification.permission === 'granted') {
+      subscribeCrmPushNotifications({ silent: true }).catch(err => console.warn('push subscribe on unlock failed', err));
+    }
+  };
+  ['pointerdown', 'keydown', 'touchstart'].forEach((eventName) => {
+    window.addEventListener(eventName, unlock, { once: true, passive: true, capture: true });
+  });
+}
+
+function notificationLooksLikeMessage(item) {
+  const type = String(item?.type || '').toLowerCase();
+  return type === 'new_message' || type.includes('message') || Boolean(item?.chat_id);
+}
+
+function notificationLooksLikeQuestion(item) {
+  const type = String(item?.type || '').toLowerCase();
+  const text = `${item?.title || ''} ${item?.body || ''}`.toLowerCase();
+  return type.includes('question') || text.includes('вопрос');
+}
+
+function chatSoundKey(chat) {
+  if (!chat || !chat.id) return '';
+  return [chat.id, chat.last_message_at || chat.updated_at || '', chat.last_message_preview || ''].join('|');
+}
+
+function trackChatMessageSounds(items) {
+  const actionable = (items || []).filter((chat) => shouldShowWaitingMarker(chat));
+  const nextKeys = new Set(actionable.map(chatSoundKey).filter(Boolean));
+
+  if (!chatSoundBaselineDone) {
+    chatSoundBaselineDone = true;
+    knownChatSoundKeys = nextKeys;
+    return;
+  }
+
+  const newChat = actionable.find((chat) => {
+    const key = chatSoundKey(chat);
+    return key && !knownChatSoundKeys.has(key);
+  });
+  const hasNew = Boolean(newChat);
+  knownChatSoundKeys = nextKeys;
+
+  if (hasNew) {
+    playNotificationSound('message');
+    showCrmBrowserNotification(
+      'message',
+      'Новое сообщение',
+      `${customerLabel(newChat)} · ${previewText(newChat.last_message_preview || 'Откройте чат')}`,
+      {
+        entityId: newChat.id,
+        tag: `arti-crm-message-${newChat.id}`,
+        url: crmNotificationUrl('message', newChat.id),
+      },
+    );
+  }
+}
+
+function questionSoundKey(question) {
+  if (!question) return '';
+  return String(question.id || question.external_question_id || `${question.published_at || question.created_at || ''}:${question.text || ''}`).trim();
+}
+
+function trackQuestionSounds(items) {
+  const actionable = (items || []).filter(questionNeedsAnswer);
+  const nextKeys = new Set(actionable.map(questionSoundKey).filter(Boolean));
+
+  if (!questionSoundBaselineDone) {
+    questionSoundBaselineDone = true;
+    knownQuestionSoundKeys = nextKeys;
+    return;
+  }
+
+  const newQuestion = actionable.find((question) => {
+    const key = questionSoundKey(question);
+    return key && !knownQuestionSoundKeys.has(key);
+  });
+  const hasNew = Boolean(newQuestion);
+  knownQuestionSoundKeys = nextKeys;
+
+  if (hasNew) {
+    playNotificationSound('question');
+    showCrmBrowserNotification(
+      'question',
+      'Новый вопрос Ozon',
+      `${questionProductName(newQuestion)} · ${previewText(newQuestion.text || 'Откройте вопрос')}`,
+      {
+        entityId: newQuestion.id,
+        tag: `arti-crm-question-${newQuestion.id}`,
+        url: crmNotificationUrl('question', newQuestion.id),
+      },
+    );
+  }
+}
+
+installNotificationSoundUnlock();
+registerPwaServiceWorker();
+window.artiCrmSetSoundNotificationsEnabled = setSoundNotificationsEnabled;
+window.artiCrmSetPushNotificationsEnabled = setPushNotificationsEnabled;
+window.artiCrmRequestNotificationPermission = requestCrmNotificationPermission;
+window.artiCrmSubscribePushNotifications = subscribeCrmPushNotifications;
 
 
 function notificationTypeLabel(type) {
@@ -359,6 +966,11 @@ async function loadNotifications({ silent = true } = {}) {
       if (newUnreadItems.length) {
         enqueueNotificationToasts(newUnreadItems);
         notificationsPanelOpen = true;
+        if (newUnreadItems.some(notificationLooksLikeMessage)) {
+          playNotificationSound('message');
+        } else if (newUnreadItems.some(notificationLooksLikeQuestion)) {
+          playNotificationSound('question');
+        }
       }
       rememberUnreadNotificationIds(unreadItems);
     }
@@ -376,7 +988,16 @@ async function loadNotifications({ silent = true } = {}) {
       const now = Date.now();
       if (newest && now - lastBrowserNotificationAt > 5000) {
         lastBrowserNotificationAt = now;
-        new Notification(newest.title || 'Новое уведомление', { body: newest.body || 'Arti CRM' });
+        showCrmBrowserNotification(
+          notificationLooksLikeQuestion(newest) ? 'question' : 'message',
+          newest.title || 'Новое уведомление',
+          newest.body || 'Arti CRM',
+          {
+            entityId: newest.chat_id || newest.question_id || newest.task_id || '',
+            tag: `arti-crm-notification-${newest.id || now}`,
+            url: newest.chat_id ? crmNotificationUrl('message', newest.chat_id) : '/',
+          },
+        );
       }
     }
     } catch (err) {
@@ -402,9 +1023,14 @@ async function toggleNotificationsPanel(force) {
     notificationsPanelOpen = !notificationsPanelOpen;
   }
   renderNotifications();
-  if ('Notification' in window && Notification.permission === 'default') {
-    Notification.requestPermission().catch(() => {});
+  if (browserSupportsWebPush()) {
+    if (Notification.permission === 'default') {
+      requestCrmNotificationPermission().catch(() => {});
+    } else if (Notification.permission === 'granted') {
+      subscribeCrmPushNotifications({ silent: true }).catch(err => console.warn('push subscribe from panel failed', err));
+    }
   }
+  updatePushNotificationUi();
 }
 
 async function markNotificationRead(notificationId, { silent = false } = {}) {
@@ -436,11 +1062,128 @@ async function markAllNotificationsRead() {
   await loadNotifications({ silent: false });
 }
 
+function safeJsonParse(value) {
+  try {
+    return JSON.parse(value);
+  } catch (_) {
+    return null;
+  }
+}
+
+function normalizeApiErrorDetail(status, rawBody) {
+  const parsed = safeJsonParse(rawBody);
+  if (!parsed) return rawBody || `HTTP ${status}`;
+
+  if (Array.isArray(parsed.detail)) {
+    return parsed.detail.map((item) => {
+      const field = Array.isArray(item.loc) ? item.loc.filter(part => part !== 'body').join('.') : '';
+      return `${field ? field + ': ' : ''}${item.msg || 'Ошибка заполнения'}`;
+    }).join('; ');
+  }
+
+  return parsed.detail || parsed.error || parsed.message || rawBody || `HTTP ${status}`;
+}
+
+function createApiError(status, rawBody, path) {
+  const parsed = safeJsonParse(rawBody);
+  const detail = normalizeApiErrorDetail(status, rawBody);
+  const error = new Error(`${status}: ${detail}`);
+  error.name = 'ApiError';
+  error.status = status;
+  error.detail = detail;
+  error.body = rawBody;
+  error.parsed = parsed;
+  error.path = path;
+  return error;
+}
+
 async function api(path, options = {}) {
+  const {
+    retryDelays = [],
+    retryWhen = null,
+    timeoutMs = 30000,
+    _csrfRetryDone = false,
+    ...fetchOptions
+  } = options || {};
+
+  for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
+    let timeoutId = null;
+    const controller = timeoutMs && !fetchOptions.signal ? new AbortController() : null;
+
+    try {
+      if (controller) {
+        timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+      }
+
+      const method = String(fetchOptions.method || 'GET').toUpperCase();
+      await ensureCsrfTokenForUnsafeMethod(method, path);
+      const response = await fetch(path, {
+        cache: 'no-store',
+        credentials: 'same-origin',
+        ...fetchOptions,
+        headers: withCsrfHeader({ 'Content-Type': 'application/json', ...(fetchOptions.headers || {}) }, method, path),
+        signal: fetchOptions.signal || controller?.signal,
+      });
+
+      if (!response.ok) {
+        const body = await response.text();
+        const error = createApiError(response.status, body, path);
+        if (isCsrfApiError(error) && isUnsafeHttpMethod(method) && !_csrfRetryDone) {
+          await refreshCsrfToken();
+          return api(path, { ...options, _csrfRetryDone: true });
+        }
+        if (response.status === 401) showLogin();
+
+        const shouldRetry = typeof retryWhen === 'function'
+          ? retryWhen(error, attempt)
+          : false;
+
+        if (shouldRetry && attempt < retryDelays.length) {
+          await sleep(retryDelays[attempt]);
+          continue;
+        }
+
+        throw error;
+      }
+
+      const text = await response.text();
+      if (!text) return null;
+      return safeJsonParse(text) ?? text;
+    } catch (err) {
+      const normalizedError = err?.name === 'AbortError'
+        ? Object.assign(new Error(`Request timeout after ${timeoutMs}ms: ${path}`), { name: 'TimeoutError', status: 0, path })
+        : err;
+
+      const shouldRetry = typeof retryWhen === 'function'
+        ? retryWhen(normalizedError, attempt)
+        : false;
+
+      if (shouldRetry && attempt < retryDelays.length) {
+        await sleep(retryDelays[attempt]);
+        continue;
+      }
+
+      throw normalizedError;
+    } finally {
+      if (timeoutId) window.clearTimeout(timeoutId);
+    }
+  }
+
+  return null;
+}
+
+async function apiForm(path, formData, options = {}) {
+  const method = options.method || 'POST';
+  const fetchOptions = options.fetchOptions || {};
+  const csrfRetryDone = !!options._csrfRetryDone;
+  await ensureCsrfTokenForUnsafeMethod(method, path);
   const response = await fetch(path, {
+    method,
     cache: 'no-store',
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-    ...options,
+    credentials: 'same-origin',
+    body: formData,
+    ...fetchOptions,
+    headers: withCsrfHeader(fetchOptions.headers || {}, method, path),
   });
   if (!response.ok) {
     const body = await response.text();
@@ -448,38 +1191,89 @@ async function api(path, options = {}) {
     try {
       const parsed = JSON.parse(body);
       detail = parsed.detail || parsed.error || body;
-      if (Array.isArray(parsed.detail)) {
-        detail = parsed.detail.map((item) => {
-          const field = Array.isArray(item.loc) ? item.loc.filter(part => part !== 'body').join('.') : '';
-          return `${field ? field + ': ' : ''}${item.msg || 'Ошибка заполнения'}`;
-        }).join('; ');
-      }
     } catch (_) {}
+    if (isCsrfApiError(response.status, detail) && !csrfRetryDone) {
+      await refreshCsrfToken();
+      return apiForm(path, formData, { ...options, _csrfRetryDone: true });
+    }
     if (response.status === 401) showLogin();
     throw new Error(`${response.status}: ${detail}`);
   }
   return response.json();
 }
 
-async function apiForm(path, formData, options = {}) {
-  const response = await fetch(path, {
-    method: options.method || 'POST',
-    cache: 'no-store',
-    body: formData,
-    ...(options.fetchOptions || {}),
-  });
-  if (!response.ok) {
-    const body = await response.text();
-    let detail = body;
-    try {
-      const parsed = JSON.parse(body);
-      detail = parsed.detail || parsed.error || body;
-    } catch (_) {}
-    if (response.status === 401) showLogin();
-    throw new Error(`${response.status}: ${detail}`);
-  }
-  return response.json();
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+function isMarketplaceRateLimitError(err) {
+  const message = String(err?.detail || err?.message || err || '');
+  const status = Number(err?.status || 0);
+  return status === 420
+    || status === 429
+    || /(too many requests|rate limit|hit rate limit|parallel requests|method_failure|businessId|METHOD_FAILURE)/i.test(message);
+}
+
+function friendlySendError(err) {
+  const message = String(err?.detail || err?.message || err || '');
+  if (isMarketplaceRateLimitError(err)) {
+    return 'Яндекс временно ограничил параллельные запросы. CRM уже сделала несколько повторных попыток, но лимит ещё не освободился. Подождите 10–20 секунд и отправьте снова.';
+  }
+  return message;
+}
+
+class SerialQueue {
+  constructor() {
+    this.tail = Promise.resolve();
+  }
+
+  enqueue(task) {
+    const run = this.tail.catch(() => {}).then(task);
+    this.tail = run.catch(() => {});
+    return run;
+  }
+}
+
+const outboundMessageQueue = new SerialQueue();
+
+async function sendCurrentChatMessageRequest(chatId, { text, imageFiles }) {
+  if (imageFiles?.length) {
+    const formData = new FormData();
+    imageFiles.forEach((file) => formData.append('images', file));
+    formData.append('caption', text || '');
+    return apiForm(`/api/chats/${chatId}/attachments`, formData);
+  }
+
+  return api(`/api/chats/${chatId}/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ text, author: 'manager' }),
+  });
+}
+
+async function sendCurrentChatMessageWithRetry(chatId, payload) {
+  const retryDelays = [1200, 2200, 4000, 6500];
+
+  return outboundMessageQueue.enqueue(async () => {
+    for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
+      try {
+        return await sendCurrentChatMessageRequest(chatId, payload);
+      } catch (err) {
+        const canRetry = isMarketplaceRateLimitError(err) && attempt < retryDelays.length;
+        if (!canRetry) throw err;
+
+        const waitMs = retryDelays[attempt];
+        const seconds = Math.ceil(waitMs / 1000);
+        setStatus(`Яндекс ограничил параллельные запросы — повтор через ${seconds}с`);
+        suppressFrontendSyncUntil = Date.now() + waitMs + 3500;
+        await sleep(waitMs);
+      }
+    }
+
+    return null;
+  });
+}
+
 
 function parseDate(value) {
   if (!value) return null;
@@ -542,6 +1336,65 @@ function chatSubtitleParts(chat) {
   if (chat.last_message_at) parts.push(`последнее: ${formatDateTime(chat.last_message_at)}`);
   if (shouldShowWaitingMarker(chat)) parts.push(waitingDurationText(chat.sla_waiting_since_at || chat.last_message_at));
   return parts.join(' · ');
+}
+
+function directMarketplaceChatUrl(chat) {
+  if (!chat) return '';
+
+  const rawMarketplace = String(chat.marketplace || '').toLowerCase();
+  const externalChatId = String(chat.external_chat_id || chat.chat_id || '').trim();
+
+  const metadata = chat.metadata && typeof chat.metadata === 'object' ? chat.metadata : {};
+  const explicitUrl =
+    chat.marketplace_chat_url ||
+    chat.external_chat_url ||
+    metadata.marketplace_chat_url ||
+    metadata.external_chat_url ||
+    metadata.chatUrl ||
+    metadata.chat_url ||
+    metadata.url ||
+    metadata.link;
+
+  if (explicitUrl && /^https?:\/\//i.test(String(explicitUrl))) {
+    return String(explicitUrl);
+  }
+
+  if (!externalChatId) return '';
+
+  if (rawMarketplace === 'ozon') {
+    return `https://seller.ozon.ru/app/messenger/?group=customers_v2&id=${encodeURIComponent(externalChatId)}`;
+  }
+
+  if (rawMarketplace === 'wildberries' || rawMarketplace === 'wb') {
+    const wbChatId = externalChatId.includes(':')
+      ? externalChatId.split(':').pop().trim()
+      : externalChatId;
+    if (!wbChatId) return '';
+    return `https://seller.wildberries.ru/chat-with-clients?chatId=${encodeURIComponent(wbChatId)}`;
+  }
+
+  return '';
+}
+
+function renderChatSubtitle(chat) {
+  const subtitleEl = $('chatSubtitle');
+  if (!subtitleEl) return;
+
+  subtitleEl.innerHTML = '';
+
+  const url = directMarketplaceChatUrl(chat);
+  subtitleEl.classList.toggle('hidden', !url);
+
+  if (!url) return;
+
+  const link = document.createElement('a');
+  link.className = 'marketplace-chat-link';
+  link.href = url;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.textContent = 'открыть чат';
+  link.title = 'Открыть диалог на маркетплейсе';
+  subtitleEl.appendChild(link);
 }
 
 
@@ -659,14 +1512,24 @@ async function loadAssignees() {
 
 function hydrateAssigneeSelects() {
   const chatSelect = $('assignedUserSelect');
-  if (chatSelect) {
-    const current = chatSelect.value || currentChat?.assigned_user_id || '';
-    chatSelect.innerHTML = assigneeOptions(current, true);
+  if (chatSelect && !(isMobileChatLayout() && document.activeElement === chatSelect)) {
+    if (currentChat) {
+      hydrateChatMetaControls(currentChat, { force: true });
+    } else {
+      const current = chatSelect.value || '';
+      chatSelect.innerHTML = assigneeOptions(current, true);
+    }
   }
   const taskSelect = $('taskAssignee');
   if (taskSelect) {
     const current = taskSelect.value || '';
     taskSelect.innerHTML = assigneeOptions(current, true);
+  }
+  const standaloneTaskSelect = $('taskStandaloneAssignee');
+  if (standaloneTaskSelect) {
+    const current = standaloneTaskSelect.value || '';
+    standaloneTaskSelect.innerHTML = assigneeOptions(current, true);
+    standaloneTaskSelect.value = current;
   }
 }
 
@@ -694,6 +1557,27 @@ async function patchTask(taskId, body, options = {}) {
   await loadAllTasks();
   await loadStats();
   return task;
+}
+
+async function deleteTask(taskId, options = {}) {
+  let result;
+  try {
+    result = await api(`/api/tasks/${taskId}/delete`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  } catch (err) {
+    // Backward compatibility for older backends that do not have the POST fallback yet.
+    if (err && (err.status === 404 || err.status === 405)) {
+      result = await api(`/api/tasks/${taskId}`, { method: 'DELETE' });
+    } else {
+      throw err;
+    }
+  }
+  if (currentChatId && options.refreshChat !== false) await openChat(currentChatId);
+  await loadAllTasks();
+  await loadStats();
+  return result;
 }
 
 function bindTaskCardActions(item, options = {}) {
@@ -804,11 +1688,8 @@ function renderChatSettingsControls(options = {}) {
     statusFilter.innerHTML = statusOptions(selected, false, '');
   }
 
-  const chatStatus = $('chatStatus');
-  if (chatStatus) {
-    const selected = currentChat?.status || chatStatus.value || 'new';
-    chatStatus.innerHTML = statusOptions(selected, true, '');
-    chatStatus.value = selected;
+  if (currentChat && options.updateChatControls !== false) {
+    hydrateChatMetaControls(currentChat, { force: Boolean(options.forceChatControls) });
   }
 
   renderChatSettingsLists();
@@ -819,27 +1700,63 @@ function renderChatSettingsLists() {
   if (!statusesList) return;
 
   const statuses = chatSettings.statuses || [];
-  statusesList.innerHTML = statuses.length ? statuses.map(s => `
-    <article class="status-settings-row" data-status-id="${s.id}">
-      <div class="status-settings-main">
-        <input data-status-title value="${escapeHtml(s.title)}" aria-label="Название статуса" />
-        <span class="status-key-hint">${escapeHtml(s.key || '')}</span>
-      </div>
+  statusesList.innerHTML = statuses.length ? statuses.map(s => {
+    const color = s.color || 'orange';
+    const colorMeta = chatStatusColors[color] || chatStatusColors.orange;
+    const active = s.is_active !== 0 && s.is_active !== false;
+    return `
+      <article class="status-settings-row status-settings-row-compact" data-status-id="${s.id}">
+        <div class="status-compact-view">
+          <div class="status-compact-main">
+            <span class="status-color-dot status-color-dot-${escapeHtml(color)}" aria-hidden="true">${escapeHtml(colorMeta?.dot || '•')}</span>
+            <div class="status-compact-title-wrap">
+              <strong class="status-compact-title">${escapeHtml(s.title || 'Без названия')}</strong>
+              <span class="status-key-hint">${escapeHtml(s.key || '')}</span>
+            </div>
+          </div>
 
-      <select class="status-color-select" data-status-color aria-label="Цвет статуса">
-        ${statusColorChoices(s.color || 'orange')}
-      </select>
+          <div class="status-compact-meta">
+            <span class="status-order-chip">${Number(s.sort_order || 0)}</span>
+            <span class="status-active-chip ${active ? 'is-active' : 'is-inactive'}">${active ? 'активен' : 'скрыт'}</span>
+          </div>
 
-      <input class="status-sort-input" data-status-sort type="number" value="${Number(s.sort_order || 0)}" aria-label="Порядок" />
+          <div class="status-row-actions" aria-label="Действия со статусом">
+            <button type="button" class="status-icon-btn" data-status-action="edit" aria-label="Редактировать статус" title="Редактировать">
+              <span aria-hidden="true">✎</span>
+            </button>
+            <button type="button" class="status-icon-btn status-icon-btn-danger" data-status-action="delete" aria-label="Удалить статус" title="Удалить">
+              <span aria-hidden="true">×</span>
+            </button>
+          </div>
+        </div>
 
-      <label class="status-active-toggle">
-        <input data-status-active type="checkbox" ${s.is_active ? 'checked' : ''} />
-        <span>активен</span>
-      </label>
-
-      <button type="button" class="crm-light-btn status-delete-btn" data-status-action="delete">Удалить</button>
-    </article>
-  `).join('') : '<p class="muted">Статусов пока нет.</p>';
+        <div class="status-edit-panel hidden" data-status-edit-panel>
+          <label>
+            <span>Название</span>
+            <input data-status-title value="${escapeHtml(s.title)}" aria-label="Название статуса" />
+          </label>
+          <label>
+            <span>Цвет</span>
+            <select class="status-color-select" data-status-color aria-label="Цвет статуса">
+              ${statusColorChoices(color)}
+            </select>
+          </label>
+          <label>
+            <span>Порядок</span>
+            <input class="status-sort-input" data-status-sort type="number" value="${Number(s.sort_order || 0)}" aria-label="Порядок" />
+          </label>
+          <label class="status-active-toggle">
+            <input data-status-active type="checkbox" ${active ? 'checked' : ''} />
+            <span>активен</span>
+          </label>
+          <div class="status-edit-actions">
+            <button type="button" class="crm-light-btn" data-status-action="cancel">Отмена</button>
+            <button type="button" data-status-action="save">Сохранить</button>
+          </div>
+        </div>
+      </article>
+    `;
+  }).join('') : '<p class="muted">Статусов пока нет.</p>';
 }
 
 async function saveAllChatStatuses() {
@@ -908,17 +1825,25 @@ function taskTypeOptions(selectedId = '', includeEmpty = true) {
   }).join('');
 }
 
-function selectedTaskType() {
-  const select = $('taskTypeSelect');
+function taskTypeFromSelect(selectId) {
+  const select = $(selectId);
   if (!select) return null;
   const id = select.value ? Number(select.value) : null;
   if (!id) return null;
   return activeTaskTypesList().find(type => Number(type.id) === Number(id)) || null;
 }
 
+function selectedTaskType() {
+  return taskTypeFromSelect('taskTypeSelect');
+}
+
+function selectedStandaloneTaskType() {
+  return taskTypeFromSelect('taskStandaloneType');
+}
+
 function hydrateTaskTypeSelects() {
-  const select = $('taskTypeSelect');
-  if (select) {
+  const hydrateSingleTaskTypeSelect = (select, afterHydrate) => {
+    if (!select) return;
     const current = select.value || '';
     select.innerHTML = taskTypeOptions(current, true);
     const hasCurrentOption = Array.from(select.options || []).some(option => option.value === String(current));
@@ -927,8 +1852,12 @@ function hydrateTaskTypeSelects() {
     } else {
       select.value = current;
     }
-    updateTaskCreateCommentLabel();
-  }
+    if (typeof afterHydrate === 'function') afterHydrate();
+  };
+
+  hydrateSingleTaskTypeSelect($('taskTypeSelect'), updateTaskCreateCommentLabel);
+  hydrateSingleTaskTypeSelect($('taskStandaloneType'), updateStandaloneTaskCreateCommentLabel);
+
   document.querySelectorAll('[data-task-type]').forEach(typeSelect => {
     const current = typeSelect.value || typeSelect.dataset.currentTaskType || '';
     typeSelect.innerHTML = taskTypeOptions(current, true);
@@ -942,6 +1871,71 @@ function updateTaskCreateCommentLabel() {
   const input = $('taskTitle');
   if (label) label.textContent = fieldLabel;
   if (input) input.placeholder = fieldLabel === 'Комментарий' ? 'Комментарий / адрес' : fieldLabel;
+}
+
+
+function updateStandaloneTaskCreateCommentLabel() {
+  const selectedType = selectedStandaloneTaskType();
+  const fieldLabel = selectedType?.comment_label || selectedType?.field_label || 'Комментарий';
+  const label = $('taskStandaloneCommentFieldLabel');
+  const input = $('taskStandaloneTitle');
+  if (label) label.textContent = fieldLabel;
+  if (input) input.placeholder = fieldLabel === 'Комментарий' ? 'Комментарий / задача' : fieldLabel;
+}
+
+function resetStandaloneTaskForm() {
+  if ($('taskStandaloneType')) $('taskStandaloneType').value = '';
+  if ($('taskStandaloneAssignee')) $('taskStandaloneAssignee').value = '';
+  if ($('taskStandaloneDueAt')) $('taskStandaloneDueAt').value = '';
+  if ($('taskStandaloneTitle')) $('taskStandaloneTitle').value = '';
+  updateStandaloneTaskCreateCommentLabel();
+}
+
+function toggleStandaloneTaskCreatePanel(force) {
+  const panel = $('taskStandaloneCreatePanel');
+  const button = $('taskStandaloneNewBtn');
+  if (!panel) return;
+  const shouldOpen = typeof force === 'boolean' ? force : panel.classList.contains('hidden');
+  panel.classList.toggle('hidden', !shouldOpen);
+  if (button) button.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
+  if (shouldOpen) {
+    hydrateTaskTypeSelects();
+    hydrateAssigneeSelects();
+    setTimeout(() => $('taskStandaloneTitle')?.focus(), 40);
+  }
+}
+
+async function submitStandaloneTaskCreate(event) {
+  event.preventDefault();
+  const form = $('taskStandaloneForm');
+  const submitBtn = $('taskStandaloneSubmitBtn') || form?.querySelector('button[type="submit"]');
+  const title = ($('taskStandaloneTitle')?.value || '').trim();
+  if (!title) {
+    notify('Укажите текст задачи', 'Поле задачи не может быть пустым');
+    $('taskStandaloneTitle')?.focus();
+    return;
+  }
+  if (submitBtn) submitBtn.disabled = true;
+  try {
+    await api('/api/tasks/standalone', {
+      method: 'POST',
+      body: JSON.stringify({
+        title,
+        task_type_id: $('taskStandaloneType')?.value ? Number($('taskStandaloneType').value) : null,
+        assigned_user_id: $('taskStandaloneAssignee')?.value ? Number($('taskStandaloneAssignee').value) : null,
+        due_at: $('taskStandaloneDueAt')?.value || null,
+      }),
+    });
+    resetStandaloneTaskForm();
+    toggleStandaloneTaskCreatePanel(false);
+    await loadAllTasks();
+    await loadStats();
+    setStatus('Задача создана');
+  } catch (err) {
+    notify('Задача не создана', String(err.message || err));
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
+  }
 }
 
 function renderTaskTypeSettingsList() {
@@ -1068,21 +2062,97 @@ async function handleTaskTypeSettingsChange(event) {
 }
 
 function isMobileChatLayout() {
-  return window.matchMedia && window.matchMedia('(max-width: 760px)').matches;
+  return window.matchMedia && window.matchMedia('(max-width: 900px)').matches;
+}
+
+function isMobileChatOpen() {
+  return isMobileChatLayout() && document.body.classList.contains('mobile-chat-open');
 }
 
 function setMobileChatOpen(isOpen) {
-  document.body.classList.toggle('mobile-chat-open', Boolean(isOpen));
+  const open = Boolean(isOpen) && isMobileChatLayout();
+  const chatsView = $('chatsView');
+  const conversation = $('conversation');
+  const chatPanel = $('chatPanel');
+
+  document.body.classList.toggle('mobile-chat-open', open);
+  document.documentElement.classList.toggle('mobile-chat-lock', open);
+  document.body.classList.toggle('mobile-chat-lock', open);
+
+  chatsView?.classList.toggle('mobile-chat-mode', open);
+  chatsView?.classList.toggle('mobile-chat-open', open);
+  conversation?.classList.toggle('mobile-chat-open', open);
+  chatPanel?.classList.toggle('mobile-chat-open', open);
+
+  if (open) {
+    $('emptyState')?.classList.add('hidden');
+    chatPanel?.classList.remove('hidden');
+    bindMobileInstantChatActions();
+    conversation?.scrollTo?.({ top: 0, left: 0, behavior: 'auto' });
+  } else {
+    toggleExtraMenu(false);
+    closeActiveExtraPanel();
+  }
 }
 
-function backToChatListMobile() {
-  // On mobile this is a true screen transition: list -> chat -> list.
-  // Do not clear currentChatId, otherwise the selected item and draft context are lost,
-  // but prevent auto-refresh from opening the chat again by itself.
+function backToChatListMobile(event) {
+  event?.preventDefault?.();
+  event?.stopPropagation?.();
+
   mobileChatClosedByUser = true;
   openChatRequestSeq += 1;
   setMobileChatOpen(false);
-  renderChatList();
+  renderChatList({ force: true });
+  syncRouteForView('chats');
+}
+
+function pauseMobileChatBackgroundWork(ms = 1800) {
+  if (!isMobileChatLayout()) return;
+  const until = Date.now() + ms;
+  chatInteractionBusyUntil = Math.max(chatInteractionBusyUntil || 0, until);
+  suppressFrontendSyncUntil = Math.max(suppressFrontendSyncUntil || 0, until);
+}
+
+function isExtraMenuOpen() {
+  const menu = $('extraMenu');
+  return Boolean(menu && !menu.classList.contains('hidden'));
+}
+
+function isExtraPanelOpen() {
+  const panel = $('extraPanel');
+  return Boolean(panel && !panel.classList.contains('hidden'));
+}
+
+function isChatOverlayInteractionOpen() {
+  return isExtraMenuOpen() || isExtraPanelOpen() || replyTemplatesPanelOpen;
+}
+
+function isChatLocalControlActive() {
+  const active = document.activeElement;
+  return Boolean(active && active.closest?.('.chat-header, .chat-controls, .extra-menu, .extra-panel, .composer'));
+}
+
+function bindMobileInstantChatActions() {
+  const conversation = $('conversation');
+  if (!conversation || conversation.dataset.mobileInstantActionsBound === '1') return;
+  conversation.dataset.mobileInstantActionsBound = '1';
+
+  conversation.addEventListener('pointerdown', (event) => {
+    if (!isMobileChatLayout()) return;
+
+    const interactiveTarget = event.target.closest?.('button, select, input, textarea, [data-extra], .message-actions-btn, .message-actions-menu button');
+    if (interactiveTarget) {
+      if (interactiveTarget.matches?.('#chatStatus, #assignedUserSelect')) {
+        markChatMetaControlBusy(9000);
+      } else {
+        pauseMobileChatBackgroundWork(2200);
+      }
+    }
+
+    // [data-extra] buttons are bound directly in bindAppEvents().
+    // Direct binding is more reliable on iOS Safari than relying on this
+    // conversation-level delegated pointerdown.
+  }, { passive: false });
 }
 
 let messagesAutoScrollToken = 0;
@@ -1207,12 +2277,15 @@ async function loadSyncStatus() {
 // The browser polls more often than before so new marketplace messages are
 // imported and shown without a manual page reload. Server-side throttles still
 // protect marketplace APIs from too many requests.
-const FRONTEND_OZON_SYNC_INTERVAL_MS = 15000;
-const FRONTEND_OZON_SYNC_MIN_GAP_MS = 12000;
-const FRONTEND_OZON_QUESTIONS_SYNC_INTERVAL_MS = 60000;
-const FRONTEND_OZON_QUESTIONS_SYNC_MIN_GAP_MS = 45000;
-const ACTIVE_CHAT_UI_REFRESH_INTERVAL_MS = 10000;
-const ACTIVE_CHAT_UI_REFRESH_MIN_GAP_MS = 8000;
+const FRONTEND_OZON_SYNC_INTERVAL_MS = 5000;
+const FRONTEND_OZON_SYNC_MIN_GAP_MS = 5000;
+const FRONTEND_OZON_QUESTIONS_SYNC_INTERVAL_MS = 15000;
+const FRONTEND_OZON_QUESTIONS_SYNC_MIN_GAP_MS = 12000;
+const ACTIVE_CHAT_UI_REFRESH_INTERVAL_MS = 9000;
+const ACTIVE_CHAT_UI_REFRESH_MIN_GAP_MS = 7000;
+const ACTIVE_CHAT_MESSAGES_REFRESH_INTERVAL_MS = 3000;
+const ALERTS_REFRESH_INTERVAL_MS = 10000;
+const NOTIFICATIONS_REFRESH_INTERVAL_MS = 10000;
 
 function isFrontendSyncAllowed() {
   if (!appInitialized || !currentUser) return false;
@@ -1236,30 +2309,33 @@ async function runFrontendOzonFastSync(options = {}) {
   frontendSyncInFlight = true;
   frontendSyncLastStartedAt = now;
   try {
-    if (!silent) setStatus('Обновляем чаты Ozon...');
-    const result = await api('/api/sync/operator', { method: 'POST' });
+    if (!silent) setStatus('Запускаем фоновую синхронизацию...');
+    const result = await api('/api/sync/operator', { method: 'POST', timeoutMs: 5000 });
     frontendSyncLastSuccessAt = Date.now();
 
-    const chatsCount = Number(result?.count || 0);
-    const messagesCount = Number(result?.messages_count || 0);
-    const changed = chatsCount > 0 || messagesCount > 0 || Number(result?.reopened_closed_chats || 0) > 0;
+    // /api/sync/operator is async by default now: it starts marketplace polling
+    // and returns immediately. New messages are picked up by lightweight local
+    // refresh below and by the 5-second active-chat poll.
+    const lastResult = result?.last || result || {};
+    const chatsCount = Number(lastResult?.count || 0);
+    const messagesCount = Number(lastResult?.messages_count || 0);
+    const changed = messagesCount > 0 || chatsCount > 0 || Number(lastResult?.reopened_closed_chats || 0) > 0;
 
     if (activeView === 'chats') {
-      // On shared hosting each chat-list request can take seconds. Do not reload
-      // chats on every polling tick; only refresh when the sync reports a real
-      // update. This keeps opening a dialog from waiting behind background polls.
-      if (changed) {
-        await loadChats();
-        if (messagesCount > 0 && currentChatId && !chatOpenInFlight && !(isMobileChatLayout() && mobileChatClosedByUser)) {
-          await openChat(currentChatId, { keepScroll: true, silent: true });
-        }
+      await refreshChatListOnly({ force: changed });
+      if (currentChatId && !chatOpenInFlight) {
+        await refreshCurrentChatMessagesOnly({ force: changed });
       }
     } else if (changed) {
       await loadStats();
     }
 
     if (!silent || changed) {
-      setStatus(`Маркетплейсы обновлены: чатов ${chatsCount}, сообщений ${messagesCount}`);
+      if (result?.status === 'started' || result?.status === 'running') {
+        setStatus('Фоновая синхронизация запущена');
+      } else {
+        setStatus(`Маркетплейсы обновлены: чатов ${chatsCount}, сообщений ${messagesCount}`);
+      }
     }
     return result;
   } catch (err) {
@@ -1273,25 +2349,29 @@ async function runFrontendOzonFastSync(options = {}) {
 }
 
 async function runFrontendOzonQuestionsSync(options = {}) {
-  const { silent = true, force = false } = options;
+  const { silent = true, force = false, respectMinGap = false } = options;
   if (!appInitialized || !currentUser) return null;
   if (document.hidden) return null;
   if (activeView !== 'questions' && !force) return null;
   if (questionsSyncPromise) return questionsSyncPromise;
   const now = Date.now();
-  if (!force && now - questionsSyncLastStartedAt < FRONTEND_OZON_QUESTIONS_SYNC_MIN_GAP_MS) return null;
+  if ((!force || respectMinGap) && now - questionsSyncLastStartedAt < FRONTEND_OZON_QUESTIONS_SYNC_MIN_GAP_MS) return null;
 
   questionsSyncLastStartedAt = now;
   questionsSyncPromise = (async () => {
     try {
       if (!silent) setStatus('Загружаю вопросы Ozon…');
-      const result = await api('/api/questions/sync/ozon', { method: 'POST' });
+      const result = await api('/api/questions/sync/ozon', { method: 'POST', timeoutMs: 12000 });
       const count = Number(result?.count || 0);
-      if (activeView === 'questions') {
-        await loadQuestions();
-        if (currentQuestionId) await openQuestion(currentQuestionId, { silent: true });
+
+      // Even outside the Questions section, update the local questions array so
+      // sound/PWA notifications can fire without waiting until the user opens the tab.
+      await loadQuestions({ render: activeView === 'questions' });
+
+      if (activeView === 'questions' && currentQuestionId) {
+        await openQuestion(currentQuestionId, { silent: true });
       }
-      await loadStats();
+      if (activeView === 'questions' || count > 0) await loadStats();
       if (!silent || count > 0) setStatus(`Вопросы Ozon: загружено ${count}`);
       return result;
     } catch (err) {
@@ -1317,12 +2397,15 @@ function runFrontendQuestionsSyncSoon(reason = '') {
 function startFrontendAutoSync() {
   if (frontendSyncTimer) clearInterval(frontendSyncTimer);
   if (chatUiRefreshTimer) clearInterval(chatUiRefreshTimer);
+  if (alertsTimer) clearInterval(alertsTimer);
 
   frontendSyncTimer = setInterval(() => {
     runFrontendOzonFastSync({ silent: true }).catch(err => console.warn('frontend sync timer failed', err));
-    if (activeView === 'questions') {
-      runFrontendOzonQuestionsSync({ silent: true }).catch(err => console.warn('frontend questions sync timer failed', err));
-    }
+    runFrontendOzonQuestionsSync({
+      silent: true,
+      force: activeView !== 'questions',
+      respectMinGap: activeView !== 'questions',
+    }).catch(err => console.warn('frontend questions sync timer failed', err));
   }, FRONTEND_OZON_SYNC_INTERVAL_MS);
 
   // A separate lightweight UI poll fixes the case when the backend already
@@ -1330,12 +2413,31 @@ function startFrontendAutoSync() {
   // case /api/sync/operator may return 0 new messages, but the open CRM tab
   // still needs to re-read chats/messages from the local database.
   chatUiRefreshTimer = setInterval(() => {
-    refreshActiveChatUi({ silent: true }).catch(err => console.warn('chat UI refresh timer failed', err));
-  }, ACTIVE_CHAT_UI_REFRESH_INTERVAL_MS);
+    if (activeView !== 'chats') return;
+    refreshChatListOnly({ force: false }).catch(err => console.warn('chat list refresh timer failed', err));
+    refreshCurrentChatMessagesOnly({ force: false }).catch(err => console.warn('active chat messages timer failed', err));
+  }, ACTIVE_CHAT_MESSAGES_REFRESH_INTERVAL_MS);
+
+  // Dedicated alert polling: keep notification/sound/PWA checks quick even
+  // when the operator is not currently inside the Chats or Questions section.
+  alertsTimer = setInterval(() => {
+    if (document.hidden) return;
+    loadNotifications().catch(err => console.warn('notifications alert poll failed', err));
+    if (activeView !== 'chats') {
+      loadChats({ withStats: false, render: false }).catch(err => console.warn('chat alert poll failed', err));
+    }
+  }, ALERTS_REFRESH_INTERVAL_MS);
 }
 
 function runFrontendSyncSoon(reason = '') {
   window.setTimeout(() => {
+    if (activeView === 'chats') {
+      refreshChatListOnly({ force: reason === 'visible' || reason === 'focus' })
+        .catch(err => console.warn('chat list quick refresh failed', err));
+      refreshCurrentChatMessagesOnly({ force: reason === 'visible' || reason === 'focus' })
+        .catch(err => console.warn('active chat quick refresh failed', err));
+    }
+
     if (Date.now() >= suppressFrontendSyncUntil && !outboundSendInFlight) {
       runFrontendOzonFastSync({ silent: true, force: reason === 'startup' }).catch(err => console.warn('frontend sync failed', err));
     }
@@ -1349,6 +2451,7 @@ async function refreshActiveChatUi(options = {}) {
   if (activeView !== 'chats') return null;
   if (frontendSyncInFlight || chatOpenInFlight || activeChatRefreshInFlight) return null;
   if (outboundSendInFlight) return null;
+  if (Date.now() < suppressFrontendSyncUntil || Date.now() < chatInteractionBusyUntil) return null;
 
   const now = Date.now();
   if (!force && now - activeChatRefreshLastStartedAt < ACTIVE_CHAT_UI_REFRESH_MIN_GAP_MS) return null;
@@ -1356,9 +2459,10 @@ async function refreshActiveChatUi(options = {}) {
   activeChatRefreshInFlight = true;
   activeChatRefreshLastStartedAt = now;
   try {
-    await loadChats();
-    if (currentChatId && !(isMobileChatLayout() && mobileChatClosedByUser)) {
-      await openChat(currentChatId, { keepScroll: true, silent: true });
+    await loadChats({ withStats: false, render: !isMobileChatOpen() });
+
+    if (currentChatId && !mobileChatClosedByUser) {
+      await refreshCurrentChatMessagesOnly({ force });
     }
     return true;
   } catch (err) {
@@ -1393,31 +2497,148 @@ async function loadStats() {
   }
 }
 
-async function loadChats() {
-  if (chatsLoadPromise) return chatsLoadPromise;
-  chatsLoadPromise = (async () => {
-    const params = new URLSearchParams();
-  const marketplaceEl = $('marketplaceFilter');
-  const statusEl = $('statusFilter');
-  const funnelEl = $('funnelFilter');
-  const marketplace = marketplaceEl ? marketplaceEl.value : '';
-  const status = statusEl ? statusEl.value : '';
-  const funnelId = funnelEl ? funnelEl.value : '';
-  if (marketplace) params.set('marketplace', marketplace);
-  if (chatScope === 'archive') {
-    params.set('archived', 'true');
-  } else {
-    if (status) params.set('status', status);
-    if (funnelId) params.set('funnel_id', funnelId);
-    if (chatOwnerScope === 'mine') params.set('mine', 'true');
+function currentChatMessageSearch() {
+  const input = $('chatSearchInput');
+  return String(input?.value ?? chatMessageSearch ?? '').trim();
+}
+
+function updateChatSearchUi() {
+  const query = currentChatMessageSearch();
+  const box = $('chatSearchBox');
+  const toggle = $('chatSearchToggleBtn');
+  const clearBtn = $('chatSearchClearBtn');
+  const isOpen = Boolean(box && !box.classList.contains('hidden'));
+  toggle?.classList.toggle('active', Boolean(query));
+  toggle?.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+  clearBtn?.classList.toggle('hidden', !query);
+}
+
+function setChatSearchOpen(open = true) {
+  const box = $('chatSearchBox');
+  const input = $('chatSearchInput');
+  if (!box) return;
+
+  box.classList.toggle('hidden', !open);
+  updateChatSearchUi();
+
+  if (open && input) {
+    window.setTimeout(() => {
+      input.focus();
+      input.select();
+    }, 0);
+  }
+}
+
+function resetChatListMobileLimit() {
+  chatListMobileRenderLimit = CHAT_LIST_MOBILE_INITIAL_LIMIT;
+  chatListLastRenderKey = '';
+}
+
+function currentChatListRenderKey() {
+  const marketplace = $('marketplaceFilter')?.value || '';
+  const status = $('statusFilter')?.value || '';
+  const funnel = $('funnelFilter')?.value || '';
+  const search = currentChatMessageSearch();
+  return [chatScope, chatOwnerScope, marketplace, status, funnel, search].join('|');
+}
+
+function scheduleChatMessageSearch() {
+  clearTimeout(chatSearchTimer);
+  chatSearchTimer = window.setTimeout(() => {
+    chatMessageSearch = currentChatMessageSearch();
+    resetChatListMobileLimit();
+    updateChatSearchUi();
+    loadChats({ withStats: false }).catch(err => notify('Поиск по сообщениям', String(err.message || err)));
+  }, 260);
+}
+
+function clearChatMessageSearch() {
+  clearTimeout(chatSearchTimer);
+  chatMessageSearch = '';
+  const input = $('chatSearchInput');
+  if (input) input.value = '';
+  resetChatListMobileLimit();
+  updateChatSearchUi();
+  loadChats({ withStats: false }).catch(err => notify('Поиск по сообщениям', String(err.message || err)));
+  input?.focus();
+}
+
+function bindChatListInfiniteScroll() {
+  const list = $('chatList');
+  if (!list || chatListInfiniteScrollBound) return;
+  chatListInfiniteScrollBound = true;
+
+  list.addEventListener('scroll', () => {
+    if (!isMobileChatLayout() || isMobileChatOpen()) return;
+    if (!chats || !chats.length) return;
+
+    const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 220;
+    if (!nearBottom) return;
+
+    const visibleChats = (chats || []).filter(chat => chatScope === 'archive' || !isClosedWorkflowStatus(chat.status, chat.status_label));
+    if (chatListMobileRenderLimit >= visibleChats.length) return;
+
+    const previousScrollTop = list.scrollTop;
+    chatListMobileRenderLimit = Math.min(chatListMobileRenderLimit + CHAT_LIST_MOBILE_PAGE_SIZE, visibleChats.length);
+    renderChatList({ force: true, preserveScrollTop: previousScrollTop });
+  }, { passive: true });
+}
+
+function renderLoadedChats() {
+  const chatCountLabel = $('chatCountLabel');
+  if (chatCountLabel) chatCountLabel.textContent = String((chats || []).length);
+  renderChatList();
+  renderScopeTabs();
+  updateChatSearchUi();
+}
+
+async function loadChats(options = {}) {
+  const { withStats = true, render = true } = options;
+
+  // v48: background alert polling can call loadChats({ render:false }).
+  // If the operator opens Chats while that request is still running, the old
+  // shared promise returned without rendering, so mobile/desktop looked like
+  // "nothing loads" until the next timer. Always render for visible callers
+  // after the shared promise resolves.
+  if (chatsLoadPromise) {
+    const existing = await chatsLoadPromise;
+    if (render) renderLoadedChats();
+    if (withStats) await loadStats();
+    return existing;
   }
 
-    chats = await api(`/api/chats?${params.toString()}`);
-    const chatCountLabel = $('chatCountLabel');
-    if (chatCountLabel) chatCountLabel.textContent = String(chats.length);
-    renderChatList();
-    renderScopeTabs();
-    await loadStats();
+  chatsLoadPromise = (async () => {
+    const params = new URLSearchParams();
+    const marketplaceEl = $('marketplaceFilter');
+    const statusEl = $('statusFilter');
+    const funnelEl = $('funnelFilter');
+    const marketplace = marketplaceEl ? marketplaceEl.value : '';
+    const status = statusEl ? statusEl.value : '';
+    const funnelId = funnelEl ? funnelEl.value : '';
+    const searchQuery = currentChatMessageSearch();
+    chatMessageSearch = searchQuery;
+    const renderKey = currentChatListRenderKey();
+    if (renderKey !== chatListLastRenderKey) {
+      resetChatListMobileLimit();
+      chatListLastRenderKey = renderKey;
+    }
+    if (marketplace) params.set('marketplace', marketplace);
+    if (chatScope === 'archive') {
+      params.set('archived', 'true');
+    } else {
+      if (status) params.set('status', status);
+      if (funnelId) params.set('funnel_id', funnelId);
+      if (chatOwnerScope === 'mine') params.set('mine', 'true');
+    }
+
+    if (searchQuery.length >= 2) params.set('q', searchQuery);
+
+    chats = await api(`/api/chats?${params.toString()}`, { timeoutMs: 15000 });
+    trackChatMessageSounds(chats || []);
+
+    if (render) renderLoadedChats();
+
+    if (withStats) await loadStats();
     return chats;
   })();
   try {
@@ -1464,7 +2685,7 @@ async function refreshVisibleData() {
     // Chat view is the heaviest view on shared hosting. Do not reload the open
     // dialog on passive timers; frontend fast-sync refreshes it only when new
     // messages are imported, and the Refresh button still calls this explicitly.
-    await loadChats();
+    await loadChats({ render: !isMobileChatOpen() });
     await loadSyncStatus();
   } catch (err) {
     console.warn('auto refresh failed', err);
@@ -1541,23 +2762,194 @@ function switchChatOwnerScope(scope) {
   loadChats().catch(err => notify('Ошибка загрузки чатов', String(err.message || err)));
 }
 
-function renderChatList() {
-  const list = $('chatList');
-  if (!list) return;
-  list.innerHTML = '';
-  if (!chats.length) {
-    list.innerHTML = `<div class="chat-item empty-chat-item"><p>${chatScope === 'archive' ? 'В архиве пока нет закрытых чатов.' : 'Активных чатов пока нет. Маркетплейсы обновляются автоматически в фоне.'}</p></div>`;
+
+function runWhenBrowserIsIdle(callback, timeout = 350) {
+  if (typeof window.requestIdleCallback === 'function') {
+    window.requestIdleCallback(callback, { timeout });
     return;
   }
+  window.setTimeout(callback, Math.min(timeout, 120));
+}
+
+function getChatSummaryById(chatId) {
+  const id = Number(chatId);
+  return (chats || []).find((chat) => Number(chat.id) === id) || null;
+}
+
+function paintChatHeader(chat, options = {}) {
+  if (!chat) return;
+
+  if ($('chatTitle')) $('chatTitle').textContent = `${customerLabel(chat)}`;
+
+  const chatMarketplaceBadge = $('chatMarketplaceBadge');
+  if (chatMarketplaceBadge) {
+    const mp = String(chat.marketplace || '').toLowerCase();
+    chatMarketplaceBadge.textContent = marketplaceNames[chat.marketplace] || chat.marketplace || '';
+    chatMarketplaceBadge.className = `marketplace-pill ${mp}`;
+    chatMarketplaceBadge.classList.toggle('hidden', !chatMarketplaceBadge.textContent);
+  }
+
+  if ($('chatAvatar')) $('chatAvatar').textContent = customerLabel(chat).trim().slice(0, 1).toUpperCase() || 'A';
+
+  renderChatSubtitle(chat);
+
+  if (options.updateControls !== false) {
+    hydrateChatMetaControls(chat, { force: Boolean(options.forceControls) });
+  }
+
+  if ($('customerNameInput') && document.activeElement !== $('customerNameInput')) {
+    $('customerNameInput').value = chat.customer_name || '';
+  }
+}
+
+function paintChatShellFromSummary(chatId, previousChatId) {
+  const summary = getChatSummaryById(chatId);
+  if (summary) {
+    paintChatHeader(summary, { forceControls: true });
+  }
+
+  const messagesBox = $('messages');
+  if (messagesBox && Number(previousChatId) !== Number(chatId)) {
+    messagesBox.innerHTML = '<div class="empty-card chat-loading-card">Загружаю диалог…</div>';
+  }
+
+  renderAiSelectionBar();
+}
+
+async function refreshChatListOnly(options = {}) {
+  const { force = false } = options;
+  if (!appInitialized || !currentUser) return null;
+  if (document.hidden) return null;
+  if (activeView !== 'chats') return null;
+  if (chatOpenInFlight || outboundSendInFlight) return null;
+  if (Date.now() < suppressFrontendSyncUntil || Date.now() < chatInteractionBusyUntil || isChatMetaControlBusy()) return null;
+
+  const now = Date.now();
+  if (!force && now - chatListRefreshLastStartedAt < 12000) return null;
+  chatListRefreshLastStartedAt = now;
+
+  try {
+    await loadChats({ withStats: false, render: !isMobileChatOpen() });
+    return true;
+  } catch (err) {
+    console.warn('chat list refresh failed', err);
+    return null;
+  }
+}
+
+function chatMessagesSignature(messages) {
+  return (messages || [])
+    .map((message) => `${message.id || ''}:${message.direction || ''}:${message.created_at || ''}:${message.updated_at || ''}:${String(message.text || '').length}`)
+    .join('|');
+}
+
+function shouldKeepMessagesAtBottom(box) {
+  return !box || messagesDistanceFromBottom(box) < 120;
+}
+
+async function refreshCurrentChatMessagesOnly(options = {}) {
+  const { force = false } = options;
+  if (!appInitialized || !currentUser) return null;
+  if (document.hidden) return null;
+  if (activeView !== 'chats') return null;
+  if (!currentChatId) return null;
+  if (chatOpenInFlight || outboundSendInFlight || activeChatMessagesRefreshInFlight) return null;
+  if (!force && isMobileChatLayout() && (isChatOverlayInteractionOpen() || isChatLocalControlActive() || isChatMetaControlBusy())) return null;
+  if (!force && Date.now() < chatInteractionBusyUntil) return null;
+
+  const now = Date.now();
+  if (!force && now - activeChatMessagesRefreshLastStartedAt < ACTIVE_CHAT_UI_REFRESH_MIN_GAP_MS) return null;
+
+  activeChatMessagesRefreshInFlight = true;
+  activeChatMessagesRefreshLastStartedAt = now;
+
+  const chatId = Number(currentChatId);
+  const messagesBox = $('messages');
+  const keepAtBottom = shouldKeepMessagesAtBottom(messagesBox);
+  const mobileLayout = isMobileChatLayout();
+  const messagesLimit = mobileLayout ? 35 : 120;
+
+  try {
+    const chat = await api(`/api/chats/${chatId}?messages_limit=${messagesLimit}`, { timeoutMs: 15000 });
+
+    if (Number(currentChatId) !== chatId) return null;
+
+    currentChat = { ...(currentChat || {}), ...chat };
+    mergeChatSummary(chat);
+    if (!(isMobileChatLayout() && isChatLocalControlActive())) {
+      paintChatHeader(currentChat, { updateControls: false });
+    }
+
+    const messages = currentChat.messages || [];
+    const nextSignature = chatMessagesSignature(messages);
+
+    if (nextSignature !== currentChatMessagesSignature) {
+      currentChatMessagesSignature = nextSignature;
+      renderMessages(messages);
+      renderAiSelectionBar();
+      if (keepAtBottom) scrollMessagesToBottom('refresh-active-chat-messages');
+    }
+
+    if (activeExtraPanel === 'tasks') {
+      runWhenBrowserIsIdle(() => renderTasks(currentChat.tasks || []), 500);
+    }
+
+    return true;
+  } catch (err) {
+    console.warn('active chat messages refresh failed', err);
+    return null;
+  } finally {
+    activeChatMessagesRefreshInFlight = false;
+  }
+}
+
+
+function renderChatList(options = {}) {
+  const { force = false, preserveScrollTop = null } = options;
+  const list = $('chatList');
+  if (!list) return;
+  bindChatListInfiniteScroll();
+
+  const chatCountLabel = $('chatCountLabel');
+  if (chatCountLabel) chatCountLabel.textContent = String((chats || []).length);
+
+  // Critical mobile performance fix:
+  // while the fullscreen dialog is open the list is not visible. Rendering it
+  // after opening a chat was the measured 4+ second freeze on iPhone.
+  if (!force && isMobileChatOpen()) {
+    return;
+  }
+
+  list.innerHTML = '';
+  const searchQuery = currentChatMessageSearch();
+  if (!chats.length) {
+    const emptyText = searchQuery.length >= 2
+      ? `По сообщению «${escapeHtml(searchQuery)}» ничего не найдено.`
+      : (chatScope === 'archive' ? 'В архиве пока нет закрытых чатов.' : 'Активных чатов пока нет. Маркетплейсы обновляются автоматически в фоне.');
+    list.innerHTML = `<div class="chat-item empty-chat-item"><p>${emptyText}</p></div>`;
+    return;
+  }
+
   const visibleChats = (chats || []).filter(chat => chatScope === 'archive' || !isClosedWorkflowStatus(chat.status, chat.status_label));
-  for (const chat of visibleChats) {
+  const mobileListVisible = isMobileChatLayout() && !isMobileChatOpen();
+
+  // Large DOM lists are very expensive on mobile Safari. Render the newest
+  // portion first, then append the rest in chunks when the operator scrolls down.
+  const renderLimit = mobileListVisible ? Math.min(chatListMobileRenderLimit, visibleChats.length) : visibleChats.length;
+  const chatsToRender = visibleChats.slice(0, renderLimit);
+
+  const fragment = document.createDocumentFragment();
+  for (const chat of chatsToRender) {
     const item = document.createElement('div');
     const showWaitingMarker = shouldShowWaitingMarker(chat);
     item.className = `chat-item ${chat.id === currentChatId ? 'active' : ''} ${showWaitingMarker ? 'needs-response' : ''}`;
     item.onclick = () => openChat(chat.id);
     const slaBadge = waitingResponseBadge(chat);
-    const assigneeBadge = chat.assigned_user_id ? `<span class="assignee-chip">${escapeHtml(chat.assigned_user_display_name || chat.assigned_user_username || chat.assigned_to || 'назначен')}</span>` : ''; 
+    const assigneeBadge = chat.assigned_user_id ? `<span class="assignee-chip">${escapeHtml(chat.assigned_user_display_name || chat.assigned_user_username || chat.assigned_to || 'назначен')}</span>` : '';
     const time = formatChatTime(chat.last_message_at || chat.updated_at || chat.created_at);
+    const searchMatch = searchQuery.length >= 2 && chat.search_match_text
+      ? `Найдено: ${previewText(chat.search_match_text)}`
+      : previewText(chat.last_message_preview);
     item.innerHTML = `
       <div class="chat-item-topline">
         <div class="chat-item-title">
@@ -1566,12 +2958,27 @@ function renderChatList() {
         </div>
         <span class="badge ${chat.marketplace}">${marketplaceNames[chat.marketplace] || chat.marketplace}</span>
       </div>
-      <p class="preview">${escapeHtml(previewText(chat.last_message_preview))}</p>
+      <p class="preview ${chat.search_match_text ? 'chat-search-match-preview' : ''}">${escapeHtml(searchMatch)}</p>
       <div class="chat-item-footer">
         <div class="chat-badges">${statusBadge(chat.status, chat.status_label, chat.status_color)}${slaBadge}${assigneeBadge}</div>
       </div>
     `;
-    list.appendChild(item);
+    fragment.appendChild(item);
+  }
+
+  list.appendChild(fragment);
+
+  if (mobileListVisible && visibleChats.length > chatsToRender.length) {
+    const note = document.createElement('div');
+    note.className = 'chat-item empty-chat-item chat-list-render-limit-note chat-list-load-more-note';
+    note.innerHTML = `<p>Показано ${chatsToRender.length} из ${visibleChats.length}. Прокрутите ниже, чтобы загрузить ещё.</p>`;
+    list.appendChild(note);
+  }
+
+  if (typeof preserveScrollTop === 'number') {
+    requestAnimationFrame(() => {
+      list.scrollTop = preserveScrollTop;
+    });
   }
 }
 
@@ -1580,31 +2987,44 @@ async function openChat(chatId, options = {}) {
   mobileChatClosedByUser = false;
   const previousChatId = currentChatId;
   currentChatId = Number(chatId);
+  if (options.syncRoute !== false) {
+    syncRouteForChat(chatId, { replace: Boolean(options.replaceRoute) });
+  }
   if (previousChatId !== currentChatId) {
     selectedAiMessageId = null;
     setReplyTemplatesPanel(false);
   }
   const messagesBox = $('messages');
   const wasNearBottom = messagesBox ? (messagesBox.scrollHeight - messagesBox.scrollTop - messagesBox.clientHeight < 80) : true;
+  const mobileLayout = isMobileChatLayout();
 
-  // Make the tap feel instant: show the chat screen and active row before the API responds.
+  suppressFrontendSyncUntil = Date.now() + 3500;
+  chatInteractionBusyUntil = Date.now() + 4500;
+  activeChatRefreshLastStartedAt = Date.now();
+
+  // Make the tap feel instant: show the chat screen before the API responds.
   $('emptyState')?.classList.add('hidden');
   $('chatPanel')?.classList.remove('hidden');
   setMobileChatOpen(true);
-  renderChatList();
+  paintChatShellFromSummary(chatId, previousChatId);
+  requestAnimationFrame(() => setMobileChatOpen(true));
 
-  if (messagesBox && previousChatId !== currentChatId) {
-    messagesBox.innerHTML = '<div class="empty-card chat-loading-card">Загружаю диалог…</div>';
-  }
+  // Desktop needs the active row immediately. On mobile the list is hidden,
+  // so repainting it here only makes the transition feel slower.
+  if (!mobileLayout) renderChatList();
+
+  const messagesLimit = mobileLayout ? 35 : 120;
 
   let chat;
   chatOpenInFlight = true;
   try {
-    chat = await api(`/api/chats/${chatId}?messages_limit=120`);
+    chat = await api(`/api/chats/${chatId}?messages_limit=${messagesLimit}`);
   } catch (err) {
     if (requestSeq === openChatRequestSeq) {
       notify('Не удалось открыть чат', String(err.message || err));
       setMobileChatOpen(false);
+      $('chatPanel')?.classList.add('hidden');
+      $('emptyState')?.classList.remove('hidden');
     }
     chatOpenInFlight = false;
     return;
@@ -1622,38 +3042,29 @@ async function openChat(chatId, options = {}) {
     selectedAiMessageId = null;
   }
 
-  if ($('chatTitle')) $('chatTitle').textContent = `${customerLabel(chat)}`;
-  const chatMarketplaceBadge = $('chatMarketplaceBadge');
-  if (chatMarketplaceBadge) {
-    const mp = String(chat.marketplace || '').toLowerCase();
-    chatMarketplaceBadge.textContent = marketplaceNames[chat.marketplace] || chat.marketplace || '';
-    chatMarketplaceBadge.className = `marketplace-pill ${mp}`;
-    if (chatMarketplaceBadge.textContent) {
-      chatMarketplaceBadge.classList.remove('hidden');
-    } else {
-      chatMarketplaceBadge.classList.add('hidden');
-    }
-  }
-  if ($('chatAvatar')) $('chatAvatar').textContent = customerLabel(chat).trim().slice(0, 1).toUpperCase() || 'A';
-  if ($('chatSubtitle')) {
-    const subtitle = chatSubtitleParts(chat);
-    $('chatSubtitle').textContent = subtitle || 'Данные по заказу не переданы маркетплейсом';
-  }
-  renderChatSettingsControls({ keepValues: true });
-  if ($('chatStatus')) $('chatStatus').value = chat.status;
-  if ($('assignedUserSelect')) { $('assignedUserSelect').innerHTML = assigneeOptions(chat.assigned_user_id || '', true); $('assignedUserSelect').value = chat.assigned_user_id || ''; }
-  if ($('customerNameInput')) $('customerNameInput').value = chat.customer_name || '';
+  paintChatHeader(chat, { forceControls: true });
 
+  currentChatMessagesSignature = chatMessagesSignature(chat.messages || []);
   renderMessages(chat.messages || []);
-  renderTasks(chat.tasks || []);
   renderAiSelectionBar();
-  renderChatList();
 
   const shouldPreserveScroll = options.keepScroll && messagesBox && !wasNearBottom && previousChatId === Number(chatId);
-  if (shouldPreserveScroll) {
-    return;
+  if (!shouldPreserveScroll) {
+    scrollMessagesToBottom('open-chat');
   }
-  scrollMessagesToBottom('open-chat');
+
+  // Tasks are secondary for the first mobile frame.
+  // The chat list is hidden while a mobile dialog is open, so rendering it here
+  // blocks the whole phone UI for seconds on large inboxes. Render it only when
+  // the operator goes back to the list.
+  if (isMobileChatLayout()) {
+    runWhenBrowserIsIdle(() => renderTasks(chat.tasks || []), 500);
+  } else {
+    renderTasks(chat.tasks || []);
+    renderChatList();
+  }
+
+  chatInteractionBusyUntil = Date.now() + 1200;
 }
 
 
@@ -1717,15 +3128,17 @@ function renderMessages(messages) {
   if (!box) return;
   box.innerHTML = '';
   const receiptContext = buildMessageReceiptContext(messages || []);
+
   for (const message of messages) {
     const item = document.createElement('div');
     item.className = `message ${message.direction} ${Number(message.id) === Number(selectedAiMessageId) ? 'ai-selected-message' : ''}`;
     item.dataset.messageId = message.id;
 
-    const meta = document.createElement('div');
-    meta.className = 'message-meta';
-    const directionText = message.direction === 'inbound' ? 'клиент' : message.direction === 'outbound' ? 'мы' : 'заметка';
-    meta.textContent = `${directionText}${message.author ? ` · ${message.author}` : ''}${message.created_at ? ` · ${formatDateTime(message.created_at)}` : ''}`;
+    const images = extractImageUrls(message);
+    if (images.length) item.classList.add('message-has-images');
+    const displayText = cleanMessageTextForDisplay(message.text || '', images);
+    const bubble = document.createElement('div');
+    bubble.className = `message-bubble ${images.length ? 'message-bubble-has-images' : ''}`.trim();
 
     if (message.direction === 'inbound') {
       const aiWrap = document.createElement('span');
@@ -1740,6 +3153,7 @@ function renderMessages(messages) {
 
       const menu = document.createElement('span');
       menu.className = 'message-actions-menu hidden';
+
       const aiBtn = document.createElement('button');
       aiBtn.type = 'button';
       aiBtn.textContent = 'ИИ ответ';
@@ -1765,11 +3179,14 @@ function renderMessages(messages) {
 
       aiWrap.appendChild(menuBtn);
       aiWrap.appendChild(menu);
-      meta.appendChild(aiWrap);
+      bubble.appendChild(aiWrap);
     }
 
-
     if (message.direction === 'internal') {
+      const meta = document.createElement('div');
+      meta.className = 'message-meta';
+      meta.textContent = `${message.author ? message.author : 'заметка'}${message.created_at ? ` · ${formatDateTime(message.created_at)}` : ''}`;
+
       const noteActions = document.createElement('span');
       noteActions.className = 'internal-note-actions';
 
@@ -1798,17 +3215,14 @@ function renderMessages(messages) {
       noteActions.appendChild(editBtn);
       noteActions.appendChild(deleteBtn);
       meta.appendChild(noteActions);
+      item.appendChild(meta);
     }
-
-    const images = extractImageUrls(message);
-    const displayText = cleanMessageTextForDisplay(message.text || '', images);
-    item.appendChild(meta);
 
     if (displayText) {
       const text = document.createElement('div');
       text.className = 'message-text';
-      renderTextWithLinks(text, displayText);
-      item.appendChild(text);
+      renderMessageTextWithLinks(text, message, displayText);
+      bubble.appendChild(text);
     }
 
     if (images.length) {
@@ -1833,24 +3247,33 @@ function renderMessages(messages) {
         img.onerror = () => card.classList.add('image-error');
         prepareLazyChatImage(img, safeImageUrl);
 
-        const fallback = document.createElement('span');
-        fallback.textContent = 'Открыть в полном размере';
-        fallback.className = 'image-fallback';
-
         card.appendChild(img);
-        card.appendChild(fallback);
         gallery.appendChild(card);
       }
-      item.appendChild(gallery);
+      bubble.appendChild(gallery);
     }
 
-    const receipt = messageReceiptInfo(message, receiptContext);
-    if (receipt) {
-      const receiptEl = document.createElement('div');
-      receiptEl.className = `message-receipt ${receipt.read ? 'is-read' : 'is-sent'}`;
-      receiptEl.title = receipt.title || receipt.label;
-      receiptEl.innerHTML = `<span class="receipt-checks">${escapeHtml(receipt.icon)}</span><span>${escapeHtml(receipt.label)}</span>`;
-      item.appendChild(receiptEl);
+    item.appendChild(bubble);
+
+    if (message.direction !== 'internal') {
+      const footer = document.createElement('div');
+      footer.className = 'message-footer';
+
+      const timeEl = document.createElement('span');
+      timeEl.className = 'message-time';
+      timeEl.textContent = formatChatTime(message.created_at || message.updated_at || '');
+      footer.appendChild(timeEl);
+
+      const receipt = messageReceiptInfo(message, receiptContext);
+      if (receipt && message.direction === 'outbound') {
+        const receiptEl = document.createElement('div');
+        receiptEl.className = `message-receipt ${receipt.read ? 'is-read' : 'is-sent'}`;
+        receiptEl.title = receipt.title || receipt.label;
+        receiptEl.innerHTML = `<span class="receipt-checks">${escapeHtml(receipt.icon)}</span><span class="receipt-label">${escapeHtml(receipt.label)}</span>`;
+        footer.appendChild(receiptEl);
+      }
+
+      item.appendChild(footer);
     }
 
     box.appendChild(item);
@@ -1897,11 +3320,16 @@ async function saveInternalNoteEdit(message, text, btn = null) {
   if (!cleanText) return notify('Заметка не сохранена', 'Текст заметки не может быть пустым.');
   if (btn) btn.disabled = true;
   try {
-    await api(`/api/chats/${currentChatId}/notes/${message.id}`, {
+    const chatIdForNote = Number(currentChatId);
+    await api(`/api/chats/${chatIdForNote}/notes/${message.id}`, {
       method: 'PATCH',
       body: JSON.stringify({ text: cleanText }),
     });
-    await openChat(currentChatId);
+    if (isMobileChatLayout()) {
+      await refreshCurrentChatMessagesOnly({ force: true });
+    } else {
+      await openChat(chatIdForNote);
+    }
     notify('Заметка обновлена');
   } catch (err) {
     notify('Заметка не сохранена', String(err.message || err));
@@ -1915,8 +3343,13 @@ async function deleteInternalNote(message) {
   const confirmed = window.confirm('Удалить эту внутреннюю заметку?');
   if (!confirmed) return;
   try {
-    await api(`/api/chats/${currentChatId}/notes/${message.id}`, { method: 'DELETE' });
-    await openChat(currentChatId);
+    const chatIdForNote = Number(currentChatId);
+    await api(`/api/chats/${chatIdForNote}/notes/${message.id}`, { method: 'DELETE' });
+    if (isMobileChatLayout()) {
+      await refreshCurrentChatMessagesOnly({ force: true });
+    } else {
+      await openChat(chatIdForNote);
+    }
     notify('Заметка удалена');
   } catch (err) {
     notify('Заметка не удалена', String(err.message || err));
@@ -2212,6 +3645,162 @@ function imagePreviewSrc(url) {
     return url;
   }
   return url;
+}
+
+function escapeRegExp(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function rawValueByPath(value, path) {
+  let current = value;
+  for (const key of path) {
+    if (!current || typeof current !== 'object') return '';
+    current = current[key];
+  }
+  return current == null ? '' : String(current).trim();
+}
+
+function looksLikeOzonOrderNumber(value) {
+  const clean = String(value || '').trim();
+  if (!clean) return false;
+  if (clean.length < 5 || clean.length > 80) return false;
+  if (!/\d/.test(clean)) return false;
+  if (/\s/.test(clean)) return false;
+  return /^[A-Za-zА-Яа-я0-9][A-Za-zА-Яа-я0-9._/-]*$/.test(clean);
+}
+
+function firstOzonOrderFromDataArray(value, depth = 0) {
+  if (!value || depth > 7) return '';
+
+  if (Array.isArray(value)) {
+    // Ozon can send a `data` array when the message is sent from an order.
+    // In that case the first element is the full posting/order number,
+    // including suffixes like -1, -2, etc.
+    if (value.length >= 2 && looksLikeOzonOrderNumber(value[0])) {
+      return String(value[0]).trim();
+    }
+
+    for (const item of value) {
+      const found = firstOzonOrderFromDataArray(item, depth + 1);
+      if (found) return found;
+    }
+
+    return '';
+  }
+
+  if (typeof value !== 'object') return '';
+
+  for (const [key, nested] of Object.entries(value)) {
+    const normalizedKey = normalizeRawKey(key);
+    if (normalizedKey === 'data' && Array.isArray(nested) && nested.length >= 2 && looksLikeOzonOrderNumber(nested[0])) {
+      return String(nested[0]).trim();
+    }
+
+    const found = firstOzonOrderFromDataArray(nested, depth + 1);
+    if (found) return found;
+  }
+
+  return '';
+}
+
+function extractOzonOrderNumber(message) {
+  if (!message) return '';
+  const marketplace = String(message.marketplace || message.source || '').toLowerCase();
+  if (marketplace && marketplace !== 'ozon') return '';
+
+  const raw = message.raw && typeof message.raw === 'object' ? message.raw : {};
+
+  // Priority 1: full order/posting number from Ozon `data` array.
+  // This is more accurate than context.order_number because context can omit
+  // suffixes such as -1, -2.
+  const fullOrderFromData = firstOzonOrderFromDataArray(raw);
+  if (fullOrderFromData) return fullOrderFromData;
+
+  // Priority 2: fallback only to explicit context fields.
+  // We still do not guess from random numbers in the message text.
+  const candidates = [
+    rawValueByPath(raw, ['context', 'order_number']),
+    rawValueByPath(raw, ['context', 'orderNumber']),
+    rawValueByPath(raw, ['_chat_item', 'context', 'order_number']),
+    rawValueByPath(raw, ['_chat_item', 'context', 'orderNumber']),
+    rawValueByPath(raw, ['payload', 'context', 'order_number']),
+    rawValueByPath(raw, ['payload', 'context', 'orderNumber']),
+    rawValueByPath(raw, ['message', 'context', 'order_number']),
+    rawValueByPath(raw, ['message', 'context', 'orderNumber']),
+  ].filter(looksLikeOzonOrderNumber);
+
+  return candidates[0] || '';
+}
+
+function isOzonReturnNumber(orderNumber) {
+  // Возвраты отличаются от отправлений суффиксом вида -R12345.
+  return /-R\d+$/i.test(String(orderNumber || '').trim());
+}
+
+function ozonPostingUrl(orderNumber) {
+  const clean = String(orderNumber || '').trim();
+  return clean ? `https://seller.ozon.ru/app/postings/${encodeURIComponent(clean)}` : '';
+}
+
+function ozonReturnUrl(returnNumber) {
+  const clean = String(returnNumber || '').trim();
+  if (!clean) return '';
+  return `https://seller.ozon.ru/app/returns/main?tab=90&sort=StatusDate&sortingType=Desc&filters=[{%22single%22:{%22field%22:%22ReturnNumber%22,%22value%22:%22${encodeURIComponent(clean)}%22}}]&__rr=1`;
+}
+
+function ozonOrderOrReturnUrl(orderNumber) {
+  return isOzonReturnNumber(orderNumber) ? ozonReturnUrl(orderNumber) : ozonPostingUrl(orderNumber);
+}
+
+function renderMessageTextWithLinks(container, message, value) {
+  const text = String(value || '');
+  const orderNumber = extractOzonOrderNumber(message);
+  const orderUrl = ozonOrderOrReturnUrl(orderNumber);
+
+  if (!orderNumber || !orderUrl || !text.includes(orderNumber)) {
+    renderTextWithLinks(container, text);
+    return;
+  }
+
+  const tokenRegex = new RegExp(`(https?:\\/\\/[^\\s<>"]+)|(${escapeRegExp(orderNumber)})`, 'g');
+  let lastIndex = 0;
+  let match;
+
+  while ((match = tokenRegex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      container.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+    }
+
+    if (match[1]) {
+      const rawUrl = match[1];
+      const url = rawUrl.replace(/[),.;]+$/, '');
+      const trailing = rawUrl.slice(url.length);
+      const a = document.createElement('a');
+      const imageLike = isLikelyImageUrl(url);
+      a.href = imageLike ? imagePreviewSrc(url) : url;
+      a.target = '_blank';
+      a.rel = 'noreferrer';
+      a.textContent = imageLike ? 'открыть изображение' : url;
+      container.appendChild(a);
+      if (trailing) container.appendChild(document.createTextNode(trailing));
+    } else {
+      const isReturn = isOzonReturnNumber(orderNumber);
+      const a = document.createElement('a');
+      a.href = orderUrl;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.className = isReturn ? 'ozon-order-link ozon-return-link' : 'ozon-order-link';
+      a.textContent = match[2];
+      a.title = isReturn ? 'Открыть возврат Ozon' : 'Открыть отправление Ozon';
+      container.appendChild(a);
+    }
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < text.length) {
+    container.appendChild(document.createTextNode(text.slice(lastIndex)));
+  }
 }
 
 
@@ -2612,14 +4201,107 @@ function questionProductName(question) {
   return question.product_name || (question.sku ? `SKU ${question.sku}` : 'Товар не указан');
 }
 
-async function loadQuestions() {
+function isMobileQuestionInlineLayout() {
+  return Boolean(window.matchMedia && window.matchMedia('(max-width: 900px)').matches);
+}
+
+function questionInlineDetailHtml(question) {
+  if (!question) return '';
+  const questionId = Number(question.id);
+  const draft = questionAnswerDrafts[String(questionId)] || '';
+  const productName = questionProductName(question);
+  const statusLabel = questionDisplayStatusLabel(question);
+  const existingAnswer = String(question.answer_text || '').trim();
+  const productLink = question.product_url
+    ? `<a class="question-inline-product-link" href="${escapeHtml(question.product_url)}" target="_blank" rel="noreferrer">Открыть товар</a>`
+    : '';
+
+  return `
+    <div class="question-inline-panel" data-question-inline-panel="${questionId}">
+      <div class="question-inline-facts">
+        <div class="question-inline-fact"><span>Товар</span><strong title="${escapeHtml(productName)}">${escapeHtml(productName)}</strong></div>
+        <div class="question-inline-fact"><span>SKU</span><strong>${escapeHtml(question.sku || '—')}</strong></div>
+        <div class="question-inline-fact"><span>Статус</span><strong>${escapeHtml(statusLabel)}</strong></div>
+        <div class="question-inline-fact"><span>Автор</span><strong>${escapeHtml(question.author_name || 'покупатель')}</strong></div>
+      </div>
+      <div class="question-inline-body">
+        <strong>Вопрос покупателя</strong>
+        <p>${escapeHtml(question.text || 'Вопрос без текста')}</p>
+        ${productLink}
+      </div>
+      <form class="question-inline-answer-form" data-question-id="${questionId}">
+        ${existingAnswer ? `<div class="existing-reply question-inline-existing-answer">${escapeHtml(existingAnswer)}</div>` : ''}
+        <textarea data-question-inline-answer="${questionId}" placeholder="Напишите ответ на вопрос покупателя...">${escapeHtml(draft)}</textarea>
+        <div class="question-inline-actions">
+          <label class="check-filter"><input data-question-inline-mark="${questionId}" type="checkbox" checked /> отметить как обработанный</label>
+          <button type="submit">Ответить</button>
+        </div>
+      </form>
+    </div>
+  `;
+}
+
+function bindInlineQuestionForms() {
+  document.querySelectorAll('.question-inline-answer-form').forEach((form) => {
+    if (form.dataset.boundInlineQuestionForm === '1') return;
+    form.dataset.boundInlineQuestionForm = '1';
+    form.addEventListener('submit', submitInlineQuestionAnswer);
+    const field = form.querySelector('[data-question-inline-answer]');
+    if (field && !field.dataset.boundInlineQuestionDraft) {
+      field.dataset.boundInlineQuestionDraft = '1';
+      field.addEventListener('input', () => {
+        const questionId = String(field.dataset.questionInlineAnswer || form.dataset.questionId || '');
+        if (questionId) questionAnswerDrafts[questionId] = field.value || '';
+        if (currentQuestionId && Number(questionId) === Number(currentQuestionId) && $('questionAnswerText')) {
+          $('questionAnswerText').value = field.value || '';
+        }
+      });
+    }
+  });
+}
+
+async function submitInlineQuestionAnswer(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const questionId = Number(form?.dataset?.questionId || currentQuestionId || 0);
+  if (!questionId) return;
+  const field = form.querySelector('[data-question-inline-answer]');
+  const text = String(field?.value || '').trim();
+  if (!text) return;
+  currentQuestionId = questionId;
+  if ($('questionAnswerText')) $('questionAnswerText').value = text;
+  const btn = form.querySelector('button[type="submit"]');
+  if (btn) btn.disabled = true;
+  try {
+    await api(`/api/questions/${questionId}/answer`, {
+      method: 'POST',
+      body: JSON.stringify({
+        text,
+        mark_processed: Boolean(form.querySelector('[data-question-inline-mark]')?.checked ?? true),
+      }),
+    });
+    delete questionAnswerDrafts[String(questionId)];
+    await loadQuestions();
+    await openQuestion(questionId, { clearDraft: true });
+    await loadStats();
+    setStatus('Ответ на вопрос отправлен');
+  } catch (err) {
+    notify('Ответ на вопрос не отправлен', String(err.message || err));
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function loadQuestions(options = {}) {
+  const { render = activeView === 'questions' } = options;
   const params = new URLSearchParams();
   const status = $('questionStatusFilter')?.value || '';
   const unanswered = $('questionUnansweredFilter')?.checked;
   if (status) params.set('status', status);
   if (unanswered) params.set('unanswered', 'true');
   questions = await api(`/api/questions?${params.toString()}`);
-  renderQuestionsList();
+  trackQuestionSounds(questions || []);
+  if (render) renderQuestionsList();
 }
 
 function renderQuestionsList() {
@@ -2630,10 +4312,16 @@ function renderQuestionsList() {
     box.innerHTML = '<div class="empty-card">Вопросы пока не загружены. Нажмите «Обновить» или дождитесь фоновой синхронизации.</div>';
     return;
   }
+  const mobileInline = isMobileQuestionInlineLayout();
   for (const question of questions) {
     const item = document.createElement('article');
-    item.className = `review-item ${Number(question.id) === Number(currentQuestionId) ? 'active' : ''}`;
-    item.onclick = () => openQuestion(question.id);
+    const isActive = Number(question.id) === Number(currentQuestionId);
+    const inlineQuestion = isActive && currentQuestion && Number(currentQuestion.id) === Number(question.id) ? currentQuestion : question;
+    item.className = `review-item question-list-item ${isActive ? 'active' : ''} ${mobileInline && isActive ? 'is-inline-open' : ''}`;
+    item.onclick = (event) => {
+      if (event.target.closest('a, button, input, textarea, select, label, form')) return;
+      openQuestion(question.id);
+    };
     const title = questionProductName(question);
     const time = formatChatTime(question.published_at || question.updated_at || question.created_at);
     const statusBadge = questionDisplayStatusBadge(question);
@@ -2644,9 +4332,11 @@ function renderQuestionsList() {
       </div>
       <p>${escapeHtml(question.text || 'Вопрос без текста')}</p>
       <div class="chat-badges">${statusBadge}</div>
+      ${mobileInline && isActive ? questionInlineDetailHtml(inlineQuestion) : ''}
     `;
     box.appendChild(item);
   }
+  bindInlineQuestionForms();
 }
 
 async function openQuestion(questionId, options = {}) {
@@ -2706,7 +4396,8 @@ async function syncQuestions() {
 async function submitQuestionAnswer(event) {
   event.preventDefault();
   if (!currentQuestionId) return;
-  const text = $('questionAnswerText')?.value.trim();
+  const inlineField = document.querySelector(`.question-inline-answer-form[data-question-id="${currentQuestionId}"] [data-question-inline-answer]`);
+  const text = ($('questionAnswerText')?.value || inlineField?.value || '').trim();
   if (!text) return;
   const form = $('questionAnswerForm');
   const btn = form?.querySelector('button[type="submit"]');
@@ -2883,7 +4574,14 @@ function taskPatchStatusValue(status) {
 
 function closeTaskStatusMenus(exceptMenu = null) {
   document.querySelectorAll('#tasksView .tasks-ref-status-menu').forEach(menu => {
-    if (menu !== exceptMenu) menu.classList.add('hidden');
+    const shouldKeep = menu === exceptMenu;
+    if (!shouldKeep) {
+      menu.classList.add('hidden');
+      const card = menu.closest('[data-task-card]');
+      if (card) card.classList.remove('status-menu-open');
+      const button = menu.closest('.tasks-ref-status-wrap')?.querySelector('[data-task-status-pill]');
+      if (button) button.setAttribute('aria-expanded', 'false');
+    }
   });
 }
 
@@ -2899,6 +4597,42 @@ function taskStatusMenuHtml(task) {
   `).join('');
 }
 
+function taskBoardEditPanelHtml(task, fieldLabel, primaryText) {
+  return `
+    <div class="tasks-ref-edit-panel hidden" data-task-ref-edit-panel>
+      <div class="tasks-ref-edit-grid">
+        <label><span>Тип</span><select data-task-type data-current-task-type="${escapeHtml(task.task_type_id || '')}">${taskTypeOptions(task.task_type_id || '', true)}</select></label>
+        <label><span>Статус</span><select data-task-status>${taskStatusOptions(task.status)}</select></label>
+        <label><span>Ответственный</span><select data-task-assignee>${assigneeOptions(task.assigned_user_id || '', true)}</select></label>
+        <label><span>Дата</span><input data-task-due type="datetime-local" value="${escapeHtml(datetimeLocalValue(task.due_at))}" /></label>
+      </div>
+      <label class="tasks-ref-edit-title"><span>${escapeHtml(fieldLabel)}</span><textarea data-task-title>${escapeHtml(primaryText === '—' ? '' : primaryText)}</textarea></label>
+      <label class="tasks-ref-edit-comment"><span>Комментарий к изменению</span><textarea data-task-comment placeholder="Добавить комментарий к задаче"></textarea></label>
+      <div class="tasks-ref-edit-actions">
+        <button class="small task-save-btn" data-task-id="${escapeHtml(task.id)}" data-task-action="save" type="button">Сохранить</button>
+        <button class="small secondary" data-task-ref-edit-cancel type="button">Отмена</button>
+      </div>
+    </div>
+  `;
+}
+
+function collectTaskEditBody(card) {
+  const titleInput = card.querySelector('[data-task-title]');
+  const statusSelect = card.querySelector('[data-task-status]');
+  const typeSelect = card.querySelector('[data-task-type]');
+  const assigneeSelect = card.querySelector('[data-task-assignee]');
+  const dueInput = card.querySelector('[data-task-due]');
+  const commentInput = card.querySelector('[data-task-comment]');
+  return {
+    title: titleInput ? (titleInput.value.trim() || undefined) : undefined,
+    status: statusSelect?.value || undefined,
+    task_type_id: typeSelect?.value ? Number(typeSelect.value) : null,
+    assigned_user_id: assigneeSelect?.value ? Number(assigneeSelect.value) : null,
+    due_at: dueInput?.value || null,
+    comment: commentInput?.value || null,
+  };
+}
+
 function bindTaskBoardCardActions(item) {
   const statusButton = item.querySelector('[data-task-status-pill]');
   const statusMenu = item.querySelector('[data-task-status-menu]');
@@ -2908,6 +4642,7 @@ function bindTaskBoardCardActions(item) {
       const willOpen = statusMenu.classList.contains('hidden');
       closeTaskStatusMenus(statusMenu);
       statusMenu.classList.toggle('hidden', !willOpen);
+      item.classList.toggle('status-menu-open', willOpen);
       statusButton.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
     });
     statusMenu.querySelectorAll('[data-task-status-option]').forEach(optionButton => {
@@ -2931,7 +4666,74 @@ function bindTaskBoardCardActions(item) {
       });
     });
   }
+
+  const editButton = item.querySelector('[data-task-ref-edit]');
+  const editPanel = item.querySelector('[data-task-ref-edit-panel]');
+  const cancelButton = item.querySelector('[data-task-ref-edit-cancel]');
+  if (editButton && editPanel) {
+    editButton.addEventListener('click', event => {
+      event.stopPropagation();
+      closeTaskStatusMenus();
+      const willOpen = editPanel.classList.contains('hidden');
+      document.querySelectorAll('#tasksView [data-task-ref-edit-panel]').forEach(panel => {
+        if (panel !== editPanel) panel.classList.add('hidden');
+      });
+      document.querySelectorAll('#tasksView [data-task-card]').forEach(card => {
+        if (card !== item) card.classList.remove('task-edit-open');
+      });
+      editPanel.classList.toggle('hidden', !willOpen);
+      item.classList.toggle('task-edit-open', willOpen);
+      editButton.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+    });
+  }
+  if (cancelButton && editPanel) {
+    cancelButton.addEventListener('click', event => {
+      event.stopPropagation();
+      editPanel.classList.add('hidden');
+      item.classList.remove('task-edit-open');
+      if (editButton) editButton.setAttribute('aria-expanded', 'false');
+    });
+  }
+
+  item.querySelectorAll('[data-task-action="save"]').forEach(saveButton => {
+    saveButton.addEventListener('click', async event => {
+      event.stopPropagation();
+      const taskId = Number(saveButton.dataset.taskId || 0);
+      if (!taskId) return;
+      saveButton.disabled = true;
+      try {
+        await patchTask(taskId, collectTaskEditBody(item), { refreshChat: false });
+        setStatus('Задача обновлена');
+      } catch (err) {
+        notify('Не удалось обновить задачу', String(err.message || err));
+      } finally {
+        saveButton.disabled = false;
+      }
+    });
+  });
+
+  const deleteButton = item.querySelector('[data-task-ref-delete]');
+  if (deleteButton) {
+    deleteButton.addEventListener('click', async event => {
+      event.stopPropagation();
+      const taskId = Number(deleteButton.dataset.taskId || 0);
+      if (!taskId) return;
+      const label = item.querySelector('.tasks-ref-field-value')?.textContent || 'задачу';
+      if (!window.confirm(`Удалить ${label}?`)) return;
+      closeTaskStatusMenus();
+      deleteButton.disabled = true;
+      try {
+        await deleteTask(taskId, { refreshChat: false });
+        setStatus('Задача удалена');
+      } catch (err) {
+        notify('Не удалось удалить задачу', String(err.message || err));
+      } finally {
+        deleteButton.disabled = false;
+      }
+    });
+  }
 }
+
 
 function taskMatchesDate(task, yyyyMmDd) {
   if (!yyyyMmDd) return true;
@@ -2997,12 +4799,14 @@ function renderAllTasks(tasks) {
     item.dataset.taskCard = '1';
     const typeLabel = getTaskTypeLabel(task);
     const fieldLabel = getTaskCustomFieldLabel(task);
-    const clientLabel = customerLabel(task) || task.customer_id || task.external_chat_id || `ID ${task.chat_id || task.id || ''}`.trim();
+    const isStandaloneTask = task.is_standalone === true || task.is_standalone === 1 || String(task.marketplace || '') === 'internal_tasks';
+    const clientLabel = isStandaloneTask ? 'Без чата' : (customerLabel(task) || task.customer_id || task.external_chat_id || `ID ${task.chat_id || task.id || ''}`.trim());
     const primaryText = getTaskPrimaryText(task);
     const responsibleLabel = assigneeNameFromTask(task) || 'Не назначен';
+    item.classList.toggle('tasks-ref-card-standalone', isStandaloneTask);
     item.innerHTML = `
       <div class="tasks-ref-client">
-        <span class="tasks-ref-field-title">Клиент</span>
+        <span class="tasks-ref-field-title">${isStandaloneTask ? 'Источник' : 'Клиент'}</span>
         <span class="tasks-ref-field-value">${escapeHtml(clientLabel || '—')}</span>
       </div>
       <div class="tasks-ref-assignee">
@@ -3031,8 +4835,13 @@ function renderAllTasks(tasks) {
             </div>
           </div>
         </div>
-        ${task.chat_id ? `<button class="tasks-ref-chat-btn" type="button" data-open-chat="${escapeHtml(task.chat_id)}">в чат <span aria-hidden="true">→</span></button>` : ''}
+        <div class="tasks-ref-actions" aria-label="Действия с задачей">
+          <button class="tasks-ref-icon-btn" type="button" data-task-ref-edit data-task-id="${escapeHtml(task.id)}" aria-expanded="false" title="Редактировать задачу">✎</button>
+          <button class="tasks-ref-icon-btn tasks-ref-delete-btn" type="button" data-task-ref-delete data-task-id="${escapeHtml(task.id)}" title="Удалить задачу">×</button>
+          ${task.chat_id && !isStandaloneTask ? `<button class="tasks-ref-chat-btn" type="button" data-open-chat="${escapeHtml(task.chat_id)}">в чат <span aria-hidden="true">→</span></button>` : ''}
+        </div>
       </div>
+      ${taskBoardEditPanelHtml(task, fieldLabel, primaryText)}
     `;
     bindTaskBoardCardActions(item);
     const openBtn = item.querySelector('[data-open-chat]');
@@ -3067,16 +4876,44 @@ function closeActiveExtraPanel() {
 }
 
 function toggleExtraMenu(force) {
+  pauseMobileChatBackgroundWork(1800);
+
   const menu = $('extraMenu');
   const btn = $('extraMenuBtn');
   if (!menu) return;
-  const shouldOpen = typeof force === 'boolean' ? force : menu.classList.contains('hidden');
-  if (shouldOpen && activeExtraPanel) closeActiveExtraPanel();
+
+  const isMenuOpen = !menu.classList.contains('hidden');
+  let shouldOpen;
+
+  if (typeof force === 'boolean') {
+    shouldOpen = force;
+  } else {
+    // Если открыт вложенный блок, повторное нажатие по кнопке меню
+    // должно закрыть всё, а не открыть меню заново.
+    if (activeExtraPanel && !isMenuOpen) {
+      closeActiveExtraPanel();
+      menu.classList.add('hidden');
+      if (btn) btn.setAttribute('aria-expanded', 'false');
+      return;
+    }
+
+    shouldOpen = !isMenuOpen;
+  }
+
+  if (shouldOpen && activeExtraPanel) {
+    closeActiveExtraPanel();
+  }
+
   menu.classList.toggle('hidden', !shouldOpen);
-  if (btn) btn.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
+
+  if (btn) {
+    btn.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
+  }
 }
 
 function showExtraPanel(panelName) {
+  pauseMobileChatBackgroundWork(2600);
+
   activeExtraPanel = activeExtraPanel === panelName ? '' : panelName;
   const panel = $('extraPanel');
   if (panel) {
@@ -3085,6 +4922,7 @@ function showExtraPanel(panelName) {
     panel.classList.toggle('note-panel-open', activeExtraPanel === 'note');
     panel.classList.toggle('customer-panel-open', activeExtraPanel === 'customer');
   }
+
   $('tasksSection')?.classList.toggle('hidden', activeExtraPanel !== 'tasks');
   $('noteSection')?.classList.toggle('hidden', activeExtraPanel !== 'note');
   $('customerSection')?.classList.toggle('hidden', activeExtraPanel !== 'customer');
@@ -3157,6 +4995,15 @@ function knowledgeArticleCardHtml(a, opts = {}) {
   </button>`;
 }
 
+function knowledgeCategoryButtonHtml({ id = '', title, count = 0, active = false }) {
+  const safeId = String(id ?? '').replace(/"/g, '&quot;');
+  return `<button class="knowledge-category-item ${active ? 'active' : ''}" type="button" data-kb-category="${safeId}">
+    <strong class="knowledge-category-title">${escapeHtml(title || 'Раздел')}</strong>
+    <small class="knowledge-category-count">${Number(count) || 0} статей</small>
+    <span class="knowledge-chevron" aria-hidden="true">${active ? '⌄' : '›'}</span>
+  </button>`;
+}
+
 function renderKnowledgeCategories() {
   const box = $('knowledgeCategories');
   if (!box) return;
@@ -3185,10 +5032,12 @@ function renderKnowledgeCategories() {
     <div class="knowledge-chip-row">${chips.join('')}</div>`;
   } else {
     const allBlock = `<div class="knowledge-section ${allActive ? 'active' : ''}">
-      <button class="knowledge-category-item ${allActive ? 'active' : ''}" type="button" data-kb-category="">
-        <span><strong>Все статьи</strong><small>${allArticles.length} статей</small></span>
-        <span class="knowledge-chevron">${allActive ? '⌄' : '›'}</span>
-      </button>
+      ${knowledgeCategoryButtonHtml({
+        id: '',
+        title: 'Все статьи',
+        count: allArticles.length,
+        active: allActive,
+      })}
       <div class="knowledge-nested ${allActive ? '' : 'hidden'}">${allActive ? (allArticles.map(a => knowledgeArticleCardHtml(a, {compact:true})).join('') || '<div class="empty-card">Статей пока нет.</div>') : ''}</div>
     </div>`;
 
@@ -3196,16 +5045,23 @@ function renderKnowledgeCategories() {
       const active = Number(c.id) === Number(currentKnowledgeCategoryId);
       const items = allArticles.filter(a => Number(a.category_id) === Number(c.id));
       return `<div class="knowledge-section ${active ? 'active' : ''}">
-        <button class="knowledge-category-item ${active ? 'active' : ''}" type="button" data-kb-category="${c.id}">
-          <span><strong>${escapeHtml(c.title)}</strong><small>${items.length} статей</small></span>
-          <span class="knowledge-chevron">${active ? '⌄' : '›'}</span>
-        </button>
+        ${knowledgeCategoryButtonHtml({
+          id: c.id,
+          title: c.title,
+          count: items.length,
+          active,
+        })}
         <div class="knowledge-nested ${active ? '' : 'hidden'}">${active ? (items.map(a => knowledgeArticleCardHtml(a, {compact:true})).join('') || '<div class="empty-card">В этом разделе пока нет статей.</div>') : ''}</div>
       </div>`;
     }).join('');
 
     const uncategorizedBlock = uncategorized.length && currentKnowledgeCategoryId === -1 ? `<div class="knowledge-section active">
-      <button class="knowledge-category-item active" type="button" data-kb-category="-1"><span><strong>Без раздела</strong><small>${uncategorized.length} статей</small></span><span class="knowledge-chevron">⌄</span></button>
+      ${knowledgeCategoryButtonHtml({
+        id: -1,
+        title: 'Без раздела',
+        count: uncategorized.length,
+        active: true,
+      })}
       <div class="knowledge-nested">${uncategorized.map(a => knowledgeArticleCardHtml(a, {compact:true})).join('')}</div>
     </div>` : '';
 
@@ -3358,9 +5214,7 @@ async function uploadKnowledgeImageIfNeeded() {
   if (!file) return null;
   const form = new FormData();
   form.append('file', file);
-  const response = await fetch('/api/knowledge/upload-image', { method: 'POST', body: form, credentials: 'same-origin' });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.detail || 'Не удалось загрузить изображение');
+  const data = await apiForm('/api/knowledge/upload-image', form);
   return data.url;
 }
 
@@ -3457,6 +5311,84 @@ async function loadAnalytics() {
   analyticsLoadedOnce = true;
 }
 
+const ANALYTICS_WEEKDAY_NAMES = [
+  'Понедельник',
+  'Вторник',
+  'Среда',
+  'Четверг',
+  'Пятница',
+  'Суббота',
+  'Воскресенье',
+];
+
+function analyticsWeekdayIndexFromDate(dateValue) {
+  const raw = String(dateValue || '').trim();
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return null;
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  if (Number.isNaN(date.getTime())) return null;
+  return (date.getDay() + 6) % 7;
+}
+
+function pluralizeAnalyticsRequests(count) {
+  const value = Math.abs(Number(count || 0));
+  const mod10 = value % 10;
+  const mod100 = value % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'обращение';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'обращения';
+  return 'обращений';
+}
+
+function analyticsDailyRequestCount(row) {
+  return Number(row?.requests || row?.daily_first_requests || row?.inbound_messages || 0);
+}
+
+function getAnalyticsPeakWeekdays(rows) {
+  const totals = ANALYTICS_WEEKDAY_NAMES.map((name, index) => ({
+    index,
+    name,
+    requests: 0,
+    dates: 0,
+  }));
+
+  (rows || []).forEach((row) => {
+    const index = analyticsWeekdayIndexFromDate(row?.date);
+    if (index === null) return;
+    const count = analyticsDailyRequestCount(row);
+    totals[index].requests += count;
+    totals[index].dates += 1;
+  });
+
+  return totals
+    .filter(day => day.requests > 0)
+    .sort((a, b) => b.requests - a.requests || a.index - b.index)
+    .slice(0, 2);
+}
+
+function renderAnalyticsPeakWeekdays(rows) {
+  const topDays = getAnalyticsPeakWeekdays(rows);
+  const value = $('analyticsPeakWeekdays');
+  const hint = $('analyticsPeakWeekdaysHint');
+  if (!value && !hint) return;
+
+  if (!topDays.length) {
+    if (value) value.textContent = '—';
+    if (hint) hint.textContent = 'нет данных за период';
+    return;
+  }
+
+  if (value) {
+    value.textContent = topDays.map(day => day.name).join(' / ');
+  }
+
+  if (hint) {
+    hint.textContent = topDays
+      .map(day => `${day.name} — ${day.requests} ${pluralizeAnalyticsRequests(day.requests)}`)
+      .join(' · ');
+  }
+}
+
+
 function renderAnalytics(data) {
   const summary = data.summary || {};
   const filters = data.filters || {};
@@ -3489,6 +5421,7 @@ function renderAnalytics(data) {
   setAnalyticsText('analyticsPeakHour', peak ? hourLabel(peak.hour) : '—');
   setAnalyticsText('analyticsPeakHourHint', peak ? `${Number(peak.requests || peak.inbound_messages || 0)} первых обращений` : 'нет данных');
 
+  renderAnalyticsPeakWeekdays(data.daily || []);
   renderAnalyticsHourly(data.hourly || []);
   renderAnalyticsDaily(data.daily || []);
   renderAnalyticsMarketplaceBreakdown(data.marketplace_breakdown || []);
@@ -3500,7 +5433,7 @@ function renderAnalyticsHourly(rows) {
   const max = Math.max(1, ...rows.map(row => Number(row.requests || row.inbound_messages || 0)));
   el.innerHTML = rows.map(row => {
     const count = Number(row.requests || row.inbound_messages || 0);
-    const width = Math.max(2, Math.round((count / max) * 100));
+    const width = count > 0 ? Math.max(3, Math.round((count / max) * 100)) : 0;
     return `
       <button class="analytics-hour-row analytics-hour-button" type="button" data-analytics-hour="${Number(row.hour)}">
         <div class="analytics-hour-label">${escapeHtml(String(row.hour).padStart(2, '0'))}:00</div>
@@ -3670,8 +5603,459 @@ function renderAnalyticsMarketplaceBreakdown(rows) {
 
 
 
+
+function supplyPlanningCreateRow(values = {}) {
+  return normalizeSupplyPlanningRow({
+    id: supplyPlanningStableRowId(values),
+    marketplace: 'ozon',
+    sku: '',
+    product: '',
+    warehouse: '',
+    currentStock: '0',
+    avgDailySales: '0',
+    deliveryDays: '',
+    inTransit: '0',
+    ...values,
+  });
+}
+
+function parseSupplyPlanningNumber(value, fallback = 0) {
+  if (value === '' || value === null || value === undefined) return fallback;
+  const normalized = String(value).replace(',', '.').trim();
+  if (!normalized) return fallback;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function formatSupplyPlanningNumber(value, digits = 1) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '—';
+  if (Math.abs(num - Math.round(num)) < 0.0001) return String(Math.round(num));
+  return num.toLocaleString('ru-RU', { maximumFractionDigits: digits });
+}
+
+function supplyPlanningStableRowId(row = {}) {
+  const raw = [row.marketplace, row.sku, row.warehouse]
+    .map(value => String(value || '').trim().toLowerCase())
+    .join('__')
+    .replace(/[^a-zа-яё0-9_\-]+/gi, '_')
+    .slice(0, 120);
+  return raw ? `supply_${raw}` : `supply_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function supplyPlanningRowKey(row = {}) {
+  return [row.marketplace, row.sku, row.warehouse]
+    .map(value => String(value || '').trim().toLowerCase())
+    .join('||');
+}
+
+function normalizeSupplyPlanningRow(row = {}) {
+  const normalized = {
+    id: String(row.id || supplyPlanningStableRowId(row)),
+    marketplace: String(row.marketplace || 'ozon'),
+    sku: String(row.sku || ''),
+    product: String(row.product || ''),
+    warehouse: String(row.warehouse || ''),
+    currentStock: row.currentStock === undefined || row.currentStock === null ? '0' : String(row.currentStock),
+    avgDailySales: row.avgDailySales === undefined || row.avgDailySales === null ? '0' : String(row.avgDailySales),
+    deliveryDays: row.deliveryDays === undefined || row.deliveryDays === null ? '' : String(row.deliveryDays),
+    inTransit: row.inTransit === undefined || row.inTransit === null ? '0' : String(row.inTransit),
+  };
+  normalized.id = String(row.id || supplyPlanningStableRowId(normalized));
+  return normalized;
+}
+
+function readSupplyPlanningState() {
+  try {
+    const raw = localStorage.getItem(SUPPLY_PLANNING_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    const defaultTargetDays = parseSupplyPlanningNumber(parsed?.defaultTargetDays, DEFAULT_SUPPLY_PLANNING_TARGET_DAYS);
+    const rows = Array.isArray(parsed?.rows) ? parsed.rows.map(normalizeSupplyPlanningRow) : [];
+    return {
+      defaultTargetDays: defaultTargetDays > 0 ? defaultTargetDays : DEFAULT_SUPPLY_PLANNING_TARGET_DAYS,
+      rows,
+    };
+  } catch (err) {
+    console.warn('supply planning state read failed', err);
+    return { defaultTargetDays: DEFAULT_SUPPLY_PLANNING_TARGET_DAYS, rows: [] };
+  }
+}
+
+function writeSupplyPlanningState() {
+  try {
+    localStorage.setItem(SUPPLY_PLANNING_STORAGE_KEY, JSON.stringify({
+      defaultTargetDays: getSupplyPlanningDefaultTargetDays(),
+      rows: supplyPlanningRows,
+    }));
+  } catch (err) {
+    console.warn('supply planning state save failed', err);
+  }
+}
+
+function getSupplyPlanningDefaultTargetDays() {
+  const value = parseSupplyPlanningNumber($('supplyPlanningDefaultTargetDays')?.value, DEFAULT_SUPPLY_PLANNING_TARGET_DAYS);
+  return value > 0 ? value : DEFAULT_SUPPLY_PLANNING_TARGET_DAYS;
+}
+
+function setSupplyPlanningApiStatus(message = '', kind = 'info', details = []) {
+  const box = $('supplyPlanningApiStatus');
+  if (!box) return;
+  const items = Array.isArray(details) ? details.filter(Boolean) : [];
+  if (!message && !items.length) {
+    box.classList.add('hidden');
+    box.innerHTML = '';
+    return;
+  }
+  box.classList.remove('hidden');
+  box.className = `panel-card supply-planning-api-card supply-planning-api-card-${kind}`;
+  box.innerHTML = `
+    <div class="supply-planning-api-title">${escapeHtml(message)}</div>
+    ${items.length ? `<ul>${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : ''}
+  `;
+}
+
+function supplyPlanningResultDetails(result) {
+  const details = [];
+  (result?.results || []).forEach(item => {
+    const label = marketplaceLabel(item.marketplace || '');
+    if (item.ok) {
+      details.push(`${label}: ${Number(item.rows_count || 0)} строк`);
+      if (item.note) details.push(`${label}: ${item.note}`);
+      if (item.sales_error) details.push(`${label}: продажи/день не подтянулись — ${item.sales_error}`);
+      if (Array.isArray(item.stock_errors) && item.stock_errors.length) details.push(`${label}: запасной метод использован после ошибки — ${item.stock_errors[0]}`);
+    } else if (item.configured === false) {
+      details.push(`${label}: не настроены переменные доступа`);
+      if (item.token_scope_required) details.push(`${label}: нужен токен категории ${item.token_scope_required}`);
+      if (Array.isArray(item.required_env) && item.required_env.length) details.push(`${label}: переменные — ${item.required_env.join(', ')}`);
+    } else if (item.error) {
+      details.push(`${label}: ошибка API — ${item.error}`);
+      if (item.token_scope_required) details.push(`${label}: нужен токен категории ${item.token_scope_required}`);
+      if (item.how_to_fix) details.push(`${label}: ${item.how_to_fix}`);
+    }
+  });
+  return details;
+}
+
+function getSupplyPlanningMarketplaceFilter() {
+  return String($('supplyPlanningMarketplaceFilter')?.value || 'all').toLowerCase();
+}
+
+function getSupplyPlanningSkuFilter() {
+  return String($('supplyPlanningSkuFilter')?.value || '').trim().toLowerCase();
+}
+
+function getSupplyPlanningWarehouseFilter() {
+  return String($('supplyPlanningWarehouseFilter')?.value || '').trim().toLowerCase();
+}
+
+function getSupplyPlanningUrgencyFilter() {
+  return String($('supplyPlanningUrgencyFilter')?.value || 'all').toLowerCase();
+}
+
+function supplyPlanningVisibleRows() {
+  const marketplace = getSupplyPlanningMarketplaceFilter();
+  const sku = getSupplyPlanningSkuFilter();
+  const warehouse = getSupplyPlanningWarehouseFilter();
+  const urgency = getSupplyPlanningUrgencyFilter();
+  return supplyPlanningRows.filter(row => {
+    const rowMarketplace = String(row.marketplace || '').toLowerCase();
+    if (marketplace !== 'all' && rowMarketplace !== marketplace) return false;
+    if (sku) {
+      const haystack = `${row.sku || ''} ${row.product || ''}`.toLowerCase();
+      if (!haystack.includes(sku)) return false;
+    }
+    if (warehouse) {
+      const haystack = String(row.warehouse || '').toLowerCase();
+      if (!haystack.includes(warehouse)) return false;
+    }
+    if (urgency !== 'all') {
+      const calc = calculateSupplyPlanningRow(row);
+      if (calc.status !== urgency) return false;
+    }
+    return true;
+  });
+}
+
+function mergeSupplyPlanningApiRows(apiRows = []) {
+  const previousByKey = new Map(supplyPlanningRows.map(row => [supplyPlanningRowKey(row), row]));
+  return apiRows.map(row => {
+    const normalized = supplyPlanningCreateRow(row);
+    const previous = previousByKey.get(supplyPlanningRowKey(normalized));
+    if (previous) {
+      normalized.deliveryDays = previous.deliveryDays;
+      normalized.inTransit = previous.inTransit;
+    }
+    return normalized;
+  });
+}
+
+async function syncSupplyPlanningFromApi(options = {}) {
+  if (supplyPlanningApiSyncInFlight) return;
+  const targetDays = getSupplyPlanningDefaultTargetDays();
+  const marketplace = options.marketplace || getSupplyPlanningMarketplaceFilter() || 'all';
+  supplyPlanningApiSyncInFlight = true;
+  const btn = $('supplyPlanningApiSyncBtn');
+  const oldText = btn?.textContent || '';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Загружаю...';
+  }
+  setSupplyPlanningApiStatus(`Загружаю данные из API: ${marketplace === 'all' ? 'все площадки' : marketplaceLabel(marketplace)}...`, 'loading');
+  try {
+    const result = await api(`/api/supply-planning/sync?marketplace=${encodeURIComponent(marketplace)}&target_days=${encodeURIComponent(targetDays)}&sales_days=30`, {
+      method: 'GET',
+      timeoutMs: 120000,
+    });
+    const rows = Array.isArray(result.rows) ? result.rows : [];
+    const requested = marketplace === 'all'
+      ? ['ozon', 'wildberries', 'yandex']
+      : [marketplace];
+    const keepRows = supplyPlanningRows.filter(row => !requested.includes(String(row.marketplace || '').toLowerCase()));
+    const apiRows = mergeSupplyPlanningApiRows(rows);
+    supplyPlanningRows = [...keepRows, ...apiRows].sort((a, b) => supplyPlanningRowKey(a).localeCompare(supplyPlanningRowKey(b), 'ru'));
+    writeSupplyPlanningState();
+    renderSupplyPlanning();
+    if (!rows.length) {
+      setSupplyPlanningApiStatus('API подключён, но строки по выбранному фильтру не загрузились.', 'warning', supplyPlanningResultDetails(result));
+      return;
+    }
+    setSupplyPlanningApiStatus(`Загружено ${rows.length} строк из API.`, 'success', supplyPlanningResultDetails(result));
+  } catch (err) {
+    setSupplyPlanningApiStatus('Не удалось загрузить данные из API.', 'error', [err.message || String(err), 'Если ошибка 404 идёт от /api/supply-planning/sync — замените app/main.py и перезапустите сервер.']);
+  } finally {
+    supplyPlanningApiSyncInFlight = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = oldText || 'Обновить из API';
+    }
+  }
+}
+
+function calculateSupplyPlanningRow(row) {
+  const currentStock = Math.max(0, parseSupplyPlanningNumber(row.currentStock, 0));
+  const avgDailySales = Math.max(0, parseSupplyPlanningNumber(row.avgDailySales, 0));
+  const deliveryDays = Math.max(0, parseSupplyPlanningNumber(row.deliveryDays, 0));
+  const targetStockDays = Math.max(0, getSupplyPlanningDefaultTargetDays());
+  const inTransit = Math.max(0, parseSupplyPlanningNumber(row.inTransit, 0));
+
+  if (avgDailySales <= 0) {
+    return {
+      currentStock,
+      avgDailySales,
+      deliveryDays,
+      targetStockDays,
+      inTransit,
+      coverageDays: null,
+      salesDuringDelivery: 0,
+      recommendedSupply: 0,
+      status: 'no-sales',
+      statusText: 'нет продаж',
+    };
+  }
+
+  const coverageDays = currentStock / avgDailySales;
+  const salesDuringDelivery = deliveryDays * avgDailySales;
+  const need = targetStockDays * avgDailySales - currentStock + salesDuringDelivery - inTransit;
+  const recommendedSupply = Math.max(0, Math.ceil(need));
+
+  let status = 'ok';
+  let statusText = 'запас достаточный';
+  if (coverageDays <= deliveryDays) {
+    status = 'critical';
+    statusText = 'риск обнуления до поставки';
+  } else if (recommendedSupply > 0) {
+    status = 'need';
+    statusText = 'нужно пополнить';
+  }
+
+  return {
+    currentStock,
+    avgDailySales,
+    deliveryDays,
+    targetStockDays,
+    inTransit,
+    coverageDays,
+    salesDuringDelivery,
+    recommendedSupply,
+    status,
+    statusText,
+  };
+}
+
+function supplyPlanningValueHtml(label, value, extraClass = '') {
+  const clean = String(value || '').trim();
+  return `
+    <div class="supply-planning-readonly ${extraClass}">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(clean || '—')}</strong>
+    </div>
+  `;
+}
+
+function supplyPlanningRowHtml(row) {
+  const calc = calculateSupplyPlanningRow(row);
+  return `
+    <article class="supply-planning-row" data-supply-row="${escapeHtml(row.id)}">
+      <div class="supply-planning-row-fields">
+        ${supplyPlanningValueHtml('Маркетплейс', marketplaceLabel(row.marketplace))}
+        ${supplyPlanningValueHtml('Артикул / SKU', row.sku)}
+        ${supplyPlanningValueHtml('Товар', row.product || row.sku)}
+        ${supplyPlanningValueHtml('Склад / кластер', row.warehouse, 'supply-planning-readonly-wide')}
+        ${supplyPlanningValueHtml('Остаток, шт', formatSupplyPlanningNumber(row.currentStock, 0))}
+        ${supplyPlanningValueHtml('Продажи/день', formatSupplyPlanningNumber(row.avgDailySales, 2))}
+        <label>
+          <span>Доставка, дней</span>
+          <input data-supply-field="deliveryDays" type="number" min="0" step="1" value="${escapeHtml(row.deliveryDays)}" placeholder="0" />
+        </label>
+        <label>
+          <span>В пути, шт</span>
+          <input data-supply-field="inTransit" type="number" min="0" step="1" value="${escapeHtml(row.inTransit)}" placeholder="0" />
+        </label>
+      </div>
+      <div class="supply-planning-row-result">
+        <div class="supply-planning-status supply-planning-status-${calc.status}" data-supply-result="status">${escapeHtml(calc.statusText)}</div>
+        <div class="supply-planning-result-grid">
+          <div><span>Хватит на</span><strong data-supply-result="coverage">${calc.coverageDays === null ? '—' : `${formatSupplyPlanningNumber(calc.coverageDays)} дн.`}</strong></div>
+          <div><span>Продастся за доставку</span><strong data-supply-result="deliverySales">${formatSupplyPlanningNumber(calc.salesDuringDelivery)} шт</strong></div>
+          <div><span>К поставке</span><strong data-supply-result="recommended">${formatSupplyPlanningNumber(calc.recommendedSupply, 0)} шт</strong></div>
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+function renderSupplyPlanningSummary() {
+  const rows = supplyPlanningVisibleRows();
+  const calculations = rows.map(calculateSupplyPlanningRow);
+  const totalNeed = calculations.reduce((sum, item) => sum + Number(item.recommendedSupply || 0), 0);
+  const rowsCount = rows.length;
+  const needCount = calculations.filter(item => Number(item.recommendedSupply || 0) > 0).length;
+  const coverageValues = calculations
+    .map(item => item.coverageDays)
+    .filter(value => Number.isFinite(value));
+  const avgCoverage = coverageValues.length
+    ? coverageValues.reduce((sum, value) => sum + value, 0) / coverageValues.length
+    : null;
+
+  setAnalyticsText('supplyPlanningTotalNeed', `${formatSupplyPlanningNumber(totalNeed, 0)} шт`);
+  setAnalyticsText('supplyPlanningRowsCount', String(rowsCount));
+  setAnalyticsText('supplyPlanningNeedCount', String(needCount));
+  setAnalyticsText('supplyPlanningAvgCoverage', avgCoverage === null ? '—' : `${formatSupplyPlanningNumber(avgCoverage)} дн.`);
+}
+
+function renderSupplyPlanning() {
+  const box = $('supplyPlanningRows');
+  if (!box) return;
+  const rows = supplyPlanningVisibleRows();
+  if (!supplyPlanningRows.length) {
+    box.innerHTML = '<div class="empty-card supply-planning-empty">Данные по складам ещё не загружены. Нажмите «Обновить из API» — вручную склады, остатки и продажи вводить не нужно.</div>';
+    renderSupplyPlanningSummary();
+    return;
+  }
+  if (!rows.length) {
+    box.innerHTML = '<div class="empty-card supply-planning-empty">По текущему фильтру строк нет. Измените фильтр или обновите данные из API.</div>';
+    renderSupplyPlanningSummary();
+    return;
+  }
+  box.innerHTML = rows.map(supplyPlanningRowHtml).join('');
+  renderSupplyPlanningSummary();
+}
+
+function loadSupplyPlanning() {
+  const state = readSupplyPlanningState();
+  const defaultTargetInput = $('supplyPlanningDefaultTargetDays');
+  if (defaultTargetInput) defaultTargetInput.value = String(state.defaultTargetDays || DEFAULT_SUPPLY_PLANNING_TARGET_DAYS);
+  supplyPlanningRows = state.rows;
+  supplyPlanningLoaded = true;
+  renderSupplyPlanning();
+  writeSupplyPlanningState();
+}
+
+function updateSupplyPlanningRowResults(rowId) {
+  const row = supplyPlanningRows.find(item => item.id === rowId);
+  const card = document.querySelector(`[data-supply-row="${CSS.escape(rowId)}"]`);
+  if (!row || !card) {
+    renderSupplyPlanningSummary();
+    return;
+  }
+  const calc = calculateSupplyPlanningRow(row);
+  const statusEl = card.querySelector('[data-supply-result="status"]');
+  if (statusEl) {
+    statusEl.textContent = calc.statusText;
+    statusEl.className = `supply-planning-status supply-planning-status-${calc.status}`;
+  }
+  const coverageEl = card.querySelector('[data-supply-result="coverage"]');
+  if (coverageEl) coverageEl.textContent = calc.coverageDays === null ? '—' : `${formatSupplyPlanningNumber(calc.coverageDays)} дн.`;
+  const deliverySalesEl = card.querySelector('[data-supply-result="deliverySales"]');
+  if (deliverySalesEl) deliverySalesEl.textContent = `${formatSupplyPlanningNumber(calc.salesDuringDelivery)} шт`;
+  const recommendedEl = card.querySelector('[data-supply-result="recommended"]');
+  if (recommendedEl) recommendedEl.textContent = `${formatSupplyPlanningNumber(calc.recommendedSupply, 0)} шт`;
+  renderSupplyPlanningSummary();
+}
+
+function handleSupplyPlanningInput(event) {
+  const field = event.target.closest('[data-supply-field]');
+  if (!field) return;
+  const card = field.closest('[data-supply-row]');
+  if (!card) return;
+  const rowId = card.dataset.supplyRow;
+  const row = supplyPlanningRows.find(item => item.id === rowId);
+  if (!row) return;
+  row[field.dataset.supplyField] = field.value;
+  writeSupplyPlanningState();
+  updateSupplyPlanningRowResults(rowId);
+}
+
+function resetSupplyPlanningRows() {
+  if (!confirm('Очистить загруженные данные поставок из этого браузера?')) return;
+  supplyPlanningRows = [];
+  writeSupplyPlanningState();
+  renderSupplyPlanning();
+  setSupplyPlanningApiStatus('', 'info');
+}
+
+function handleSupplyPlanningFilterChange(event) {
+  renderSupplyPlanning();
+  const marketplace = getSupplyPlanningMarketplaceFilter();
+  if (event?.target?.id === 'supplyPlanningMarketplaceFilter' && marketplace !== 'all') {
+    const hasRows = supplyPlanningRows.some(row => String(row.marketplace || '').toLowerCase() === marketplace);
+    if (!hasRows) syncSupplyPlanningFromApi({ marketplace });
+  }
+}
+
+function bindSupplyPlanningControls() {
+  const rowsBox = $('supplyPlanningRows');
+  if (rowsBox && !rowsBox.dataset.boundSupplyPlanning) {
+    rowsBox.dataset.boundSupplyPlanning = '1';
+    rowsBox.addEventListener('input', handleSupplyPlanningInput);
+    rowsBox.addEventListener('change', handleSupplyPlanningInput);
+  }
+
+  const defaultTargetInput = $('supplyPlanningDefaultTargetDays');
+  if (defaultTargetInput && !defaultTargetInput.dataset.boundSupplyPlanning) {
+    defaultTargetInput.dataset.boundSupplyPlanning = '1';
+    defaultTargetInput.addEventListener('input', () => {
+      writeSupplyPlanningState();
+      renderSupplyPlanning();
+    });
+  }
+
+  ['supplyPlanningMarketplaceFilter', 'supplyPlanningSkuFilter', 'supplyPlanningWarehouseFilter', 'supplyPlanningUrgencyFilter'].forEach(id => {
+    const el = $(id);
+    if (el && !el.dataset.boundSupplyPlanning) {
+      el.dataset.boundSupplyPlanning = '1';
+      const eventName = el.tagName === 'SELECT' ? 'change' : 'input';
+      el.addEventListener(eventName, handleSupplyPlanningFilterChange);
+    }
+  });
+
+  bind('supplyPlanningApiSyncBtn', 'click', () => syncSupplyPlanningFromApi());
+  bind('supplyPlanningResetBtn', 'click', resetSupplyPlanningRows);
+}
+
+
 function isMobileSecondaryView(view) {
-  return ['questions', 'knowledge', 'users', 'techSettings', 'profile'].includes(String(view || ''));
+  return ['supplyPlanning', 'questions', 'knowledge', 'users', 'techSettings', 'profile'].includes(String(view || ''));
 }
 
 function setMobileMoreActiveState(view = activeView) {
@@ -3704,6 +6088,11 @@ function handleMobileMoreAction(action, view) {
     toggleNotificationsPanel(true);
     return;
   }
+  if (action === 'theme') {
+    toggleCrmTheme();
+    toggleMobileMoreSheet(false);
+    return;
+  }
   if (view) {
     toggleMobileMoreSheet(false);
     showView(view);
@@ -3727,6 +6116,52 @@ function viewFromRouteValue(value) {
 
 function getViewFromLocationHash() {
   return viewFromRouteValue(window.location.hash || '');
+}
+
+function getChatIdFromRouteValue(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const clean = raw
+    .replace(/^#/, '')
+    .replace(/^\/?/, '')
+    .split(/[?&]/)[0]
+    .trim();
+
+  const parts = clean.split('/').filter(Boolean);
+  const route = String(parts[0] || '').toLowerCase();
+  const rawChatId = parts[1];
+
+  if (!rawChatId || (route !== 'chats' && route !== 'chat')) return null;
+
+  const chatId = Number(decodeURIComponent(rawChatId));
+  return Number.isFinite(chatId) && chatId > 0 ? chatId : null;
+}
+
+function getChatIdFromLocationHash() {
+  return getChatIdFromRouteValue(window.location.hash || '');
+}
+
+function getQuestionIdFromRouteValue(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const clean = raw
+    .replace(/^#/, '')
+    .replace(/^\/?/, '')
+    .split(/[?&]/)[0]
+    .trim();
+
+  const parts = clean.split('/').filter(Boolean);
+  const route = String(parts[0] || '').toLowerCase();
+  const rawQuestionId = parts[1];
+
+  if (!rawQuestionId || (route !== 'questions' && route !== 'question')) return null;
+
+  const questionId = Number(decodeURIComponent(rawQuestionId));
+  return Number.isFinite(questionId) && questionId > 0 ? questionId : null;
+}
+
+function getQuestionIdFromLocationHash() {
+  return getQuestionIdFromRouteValue(window.location.hash || '');
 }
 
 function getInitialRouteView() {
@@ -3766,7 +6201,30 @@ function syncRouteForView(view, { replace = false } = {}) {
   window.location.hash = targetHash;
 }
 
+function syncRouteForChat(chatId, { replace = false } = {}) {
+  const numericChatId = Number(chatId);
+  if (!Number.isFinite(numericChatId) || numericChatId <= 0) return;
+
+  rememberRouteView('chats');
+
+  const targetHash = `#/chats/${encodeURIComponent(String(numericChatId))}`;
+  if (window.location.hash === targetHash) return;
+
+  const targetUrl = `${window.location.pathname}${window.location.search}${targetHash}`;
+  if (replace && window.history?.replaceState) {
+    window.history.replaceState(null, '', targetUrl);
+    return;
+  }
+  if (window.history?.pushState) {
+    window.history.pushState(null, '', targetUrl);
+    return;
+  }
+  window.location.hash = targetHash;
+}
+
 function showView(view, options = {}) {
+  if (view !== 'chats') setMobileChatOpen(false);
+
   const normalizedView = normalizeViewName(view);
   activeView = normalizedView;
   document.body.dataset.activeView = normalizedView;
@@ -3786,6 +6244,7 @@ function showView(view, options = {}) {
   const viewMap = {
     chats: $('chatsView'),
     analytics: $('analyticsView'),
+    supplyPlanning: $('supplyPlanningView'),
     tasks: $('tasksView'),
     reviews: $('reviewsView'),
     questions: $('questionsView'),
@@ -3805,6 +6264,7 @@ function showView(view, options = {}) {
   const navMap = {
     chats: $('navChats'),
     analytics: $('navAnalytics'),
+    supplyPlanning: $('navSupplyPlanning'),
     tasks: $('navTasks'),
     reviews: $('navReviews'),
     questions: $('navQuestions'),
@@ -3826,6 +6286,7 @@ function showView(view, options = {}) {
   }
 
   if (normalizedView === 'analytics') loadAnalytics().catch(err => notify('Ошибка загрузки аналитики', String(err.message || err)));
+  if (normalizedView === 'supplyPlanning') loadSupplyPlanning();
   if (normalizedView === 'tasks') {
     loadTaskTypes({ silent: true }).finally(() => loadAllTasks()).catch(err => notify('Ошибка загрузки задач', String(err.message || err)));
   }
@@ -4042,6 +6503,7 @@ function finishAuthBootstrap() {
 function showLogin(errorText = '') {
   finishAuthBootstrap();
   currentUser = null;
+  csrfToken = '';
   $('loginScreen')?.classList.remove('hidden');
   $('appShell')?.classList.add('app-locked');
   $('appShell')?.classList.add('hidden');
@@ -4059,10 +6521,13 @@ function showApp(user) {
 }
 
 async function checkAuth() {
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timeoutId = controller ? setTimeout(() => controller.abort(), 8000) : null;
   try {
     const response = await fetch('/api/auth/me', {
       cache: 'no-store',
       headers: { 'Content-Type': 'application/json' },
+      ...(controller ? { signal: controller.signal } : {}),
     });
     if (!response.ok) {
       showLogin();
@@ -4075,6 +6540,8 @@ async function checkAuth() {
     console.warn('auth check failed', err);
     showLogin('Не удалось проверить авторизацию. Попробуйте войти снова.');
     return false;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
   }
 }
 
@@ -4280,6 +6747,51 @@ async function handleChatFunnelListClick(event) {
   // Воронки временно скрыты из интерфейса. Оставлено для совместимости старых DOM.
 }
 
+function setChatStatusEditPanel(row, open) {
+  if (!row) return;
+  const panel = row.querySelector('[data-status-edit-panel]');
+  if (!panel) return;
+
+  if (open) {
+    document.querySelectorAll('#chatStatusesList [data-status-edit-panel]').forEach(item => {
+      if (item !== panel) item.classList.add('hidden');
+    });
+    document.querySelectorAll('#chatStatusesList .status-settings-row').forEach(item => {
+      if (item !== row) item.classList.remove('is-editing');
+    });
+  }
+
+  row.classList.toggle('is-editing', Boolean(open));
+  panel.classList.toggle('hidden', !open);
+}
+
+async function saveSingleChatStatus(row) {
+  if (!row) return;
+  const id = Number(row.dataset.statusId);
+  if (!id) return;
+  const saveBtn = row.querySelector('[data-status-action="save"]');
+  if (saveBtn) saveBtn.disabled = true;
+  try {
+    await api(`/api/chat-settings/statuses/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        title: row.querySelector('[data-status-title]')?.value?.trim() || '',
+        funnel_id: null,
+        color: row.querySelector('[data-status-color]')?.value || 'orange',
+        sort_order: Number(row.querySelector('[data-status-sort]')?.value || 0),
+        is_active: Boolean(row.querySelector('[data-status-active]')?.checked),
+      }),
+    });
+    await loadChatSettings({ keepValues: true });
+    await loadChats();
+    notify('Технические настройки', 'Статус сохранён.');
+  } catch (err) {
+    notify('Статус не сохранён', String(err.message || err));
+  } finally {
+    if (saveBtn) saveBtn.disabled = false;
+  }
+}
+
 async function handleChatStatusListClick(event) {
   const colorBtn = event.target.closest('[data-status-color-choice]');
   if (colorBtn) {
@@ -4295,11 +6807,40 @@ async function handleChatStatusListClick(event) {
   const row = btn.closest('[data-status-id]');
   if (!row) return;
   const id = Number(row.dataset.statusId);
-  if (btn.dataset.statusAction === 'delete') {
+  const action = btn.dataset.statusAction;
+
+  if (action === 'edit') {
+    event.preventDefault();
+    setChatStatusEditPanel(row, !row.classList.contains('is-editing'));
+    row.querySelector('[data-status-title]')?.focus?.();
+    return;
+  }
+
+  if (action === 'cancel') {
+    event.preventDefault();
+    setChatStatusEditPanel(row, false);
+    return;
+  }
+
+  if (action === 'save') {
+    event.preventDefault();
+    await saveSingleChatStatus(row);
+    return;
+  }
+
+  if (action === 'delete') {
     if (!confirm('Удалить статус? Если он системный или уже используется в чатах, CRM просто скроет его.')) return;
-    await api(`/api/chat-settings/statuses/${id}`, { method: 'DELETE' });
-    await loadChatSettings({ keepValues: true });
-    await loadChats();
+    btn.disabled = true;
+    try {
+      await api(`/api/chat-settings/statuses/${id}`, { method: 'DELETE' });
+      await loadChatSettings({ keepValues: true });
+      await loadChats();
+      notify('Технические настройки', 'Статус удалён или скрыт.');
+    } catch (err) {
+      notify('Статус не удалён', String(err.message || err));
+    } finally {
+      btn.disabled = false;
+    }
   }
 }
 
@@ -4321,6 +6862,8 @@ function setupAuthUi() {
           }),
         });
         showApp(data.user);
+        csrfToken = '';
+        refreshCsrfToken().catch(err => console.warn('csrf after login failed', err));
         if (!appInitialized) init();
         await refreshVisibleData();
       } catch (err) {
@@ -4338,7 +6881,11 @@ function setupAuthUi() {
     if (statusTimer) clearInterval(statusTimer);
     if (notificationsTimer) clearInterval(notificationsTimer);
     if (frontendSyncTimer) clearInterval(frontendSyncTimer);
+    if (chatUiRefreshTimer) clearInterval(chatUiRefreshTimer);
+    if (alertsTimer) clearInterval(alertsTimer);
     frontendSyncTimer = null;
+    chatUiRefreshTimer = null;
+    alertsTimer = null;
     frontendSyncInFlight = false;
     document.body.classList.remove('mobile-chat-open');
     showLogin('');
@@ -4354,15 +6901,24 @@ function setupAuthUi() {
 }
 
 async function bootstrap() {
-  setupAuthUi();
-  const ok = await checkAuth();
-  if (ok && !appInitialized) init();
+  try {
+    setupAuthUi();
+    const ok = await checkAuth();
+    if (ok && !appInitialized) init();
+  } catch (err) {
+    console.error('bootstrap failed', err);
+    showLogin('Ошибка запуска интерфейса. Обновите страницу или войдите снова.');
+  }
 }
 
 function init() {
   if (appInitialized) return;
   appInitialized = true;
+  updateCrmThemeUi();
+  bind('themeToggleBtn', 'click', toggleCrmTheme);
   activeView = getInitialRouteView();
+  const initialRouteChatId = getChatIdFromLocationHash();
+  const initialRouteQuestionId = getQuestionIdFromLocationHash();
   document.body.dataset.activeView = activeView || 'chats';
   loadChatSettings({ keepValues: true }).catch(err => console.warn('chat settings init failed', err));
   loadTaskTypes({ silent: true }).catch(err => console.warn('task types init failed', err));
@@ -4371,10 +6927,39 @@ function init() {
     await refreshVisibleData();
   });
   bind('mobileBackBtn', 'click', backToChatListMobile);
-  bind('marketplaceFilter', 'change', loadChats);
-  bind('statusFilter', 'change', loadChats);
-  if ($('funnelFilter')) bind('funnelFilter', 'change', () => { renderChatSettingsControls({ keepValues: true }); loadChats(); });
-  bind('chatScopeSelect', 'change', handleChatScopeSelectChange);
+  bind('marketplaceFilter', 'change', () => { resetChatListMobileLimit(); loadChats(); });
+  bind('statusFilter', 'change', () => { resetChatListMobileLimit(); loadChats(); });
+  if ($('funnelFilter')) bind('funnelFilter', 'change', () => { resetChatListMobileLimit(); renderChatSettingsControls({ keepValues: true }); loadChats(); });
+  bind('chatScopeSelect', 'change', (event) => { resetChatListMobileLimit(); handleChatScopeSelectChange(event); });
+  bind('chatSearchToggleBtn', 'click', (event) => {
+    event.preventDefault();
+    const box = $('chatSearchBox');
+    const isOpen = Boolean(box && !box.classList.contains('hidden'));
+    if (isOpen && !currentChatMessageSearch()) {
+      setChatSearchOpen(false);
+    } else {
+      setChatSearchOpen(true);
+    }
+  });
+  bind('chatSearchClearBtn', 'click', (event) => {
+    event.preventDefault();
+    clearChatMessageSearch();
+  });
+  const chatSearchInput = $('chatSearchInput');
+  if (chatSearchInput && !chatSearchInput.dataset.boundSearch) {
+    chatSearchInput.dataset.boundSearch = '1';
+    chatSearchInput.addEventListener('input', scheduleChatMessageSearch);
+    chatSearchInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        if (currentChatMessageSearch()) {
+          clearChatMessageSearch();
+        } else {
+          setChatSearchOpen(false);
+        }
+      }
+    });
+  }
   bind('taskStatusFilter', 'change', loadAllTasks);
   bind('taskBucketFilter', 'change', loadAllTasks);
   bind('taskTypeFilter', 'change', loadAllTasks);
@@ -4383,8 +6968,19 @@ function init() {
     clearTimeout(taskSearchTimer);
     taskSearchTimer = setTimeout(loadAllTasks, 220);
   });
+  bind('taskStandaloneNewBtn', 'click', () => toggleStandaloneTaskCreatePanel());
+  bind('taskStandaloneCancelBtn', 'click', () => toggleStandaloneTaskCreatePanel(false));
+  bind('taskStandaloneCancelBottomBtn', 'click', () => toggleStandaloneTaskCreatePanel(false));
+  bind('taskStandaloneType', 'change', updateStandaloneTaskCreateCommentLabel);
+  const standaloneTaskForm = $('taskStandaloneForm');
+  if (standaloneTaskForm && !standaloneTaskForm.dataset.boundSubmit) {
+    standaloneTaskForm.dataset.boundSubmit = '1';
+    standaloneTaskForm.addEventListener('submit', submitStandaloneTaskCreate);
+  }
+  bindSupplyPlanningControls();
   bind('navChats', 'click', () => showView('chats'));
   bind('navAnalytics', 'click', () => showView('analytics'));
+  bind('navSupplyPlanning', 'click', () => showView('supplyPlanning'));
   bind('navTasks', 'click', () => showView('tasks'));
   bind('navReviews', 'click', () => showView('reviews'));
   bind('navQuestions', 'click', () => showView('questions'));
@@ -4403,11 +6999,11 @@ function init() {
     handleMobileMoreAction(button.dataset.mobileAction || '', button.dataset.mobileView || '');
   });
   document.querySelector('.main-nav')?.addEventListener('click', (event) => {
-    const button = event.target.closest('#navChats, #navAnalytics, #navTasks, #navReviews, #navQuestions, #navKnowledge, #navUsers, #navTechSettings, #navProfile, #mobileMoreBtn');
+    const button = event.target.closest('#navChats, #navAnalytics, #navSupplyPlanning, #navTasks, #navReviews, #navQuestions, #navKnowledge, #navUsers, #navTechSettings, #navProfile, #mobileMoreBtn');
     if (!button) return;
     if (button.id === 'mobileMoreBtn') return;
     event.preventDefault();
-    const targetView = button.id === 'navAnalytics' ? 'analytics' : button.id === 'navTasks' ? 'tasks' : button.id === 'navReviews' ? 'reviews' : button.id === 'navQuestions' ? 'questions' : button.id === 'navKnowledge' ? 'knowledge' : button.id === 'navUsers' ? 'users' : button.id === 'navTechSettings' ? 'techSettings' : button.id === 'navProfile' ? 'profile' : 'chats';
+    const targetView = ({ navAnalytics: 'analytics', navSupplyPlanning: 'supplyPlanning', navTasks: 'tasks', navReviews: 'reviews', navQuestions: 'questions', navKnowledge: 'knowledge', navUsers: 'users', navTechSettings: 'techSettings', navProfile: 'profile' })[button.id] || 'chats';
     showView(targetView);
   });
   bind('analyticsRefreshBtn', 'click', loadAnalytics);
@@ -4503,29 +7099,103 @@ function init() {
   $('taskTypesSettingsList')?.addEventListener('change', handleTaskTypeSettingsChange);
   bind('saveChatSettingsBtn', 'click', saveAllChatStatuses);
   bind('saveChatSettingsBottomBtn', 'click', saveAllChatStatuses);
+  const extraMenuBtn = $('extraMenuBtn');
+  if (extraMenuBtn && extraMenuBtn.dataset.instantMenuBound !== '1') {
+    extraMenuBtn.dataset.instantMenuBound = '1';
+    extraMenuBtn.addEventListener('pointerdown', (event) => {
+      if (!isMobileChatLayout()) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      extraMenuPointerHandledAt = Date.now();
+      toggleExtraMenu();
+    }, { passive: false });
+  }
   bind('extraMenuBtn', 'click', (event) => {
     event.stopPropagation();
+
+    // На мобильном Safari после pointerdown прилетает синтетический click.
+    // Если его не отсечь, меню открывается/закрывается дважды.
+    if (isMobileChatLayout() && Date.now() - extraMenuPointerHandledAt < 700) {
+      return;
+    }
+
     toggleExtraMenu();
   });
   bind('aiGenerateBtn', 'click', generateAiReplyForSelected);
   bind('aiGenerateMenuBtn', 'click', () => { toggleExtraMenu(false); generateAiReplyForSelected(); });
   bind('aiClearSelectionBtn', 'click', clearAiSelection);
-  document.addEventListener('click', (event) => {
+  document.addEventListener('pointerdown', (event) => {
     const menu = $('extraMenu');
     const btn = $('extraMenuBtn');
+    const panel = $('extraPanel');
+
     if (!menu || !btn) return;
-    if (!menu.contains(event.target) && !btn.contains(event.target)) toggleExtraMenu(false);
-  });
+
+    const target = event.target;
+    const clickedInsideMenu =
+      menu.contains(target) ||
+      btn.contains(target) ||
+      panel?.contains(target) ||
+      target.closest?.('[data-extra]');
+
+    if (!clickedInsideMenu) {
+      toggleExtraMenu(false);
+      closeActiveExtraPanel();
+    }
+  }, true);
   document.querySelectorAll('[data-extra]').forEach(button => {
-    button.addEventListener('click', () => showExtraPanel(button.dataset.extra));
+    if (button.dataset.extraBound === '1') return;
+    button.dataset.extraBound = '1';
+
+    button.addEventListener('pointerdown', (event) => {
+      if (!isMobileChatLayout()) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      extraActionPointerHandledAt = Date.now();
+      pauseMobileChatBackgroundWork(2600);
+      showExtraPanel(button.dataset.extra);
+    }, { passive: false });
+
+    button.addEventListener('click', (event) => {
+      if (isMobileChatLayout()) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        // iOS Safari can still emit a click after pointerdown.
+        // If pointerdown already opened the panel, ignore the synthetic click.
+        if (Date.now() - extraActionPointerHandledAt < 700) {
+          return;
+        }
+
+        extraActionPointerHandledAt = Date.now();
+        showExtraPanel(button.dataset.extra);
+        return;
+      }
+
+      showExtraPanel(button.dataset.extra);
+    });
   });
   document.querySelectorAll('[data-view="tasks"]').forEach(button => {
     button.addEventListener('click', () => showView('tasks'));
   });
 
   bind('saveChatBtn', 'click', persistCurrentChatMeta);
-  bind('chatStatus', 'change', scheduleCurrentChatMetaSave);
-  bind('assignedUserSelect', 'change', scheduleCurrentChatMetaSave);
+  ['chatStatus', 'assignedUserSelect'].forEach((controlId) => {
+    const control = $(controlId);
+    if (!control || control.dataset.metaControlBound === '1') return;
+    control.dataset.metaControlBound = '1';
+    ['pointerdown', 'touchstart', 'focus', 'mousedown'].forEach((eventName) => {
+      control.addEventListener(eventName, () => markChatMetaControlBusy(9000), { passive: true });
+    });
+    control.addEventListener('change', () => {
+      markChatMetaControlBusy(9000);
+      scheduleCurrentChatMetaSave();
+    });
+  });
   bind('chatHeaderMenuBtn', 'click', () => {
     notify('Настройки чата', 'Статус и ответственный сохраняются автоматически.');
   });
@@ -4586,6 +7256,12 @@ function init() {
     messageForm.addEventListener('submit', async (event) => {
       event.preventDefault();
       if (!currentChatId) return;
+      if (outboundSendInFlight) return;
+
+      const now = Date.now();
+      if (now - outboundSendLastStartedAt < 1200) return;
+      outboundSendLastStartedAt = now;
+
       const text = $('messageText').value.trim();
       const imageFiles = selectedChatImageFiles.slice();
       if (!text && !imageFiles.length) return;
@@ -4594,30 +7270,29 @@ function init() {
       const attachBtn = $('attachImageBtn');
       if (sendBtn) sendBtn.disabled = true;
       if (attachBtn) attachBtn.disabled = true;
+
       outboundSendInFlight = true;
-      suppressFrontendSyncUntil = Date.now() + 8000;
+      suppressFrontendSyncUntil = Date.now() + 20000;
+      setStatus('Отправляем сообщение…');
+
       try {
-        if (imageFiles.length) {
-          const formData = new FormData();
-          imageFiles.forEach((file) => formData.append('images', file));
-          formData.append('caption', text || '');
-          await apiForm(`/api/chats/${currentChatId}/attachments`, formData);
-        } else {
-          await api(`/api/chats/${currentChatId}/messages`, {
-            method: 'POST',
-            body: JSON.stringify({ text, author: 'manager' }),
-          });
-        }
+        const chatIdForSend = Number(currentChatId);
+        await sendCurrentChatMessageWithRetry(chatIdForSend, { text, imageFiles });
+
         $('messageText').value = '';
         clearComposerAttachments();
         autosizeComposerTextarea($('messageText'));
+        setStatus('Сообщение отправлено');
+
         await loadChats();
-        await openChat(currentChatId);
+        if (Number(currentChatId) === chatIdForSend) {
+          await openChat(chatIdForSend);
+        }
       } catch (err) {
-        notify('Сообщение не отправлено', String(err.message || err));
+        notify('Сообщение не отправлено', friendlySendError(err));
       } finally {
         outboundSendInFlight = false;
-        suppressFrontendSyncUntil = Date.now() + 4000;
+        suppressFrontendSyncUntil = Date.now() + 6000;
         if (sendBtn) sendBtn.disabled = false;
         if (attachBtn) attachBtn.disabled = false;
       }
@@ -4748,37 +7423,66 @@ function init() {
       if (!currentChatId) return;
       const text = $('noteText').value.trim();
       if (!text) return;
-      await api(`/api/chats/${currentChatId}/notes`, {
+      const chatIdForNote = Number(currentChatId);
+      await api(`/api/chats/${chatIdForNote}/notes`, {
         method: 'POST',
         body: JSON.stringify({ text, author: 'manager' }),
       });
       $('noteText').value = '';
-      await openChat(currentChatId);
+      if (isMobileChatLayout()) {
+        await refreshCurrentChatMessagesOnly({ force: true });
+      } else {
+        await openChat(chatIdForNote);
+      }
     });
   }
 
-  showView(activeView, { replaceRoute: true });
+  showView(
+    activeView,
+    initialRouteChatId && activeView === 'chats'
+      ? { syncRoute: false }
+      : { replaceRoute: true }
+  );
 
   loadAssignees()
-    .then(() => {
-      if (activeView === 'chats') return loadChats();
+    .then(async () => {
+      if (activeView !== 'chats') return null;
+      await loadChats();
+      if (initialRouteChatId) {
+        await openChat(initialRouteChatId, { syncRoute: false, replaceRoute: true });
+      }
       return null;
     })
     .catch(err => console.warn('initial assignees load failed', err));
+
+  if (activeView === 'questions') {
+    loadQuestions()
+      .then(async () => {
+        if (initialRouteQuestionId) await openQuestion(initialRouteQuestionId, { silent: true });
+      })
+      .catch(err => console.warn('initial question route failed', err));
+  }
+
+  subscribeCrmPushNotifications({ silent: true }).catch(err => console.warn('initial push subscribe failed', err));
+  updatePushNotificationUi();
   loadSyncStatus();
   loadNotifications().catch(err => console.warn('notifications initial load failed', err));
 
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
       runFrontendSyncSoon('visible');
+      loadNotifications().catch(err => console.warn('visible notifications failed', err));
       if (activeView === 'chats') runActiveChatRefreshSoon('visible');
-      if (activeView === 'questions') runFrontendQuestionsSyncSoon('visible-questions');
+      runFrontendOzonQuestionsSync({ silent: true, force: true, respectMinGap: true })
+        .catch(err => console.warn('visible questions sync failed', err));
     }
   });
   window.addEventListener('focus', () => {
     runFrontendSyncSoon('focus');
+    loadNotifications().catch(err => console.warn('focus notifications failed', err));
     if (activeView === 'chats') runActiveChatRefreshSoon('focus');
-    if (activeView === 'questions') runFrontendQuestionsSyncSoon('focus-questions');
+    runFrontendOzonQuestionsSync({ silent: true, force: true, respectMinGap: true })
+      .catch(err => console.warn('focus questions sync failed', err));
   });
 
   startFrontendAutoSync();
@@ -4795,15 +7499,45 @@ function init() {
   }, 60000);
   notificationsTimer = setInterval(() => {
     if (!document.hidden) loadNotifications();
-  }, 60000);
+  }, NOTIFICATIONS_REFRESH_INTERVAL_MS);
 }
 
-document.addEventListener('DOMContentLoaded', bootstrap);
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', bootstrap, { once: true });
+} else {
+  bootstrap();
+}
 
 window.addEventListener('hashchange', () => {
   const routeView = getViewFromLocationHash();
-  if (!routeView || routeView === activeView) return;
-  showView(routeView, { syncRoute: false });
+  const routeChatId = getChatIdFromLocationHash();
+  const routeQuestionId = getQuestionIdFromLocationHash();
+
+  if (!routeView) return;
+
+  if (routeView !== activeView) {
+    showView(routeView, { syncRoute: false });
+  }
+
+  if (routeView === 'chats') {
+    if (routeChatId && Number(routeChatId) !== Number(currentChatId)) {
+      openChat(routeChatId, { syncRoute: false }).catch(err => notify('Не удалось открыть чат по ссылке', String(err.message || err)));
+      return;
+    }
+
+    if (!routeChatId && isMobileChatOpen()) {
+      mobileChatClosedByUser = true;
+      openChatRequestSeq += 1;
+      setMobileChatOpen(false);
+      renderChatList({ force: true });
+    }
+  }
+
+  if (routeView === 'questions' && routeQuestionId && Number(routeQuestionId) !== Number(currentQuestionId)) {
+    loadQuestions()
+      .then(() => openQuestion(routeQuestionId, { silent: true }))
+      .catch(err => notify('Не удалось открыть вопрос по уведомлению', String(err.message || err)));
+  }
 });
 
 

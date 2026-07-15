@@ -4,11 +4,15 @@ import os
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any
 
 from app.db import get_connection
 from app.schemas import ChatCreate, ChatUpdate, TaskCreate, TaskUpdate, TaskTypeCreate, TaskTypeUpdate
+
+
+STANDALONE_TASK_MARKETPLACE = 'internal_tasks'
+STANDALONE_TASK_EXTERNAL_CHAT_ID = 'standalone-tasks'
 
 
 STATUS_LABELS = {
@@ -1183,7 +1187,7 @@ def normalize_legacy_outbound_timestamps() -> int:
 def repair_chat_last_message_cache() -> int:
     """Repair stale last-message previews for existing local databases."""
     with get_connection() as conn:
-        rows = conn.execute("SELECT id FROM chats WHERE marketplace != 'mock'").fetchall()
+        rows = conn.execute("SELECT id FROM chats WHERE marketplace NOT IN ('mock', 'internal_tasks')").fetchall()
         for row in rows:
             refresh_chat_last_message(conn, int(row["id"]))
         return len(rows)
@@ -1383,6 +1387,168 @@ def _active_notification_user_ids(conn, *, include_viewers: bool = False) -> lis
     return [int(row["id"]) for row in rows]
 
 
+
+def _ensure_push_storage_conn(conn) -> None:
+    """Create/repair Web Push tables even when init_db was not run after update.
+
+    On shared hosting a route can be hit before the restarted process completed
+    the new migration, or users can replace repository.py/main.py without db.py
+    being loaded yet. Push routes must not crash with 500 just because
+    push_subscriptions / push_outbox are absent or from an older schema.
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            endpoint TEXT NOT NULL UNIQUE,
+            subscription_json TEXT NOT NULL DEFAULT '{}',
+            user_agent TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            failure_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_success_at TEXT,
+            last_error_at TEXT,
+            last_error TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS push_outbox (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            notification_id INTEGER,
+            user_id INTEGER NOT NULL,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at TEXT,
+            sent_at TEXT,
+            last_error TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
+
+    def columns(table: str) -> set[str]:
+        try:
+            rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+            return {str(row["name"]) if "name" in row.keys() else str(row[1]) for row in rows}
+        except Exception:
+            return set()
+
+    push_subscription_columns = columns("push_subscriptions")
+    push_subscription_additions = {
+        "subscription_json": "ALTER TABLE push_subscriptions ADD COLUMN subscription_json TEXT NOT NULL DEFAULT '{}'",
+        "user_agent": "ALTER TABLE push_subscriptions ADD COLUMN user_agent TEXT",
+        "is_active": "ALTER TABLE push_subscriptions ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1",
+        "failure_count": "ALTER TABLE push_subscriptions ADD COLUMN failure_count INTEGER NOT NULL DEFAULT 0",
+        "created_at": "ALTER TABLE push_subscriptions ADD COLUMN created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
+        "updated_at": "ALTER TABLE push_subscriptions ADD COLUMN updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
+        "last_success_at": "ALTER TABLE push_subscriptions ADD COLUMN last_success_at TEXT",
+        "last_error_at": "ALTER TABLE push_subscriptions ADD COLUMN last_error_at TEXT",
+        "last_error": "ALTER TABLE push_subscriptions ADD COLUMN last_error TEXT",
+    }
+    for column, statement in push_subscription_additions.items():
+        if column not in push_subscription_columns:
+            try:
+                conn.execute(statement)
+            except Exception:
+                pass
+
+    push_outbox_columns = columns("push_outbox")
+    push_outbox_additions = {
+        "notification_id": "ALTER TABLE push_outbox ADD COLUMN notification_id INTEGER",
+        "user_id": "ALTER TABLE push_outbox ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0",
+        "payload_json": "ALTER TABLE push_outbox ADD COLUMN payload_json TEXT NOT NULL DEFAULT '{}'",
+        "attempts": "ALTER TABLE push_outbox ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
+        "next_attempt_at": "ALTER TABLE push_outbox ADD COLUMN next_attempt_at TEXT",
+        "sent_at": "ALTER TABLE push_outbox ADD COLUMN sent_at TEXT",
+        "last_error": "ALTER TABLE push_outbox ADD COLUMN last_error TEXT",
+        "created_at": "ALTER TABLE push_outbox ADD COLUMN created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
+        "updated_at": "ALTER TABLE push_outbox ADD COLUMN updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    }
+    for column, statement in push_outbox_additions.items():
+        if column not in push_outbox_columns:
+            try:
+                conn.execute(statement)
+            except Exception:
+                pass
+
+    conn.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user_active
+            ON push_subscriptions(user_id, is_active);
+        CREATE INDEX IF NOT EXISTS idx_push_subscriptions_endpoint
+            ON push_subscriptions(endpoint);
+        CREATE INDEX IF NOT EXISTS idx_push_outbox_pending
+            ON push_outbox(sent_at, next_attempt_at, attempts, created_at);
+        CREATE INDEX IF NOT EXISTS idx_push_outbox_user
+            ON push_outbox(user_id);
+        """
+    )
+
+
+def ensure_push_storage() -> dict[str, Any]:
+    with get_connection() as conn:
+        _ensure_push_storage_conn(conn)
+        subscriptions_count = conn.execute("SELECT COUNT(*) AS c FROM push_subscriptions").fetchone()["c"]
+        outbox_pending = conn.execute("SELECT COUNT(*) AS c FROM push_outbox WHERE sent_at IS NULL").fetchone()["c"]
+        return {
+            "ok": True,
+            "push_subscriptions": int(subscriptions_count or 0),
+            "push_outbox_pending": int(outbox_pending or 0),
+        }
+
+
+
+def _notification_push_url(*, type: str, chat_id: int | None = None, task_id: int | None = None, entity_type: str | None = None, entity_id: str | None = None) -> str:
+    if chat_id:
+        return f"/#/chats/{int(chat_id)}"
+    if (entity_type or "").lower() == "question" and entity_id:
+        return f"/#/questions/{entity_id}"
+    if task_id:
+        return "/#/tasks"
+    if (type or "").lower().find("question") >= 0:
+        return "/#/questions"
+    return "/"
+
+
+def _enqueue_push_outbox_conn(
+    conn,
+    *,
+    notification_id: int,
+    user_id: int,
+    type: str,
+    title: str,
+    body: str | None = None,
+    chat_id: int | None = None,
+    task_id: int | None = None,
+    entity_type: str | None = None,
+    entity_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    _ensure_push_storage_conn(conn)
+    payload = {
+        "title": title or "Arti CRM",
+        "body": body or "Новое уведомление",
+        "type": type or "event",
+        "tag": f"arti-crm-notification-{notification_id}",
+        "url": _notification_push_url(type=type, chat_id=chat_id, task_id=task_id, entity_type=entity_type, entity_id=entity_id),
+        "notification_id": int(notification_id),
+        "chat_id": int(chat_id) if chat_id else None,
+        "task_id": int(task_id) if task_id else None,
+        "entity_type": entity_type,
+        "entity_id": str(entity_id) if entity_id not in (None, "") else None,
+        "metadata": metadata or {},
+    }
+    conn.execute(
+        """
+        INSERT INTO push_outbox (notification_id, user_id, payload_json)
+        VALUES (?, ?, ?)
+        """,
+        (int(notification_id), int(user_id), json.dumps(payload, ensure_ascii=False)),
+    )
+
+
 def _create_notification_conn(
     conn,
     *,
@@ -1422,7 +1588,21 @@ def _create_notification_conn(
         ),
     )
     if cur.rowcount:
-        return int(cur.lastrowid)
+        notification_id = int(cur.lastrowid)
+        _enqueue_push_outbox_conn(
+            conn,
+            notification_id=notification_id,
+            user_id=int(user_id),
+            type=str(type or "event"),
+            title=str(title or "Уведомление"),
+            body=body,
+            chat_id=chat_id,
+            task_id=task_id,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            metadata=metadata,
+        )
+        return notification_id
     return None
 
 
@@ -1522,6 +1702,124 @@ def _notify_new_inbound_message_conn(conn, *, chat_id: int, message_id: int, tex
 
 
 
+
+def enqueue_missing_message_notifications(limit: int = 200) -> dict[str, Any]:
+    """Create missing push/CRM notifications for chats that are still waiting.
+
+    Some marketplace sync paths update chat metadata after the message insert or
+    import messages that already existed locally. In those cases the original
+    per-message hook may not enqueue a push notification. This catch-up pass runs
+    after background sync and is idempotent because notifications use
+    message:{message_id}:user:{user_id} dedupe keys.
+    """
+    safe_limit = max(1, min(1000, int(limit or 200)))
+    with get_connection() as conn:
+        before = conn.execute("SELECT COUNT(*) AS c FROM notifications").fetchone()["c"]
+        rows = conn.execute(
+            """
+            SELECT
+                c.id AS chat_id,
+                m.id AS message_id,
+                m.text AS text,
+                m.created_at AS created_at
+            FROM chats c
+            JOIN messages m ON m.id = (
+                SELECT mx.id
+                FROM messages mx
+                WHERE mx.chat_id=c.id
+                ORDER BY datetime(mx.created_at) DESC, mx.id DESC
+                LIMIT 1
+            )
+            WHERE COALESCE(c.status, '') != 'closed'
+              AND m.direction='inbound'
+              AND NOT EXISTS (
+                SELECT 1
+                FROM notifications n
+                WHERE n.type='new_message'
+                  AND n.chat_id=c.id
+                  AND n.entity_id=CAST(m.id AS TEXT)
+              )
+            ORDER BY datetime(m.created_at) DESC, m.id DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+
+        checked = 0
+        for row in rows:
+            checked += 1
+            _notify_new_inbound_message_conn(
+                conn,
+                chat_id=int(row["chat_id"]),
+                message_id=int(row["message_id"]),
+                text=row["text"] or "",
+                created_at=row["created_at"],
+            )
+
+        after = conn.execute("SELECT COUNT(*) AS c FROM notifications").fetchone()["c"]
+        created = max(0, int(after or 0) - int(before or 0))
+        return {"ok": True, "checked": checked, "created": created}
+
+
+def enqueue_missing_question_notifications(limit: int = 200) -> dict[str, Any]:
+    """Create missing notifications for unanswered Ozon questions.
+
+    Idempotent via question:{external_question_id}:user:{user_id} dedupe keys.
+    """
+    safe_limit = max(1, min(1000, int(limit or 200)))
+    with get_connection() as conn:
+        before = conn.execute("SELECT COUNT(*) AS c FROM notifications").fetchone()["c"]
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM ozon_questions q
+            WHERE (q.answer_text IS NULL OR TRIM(q.answer_text)='')
+              AND COALESCE(q.status, '') NOT IN ('PROCESSED', 'processed', 'ANSWERED', 'answered')
+              AND NOT EXISTS (
+                SELECT 1
+                FROM notifications n
+                WHERE n.type='new_question'
+                  AND n.entity_type='question'
+                  AND n.entity_id=CAST(q.id AS TEXT)
+              )
+            ORDER BY datetime(COALESCE(q.published_at, q.updated_at, q.created_at)) DESC, q.id DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+
+        checked = 0
+        for row in rows:
+            if not _message_recent_enough_for_notification(row["published_at"]):
+                continue
+            checked += 1
+            product = str(row["product_name"] or row["sku"] or "Товар").strip()
+            body = _notification_preview(row["text"] or "Новый вопрос без текста")
+            external_question_id = str(row["external_question_id"] or row["id"])
+            for user_id in _active_notification_user_ids(conn, include_viewers=False):
+                _create_notification_conn(
+                    conn,
+                    user_id=int(user_id),
+                    type="new_question",
+                    title=f"Новый вопрос Ozon: {product}",
+                    body=body,
+                    entity_type="question",
+                    entity_id=str(row["id"]),
+                    dedupe_key=f"question:{external_question_id}:user:{user_id}",
+                    metadata={
+                        "marketplace": "ozon",
+                        "external_question_id": external_question_id,
+                        "published_at": row["published_at"],
+                        "catchup": True,
+                    },
+                )
+
+        after = conn.execute("SELECT COUNT(*) AS c FROM notifications").fetchone()["c"]
+        created = max(0, int(after or 0) - int(before or 0))
+        return {"ok": True, "checked": checked, "created": created}
+
+
+
 def cleanup_read_marketplace_notifications() -> int:
     """Mark old message notifications read when marketplace says dialog is not unread."""
     with get_connection() as conn:
@@ -1566,6 +1864,7 @@ def list_notifications(user_id: int, *, limit: int = 30, unread_only: bool = Fal
             SELECT
                 n.*,
                 c.marketplace,
+                CASE WHEN c.marketplace='internal_tasks' THEN 1 ELSE 0 END AS is_standalone,
                 c.customer_name,
                 c.customer_public_id,
                 c.external_chat_id,
@@ -1602,6 +1901,165 @@ def mark_all_notifications_read(user_id: int) -> int:
             (int(user_id),),
         )
         return int(cur.rowcount or 0)
+
+
+def save_push_subscription(user_id: int, subscription: dict[str, Any], *, user_agent: str | None = None) -> dict[str, Any]:
+    endpoint = str((subscription or {}).get("endpoint") or "").strip()
+    keys = (subscription or {}).get("keys") or {}
+    if not endpoint or not isinstance(keys, dict) or not keys.get("p256dh") or not keys.get("auth"):
+        raise ValueError("Invalid push subscription")
+    subscription_json = json.dumps(subscription, ensure_ascii=False)
+    with get_connection() as conn:
+        _ensure_push_storage_conn(conn)
+        conn.execute(
+            """
+            INSERT INTO push_subscriptions (user_id, endpoint, subscription_json, user_agent, is_active, failure_count)
+            VALUES (?, ?, ?, ?, 1, 0)
+            ON CONFLICT(endpoint) DO UPDATE SET
+                user_id=excluded.user_id,
+                subscription_json=excluded.subscription_json,
+                user_agent=excluded.user_agent,
+                is_active=1,
+                failure_count=0,
+                updated_at=CURRENT_TIMESTAMP,
+                last_error_at=NULL,
+                last_error=NULL
+            """,
+            (int(user_id), endpoint, subscription_json, user_agent),
+        )
+        row = conn.execute("SELECT * FROM push_subscriptions WHERE endpoint=?", (endpoint,)).fetchone()
+        return row_to_dict(row)
+
+
+def delete_push_subscription(user_id: int, endpoint: str | None = None) -> int:
+    with get_connection() as conn:
+        _ensure_push_storage_conn(conn)
+        if endpoint:
+            cur = conn.execute(
+                "UPDATE push_subscriptions SET is_active=0, updated_at=CURRENT_TIMESTAMP WHERE user_id=? AND endpoint=?",
+                (int(user_id), str(endpoint)),
+            )
+        else:
+            cur = conn.execute(
+                "UPDATE push_subscriptions SET is_active=0, updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
+                (int(user_id),),
+            )
+        return int(cur.rowcount or 0)
+
+
+def list_push_subscriptions(user_id: int | None = None, *, active_only: bool = True) -> list[dict[str, Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if user_id is not None:
+        clauses.append("user_id=?")
+        params.append(int(user_id))
+    if active_only:
+        clauses.append("is_active=1")
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    with get_connection() as conn:
+        _ensure_push_storage_conn(conn)
+        rows = conn.execute(
+            f"""
+            SELECT * FROM push_subscriptions
+            {where}
+            ORDER BY updated_at DESC, id DESC
+            """,
+            params,
+        ).fetchall()
+        items = []
+        for row in rows:
+            item = row_to_dict(row)
+            try:
+                item["subscription"] = json.loads(item.get("subscription_json") or "{}")
+            except Exception:
+                item["subscription"] = {}
+            items.append(item)
+        return items
+
+
+def get_pending_push_outbox(limit: int = 50) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(int(limit or 50), 200))
+    with get_connection() as conn:
+        _ensure_push_storage_conn(conn)
+        rows = conn.execute(
+            """
+            SELECT * FROM push_outbox
+            WHERE sent_at IS NULL
+              AND attempts < 5
+              AND (next_attempt_at IS NULL OR datetime(next_attempt_at) <= datetime('now'))
+            ORDER BY created_at ASC, id ASC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+        items = []
+        for row in rows:
+            item = row_to_dict(row)
+            try:
+                item["payload"] = json.loads(item.get("payload_json") or "{}")
+            except Exception:
+                item["payload"] = {}
+            items.append(item)
+        return items
+
+
+def mark_push_outbox_sent(outbox_id: int) -> None:
+    with get_connection() as conn:
+        _ensure_push_storage_conn(conn)
+        conn.execute(
+            """
+            UPDATE push_outbox
+            SET sent_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP, last_error=NULL
+            WHERE id=?
+            """,
+            (int(outbox_id),),
+        )
+
+
+def mark_push_outbox_failed(outbox_id: int, error: str) -> None:
+    clean_error = str(error or "")[:1000]
+    with get_connection() as conn:
+        _ensure_push_storage_conn(conn)
+        row = conn.execute("SELECT attempts FROM push_outbox WHERE id=?", (int(outbox_id),)).fetchone()
+        attempts = int(row["attempts"] or 0) + 1 if row else 1
+        delay_seconds = min(300, 10 * (2 ** max(0, attempts - 1)))
+        next_attempt = (datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)).isoformat()
+        conn.execute(
+            """
+            UPDATE push_outbox
+            SET attempts=?, next_attempt_at=?, updated_at=CURRENT_TIMESTAMP, last_error=?
+            WHERE id=?
+            """,
+            (attempts, next_attempt, clean_error, int(outbox_id)),
+        )
+
+
+def mark_push_subscription_result(endpoint: str, *, ok: bool, error: str | None = None, deactivate: bool = False) -> None:
+    if not endpoint:
+        return
+    with get_connection() as conn:
+        _ensure_push_storage_conn(conn)
+        if ok:
+            conn.execute(
+                """
+                UPDATE push_subscriptions
+                SET last_success_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP,
+                    last_error_at=NULL, last_error=NULL, failure_count=0, is_active=1
+                WHERE endpoint=?
+                """,
+                (endpoint,),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE push_subscriptions
+                SET last_error_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP,
+                    last_error=?, failure_count=failure_count+1,
+                    is_active=CASE WHEN ? THEN 0 ELSE is_active END
+                WHERE endpoint=?
+                """,
+                (str(error or "")[:1000], 1 if deactivate else 0, endpoint),
+            )
 
 
 def add_message(
@@ -1986,8 +2444,39 @@ def _chats_select_sql(where: str) -> str:
     """
 
 
-def list_chats(status: str | None = None, marketplace: str | None = None, archived: bool = False, assigned_user_id: int | None = None, funnel_id: int | None = None) -> list[dict[str, Any]]:
-    clauses = ["c.marketplace != 'mock'", f"NOT ({_system_excluded_condition_sql('c')})"]
+def _escape_like_query(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _chat_message_search_variants(q: str | None) -> list[str]:
+    query = (q or "").strip()
+    if len(query) < 2:
+        return []
+
+    variants: list[str] = []
+    for variant in (query, query.lower(), query.upper(), query.capitalize()):
+        if variant and variant not in variants:
+            variants.append(variant)
+    return variants
+
+
+def _message_search_clause(alias: str, variants: list[str]) -> str:
+    return "(" + " OR ".join([f"COALESCE({alias}.text, '') LIKE ? ESCAPE '\\'"] * len(variants)) + ")"
+
+
+def _message_search_params(variants: list[str]) -> list[str]:
+    return [f"%{_escape_like_query(variant)}%" for variant in variants]
+
+
+def list_chats(
+    status: str | None = None,
+    marketplace: str | None = None,
+    archived: bool = False,
+    assigned_user_id: int | None = None,
+    funnel_id: int | None = None,
+    q: str | None = None,
+) -> list[dict[str, Any]]:
+    clauses = ["c.marketplace NOT IN ('mock', 'internal_tasks')", f"NOT ({_system_excluded_condition_sql('c')})"]
     params: list[Any] = []
     closed_condition = _closed_status_condition_sql()
 
@@ -2010,13 +2499,50 @@ def list_chats(status: str | None = None, marketplace: str | None = None, archiv
     if assigned_user_id:
         clauses.append("c.assigned_user_id = ?")
         params.append(int(assigned_user_id))
+
+    search_variants = _chat_message_search_variants(q)
+    search_params = _message_search_params(search_variants)
+    if search_variants:
+        clauses.append(
+            f"""
+            EXISTS (
+                SELECT 1
+                FROM messages sm
+                WHERE sm.chat_id = c.id
+                  AND {_message_search_clause('sm', search_variants)}
+            )
+            """
+        )
+        params.extend(search_params)
+
     where = f"WHERE {' AND '.join(clauses)}"
     with get_connection() as conn:
         rows = conn.execute(_chats_select_sql(where), params).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = _decorate_chat_sla(row_to_dict(row))
+            if search_variants:
+                match = conn.execute(
+                    f"""
+                    SELECT text, created_at
+                    FROM messages ms
+                    WHERE ms.chat_id=?
+                      AND {_message_search_clause('ms', search_variants)}
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 1
+                    """,
+                    [int(item["id"]), *search_params],
+                ).fetchone()
+                if match:
+                    item["search_match_text"] = match["text"]
+                    item["search_match_at"] = match["created_at"]
+                    item["search_query"] = (q or "").strip()
+            result.append(item)
+
         # v40: do not additionally hide Ozon rows at list-render time.
         # System/support chats are filtered/deleted during sync; hiding here made
         # real customer chats disappear when old metadata was classified too broadly.
-        return [_decorate_chat_sla(row_to_dict(r)) for r in rows]
+        return result
 
 
 
@@ -2025,7 +2551,7 @@ def get_chat_by_external(marketplace: str, external_chat_id: str) -> dict[str, A
     """Return a chat row by marketplace external id without loading full history."""
     with get_connection() as conn:
         row = conn.execute(
-            _chats_select_sql("WHERE c.marketplace=? AND c.external_chat_id=? AND c.marketplace != 'mock'"),
+            _chats_select_sql("WHERE c.marketplace=? AND c.external_chat_id=? AND c.marketplace NOT IN ('mock', 'internal_tasks')"),
             (marketplace, external_chat_id),
         ).fetchone()
         return _decorate_chat_sla(row_to_dict(row)) if row else None
@@ -2039,7 +2565,7 @@ def get_chat_summary(chat_id: int) -> dict[str, Any] | None:
     """
     with get_connection() as conn:
         row = conn.execute(
-            _chats_select_sql("WHERE c.id=? AND c.marketplace != 'mock'"),
+            _chats_select_sql("WHERE c.id=? AND c.marketplace NOT IN ('mock', 'internal_tasks')"),
             (int(chat_id),),
         ).fetchone()
         return _decorate_chat_sla(row_to_dict(row)) if row else None
@@ -2053,7 +2579,7 @@ def chat_has_messages(chat_id: int) -> bool:
 
 def get_chat(chat_id: int, messages_limit: int | None = None) -> dict[str, Any] | None:
     with get_connection() as conn:
-        chat = conn.execute(_chats_select_sql("WHERE c.id=? AND c.marketplace != 'mock'"), (chat_id,)).fetchone()
+        chat = conn.execute(_chats_select_sql("WHERE c.id=? AND c.marketplace NOT IN ('mock', 'internal_tasks')"), (chat_id,)).fetchone()
         if not chat:
             return None
         chat_dict = row_to_dict(chat)
@@ -2064,16 +2590,16 @@ def get_chat(chat_id: int, messages_limit: int | None = None) -> dict[str, Any] 
                     SELECT *
                     FROM messages
                     WHERE chat_id=?
-                    ORDER BY datetime(created_at) DESC, id DESC
+                    ORDER BY created_at DESC, id DESC
                     LIMIT ?
                 )
-                ORDER BY datetime(created_at) ASC, id ASC
+                ORDER BY created_at ASC, id ASC
                 """,
                 (chat_id, int(messages_limit)),
             ).fetchall()
         else:
             messages = conn.execute(
-                "SELECT * FROM messages WHERE chat_id=? ORDER BY datetime(created_at) ASC, id ASC",
+                "SELECT * FROM messages WHERE chat_id=? ORDER BY created_at ASC, id ASC",
                 (chat_id,),
             ).fetchall()
         tasks = conn.execute(
@@ -2082,7 +2608,7 @@ def get_chat(chat_id: int, messages_limit: int | None = None) -> dict[str, Any] 
             FROM tasks t
             LEFT JOIN users u ON u.id = t.assigned_user_id
             WHERE t.chat_id=?
-            ORDER BY datetime(t.created_at) DESC, t.id DESC
+            ORDER BY t.created_at DESC, t.id DESC
             """,
             (chat_id,),
         ).fetchall()
@@ -2475,6 +3001,91 @@ def delete_task_type(type_id: int) -> bool:
         return True
 
 
+
+def _ensure_standalone_task_chat_conn(conn) -> int:
+    """Return the hidden service chat used only as a technical parent for tasks without a customer chat.
+
+    The existing tasks table requires chat_id. Instead of changing the old SQLite
+    schema, standalone tasks are linked to one internal chat and hidden from the
+    normal chat list by marketplace name. The task list still shows these tasks.
+    """
+    row = conn.execute(
+        "SELECT id FROM chats WHERE marketplace=? AND external_chat_id=?",
+        (STANDALONE_TASK_MARKETPLACE, STANDALONE_TASK_EXTERNAL_CHAT_ID),
+    ).fetchone()
+    if row:
+        return int(row["id"])
+
+    metadata = {
+        "_crm_internal": True,
+        "_crm_standalone_tasks_container": True,
+        "label": "Задачи без чата",
+    }
+    cur = conn.execute(
+        """
+        INSERT INTO chats (marketplace, external_chat_id, customer_name, customer_public_id, order_id, status, metadata_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            STANDALONE_TASK_MARKETPLACE,
+            STANDALONE_TASK_EXTERNAL_CHAT_ID,
+            "Без чата",
+            None,
+            None,
+            "closed",
+            json.dumps(metadata, ensure_ascii=False),
+        ),
+    )
+    return int(cur.lastrowid)
+
+
+def _normalize_task_type_id_for_insert(conn, task_type_id: Any) -> int | None:
+    if task_type_id in (None, "", 0, "0"):
+        return None
+    try:
+        numeric_id = int(task_type_id)
+    except (TypeError, ValueError):
+        return None
+    exists = conn.execute("SELECT id FROM task_types WHERE id=? AND is_active=1", (numeric_id,)).fetchone()
+    return numeric_id if exists else None
+
+
+def create_standalone_task(
+    *,
+    title: str,
+    description: str | None = None,
+    task_type_id: int | None = None,
+    assignee: str | None = None,
+    assigned_user_id: int | None = None,
+    due_at: str | None = None,
+) -> int:
+    title = (title or "").strip()
+    if not title:
+        raise ValueError("Task title is required")
+    with get_connection() as conn:
+        _ensure_task_types_table(conn)
+        chat_id = _ensure_standalone_task_chat_conn(conn)
+        normalized_task_type_id = _normalize_task_type_id_for_insert(conn, task_type_id)
+        normalized_assignee = assignee
+        if assigned_user_id:
+            normalized_assignee = _get_user_label(conn, int(assigned_user_id)) or normalized_assignee
+        cur = conn.execute(
+            """
+            INSERT INTO tasks (chat_id, task_type_id, title, description, status, assignee, assigned_user_id, due_at)
+            VALUES (?, ?, ?, ?, 'new', ?, ?, ?)
+            """,
+            (
+                chat_id,
+                normalized_task_type_id,
+                title,
+                description,
+                normalized_assignee,
+                int(assigned_user_id) if assigned_user_id else None,
+                due_at or None,
+            ),
+        )
+        return int(cur.lastrowid)
+
 def create_task(payload: TaskCreate) -> int:
     with get_connection() as conn:
         _ensure_task_types_table(conn)
@@ -2482,11 +3093,7 @@ def create_task(payload: TaskCreate) -> int:
         assignee = payload.assignee
         if assigned_user_id:
             assignee = _get_user_label(conn, int(assigned_user_id)) or assignee
-        task_type_id = payload.task_type_id
-        if task_type_id:
-            exists = conn.execute("SELECT id FROM task_types WHERE id=? AND is_active=1", (int(task_type_id),)).fetchone()
-            if not exists:
-                task_type_id = None
+        task_type_id = _normalize_task_type_id_for_insert(conn, payload.task_type_id)
         cur = conn.execute(
             """
             INSERT INTO tasks (chat_id, task_type_id, title, description, status, assignee, assigned_user_id, due_at)
@@ -2623,6 +3230,21 @@ def get_task(task_id: int) -> dict[str, Any] | None:
         return _decorate_task(row, conn) if row else None
 
 
+
+def delete_task(task_id: int) -> bool:
+    task_id = int(task_id)
+    with get_connection() as conn:
+        exists = conn.execute("SELECT id FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if not exists:
+            return False
+        # Explicitly remove child records first. This keeps deletion stable even if
+        # the current SQLite database was created by an older schema without ON DELETE CASCADE.
+        conn.execute("DELETE FROM task_comments WHERE task_id=?", (task_id,))
+        conn.execute("DELETE FROM notifications WHERE task_id=?", (task_id,))
+        cur = conn.execute("DELETE FROM tasks WHERE id=?", (task_id,))
+        return bool(cur.rowcount)
+
+
 def list_tasks(
     status: str | None = None,
     bucket: str | None = None,
@@ -2676,6 +3298,7 @@ def list_tasks(
                 tt.title AS task_type_title,
                 tt.comment_label AS task_type_comment_label,
                 c.marketplace,
+                CASE WHEN c.marketplace='internal_tasks' THEN 1 ELSE 0 END AS is_standalone,
                 c.customer_name,
                 c.customer_public_id,
                 c.order_id,
@@ -2820,8 +3443,8 @@ def log_webhook_event(source: str, event_type: str | None, external_id: str | No
 
 def stats() -> dict[str, Any]:
     with get_connection() as conn:
-        by_status = conn.execute("SELECT status, COUNT(*) AS count FROM chats WHERE marketplace != 'mock' GROUP BY status").fetchall()
-        by_marketplace = conn.execute("SELECT marketplace, COUNT(*) AS count FROM chats WHERE marketplace != 'mock' GROUP BY marketplace").fetchall()
+        by_status = conn.execute("SELECT status, COUNT(*) AS count FROM chats WHERE marketplace NOT IN ('mock', 'internal_tasks') GROUP BY status").fetchall()
+        by_marketplace = conn.execute("SELECT marketplace, COUNT(*) AS count FROM chats WHERE marketplace NOT IN ('mock', 'internal_tasks') GROUP BY marketplace").fetchall()
         tasks_open = conn.execute(
             """
             SELECT COUNT(*) AS count
@@ -2844,7 +3467,7 @@ def stats() -> dict[str, Any]:
             """
         ).fetchone()
         archived = conn.execute(
-            "SELECT COUNT(*) AS count FROM chats WHERE marketplace != 'mock' AND status='closed'"
+            "SELECT COUNT(*) AS count FROM chats WHERE marketplace NOT IN ('mock', 'internal_tasks') AND status='closed'"
         ).fetchone()
         reviews_new = conn.execute(
             "SELECT COUNT(*) AS count FROM reviews WHERE marketplace='ozon' AND (reply_text IS NULL OR reply_text='')"
@@ -3047,6 +3670,11 @@ def upsert_ozon_question(question: dict[str, Any]) -> int:
         raise ValueError("external_question_id is required")
     raw = question.get("raw") or {}
     with get_connection() as conn:
+        existing = conn.execute(
+            "SELECT id FROM ozon_questions WHERE external_question_id=?",
+            (external_question_id,),
+        ).fetchone()
+        is_new_question = existing is None
         conn.execute(
             """
             INSERT INTO ozon_questions (
@@ -3084,7 +3712,35 @@ def upsert_ozon_question(question: dict[str, Any]) -> int:
             "SELECT id FROM ozon_questions WHERE external_question_id=?",
             (external_question_id,),
         ).fetchone()
-        return int(row["id"])
+        question_id = int(row["id"])
+
+        answer_text = str(question.get("answer_text") or "").strip()
+        if (
+            is_new_question
+            and not answer_text
+            and not _is_ozon_question_processed_status(question.get("status"))
+            and _message_recent_enough_for_notification(question.get("published_at"))
+        ):
+            product = str(question.get("product_name") or question.get("sku") or "Товар").strip()
+            body = _notification_preview(question.get("text") or "Новый вопрос без текста")
+            for user_id in _active_notification_user_ids(conn, include_viewers=False):
+                _create_notification_conn(
+                    conn,
+                    user_id=int(user_id),
+                    type="new_question",
+                    title=f"Новый вопрос Ozon: {product}",
+                    body=body,
+                    entity_type="question",
+                    entity_id=str(question_id),
+                    dedupe_key=f"question:{external_question_id}:user:{user_id}",
+                    metadata={
+                        "marketplace": "ozon",
+                        "external_question_id": external_question_id,
+                        "published_at": question.get("published_at"),
+                    },
+                )
+
+        return question_id
 
 
 def list_ozon_questions(status: str | None = None, unanswered: bool = False) -> list[dict[str, Any]]:
@@ -3306,9 +3962,10 @@ def authenticate_user(username: str, password: str) -> dict[str, Any] | None:
         return {k: data[k] for k in ('id', 'username', 'display_name', 'role', 'is_active', 'created_at', 'updated_at') if k in data}
 
 
-def create_session(user_id: int, *, user_agent: str | None = None, ip: str | None = None, days: int = 14) -> str:
+def create_session(user_id: int, *, user_agent: str | None = None, ip: str | None = None, days: int = 14, seconds: int | None = None) -> str:
     token = secrets.token_urlsafe(48)
-    expires_at = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat(timespec='seconds')
+    ttl = timedelta(seconds=max(1800, int(seconds))) if seconds is not None else timedelta(days=days)
+    expires_at = (datetime.now(timezone.utc) + ttl).isoformat(timespec='seconds')
     with get_connection() as conn:
         conn.execute(
             "INSERT INTO sessions (session_token, user_id, expires_at, user_agent, ip) VALUES (?, ?, ?, ?, ?)",
@@ -3348,6 +4005,260 @@ def cleanup_expired_sessions() -> int:
         return int(cur.rowcount or 0)
 
 
+
+# --- v75 security audit storage -------------------------------------------------
+
+def ensure_security_tables() -> None:
+    with get_connection() as conn:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS audit_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                user_id INTEGER,
+                username TEXT,
+                action TEXT NOT NULL,
+                path TEXT,
+                method TEXT,
+                ip TEXT,
+                user_agent TEXT,
+                entity_type TEXT,
+                entity_id TEXT,
+                metadata_json TEXT DEFAULT '{}',
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE SET NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);
+            CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id);
+            CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
+            """
+        )
+
+
+def write_audit_log(
+    *,
+    user_id: int | None = None,
+    username: str | None = None,
+    action: str,
+    path: str | None = None,
+    method: str | None = None,
+    ip: str | None = None,
+    user_agent: str | None = None,
+    entity_type: str | None = None,
+    entity_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> int | None:
+    try:
+        ensure_security_tables()
+        with get_connection() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO audit_logs (
+                    user_id, username, action, path, method, ip, user_agent,
+                    entity_type, entity_id, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    user_id,
+                    username,
+                    str(action or '')[:240],
+                    str(path or '')[:500] or None,
+                    str(method or '')[:20] or None,
+                    str(ip or '')[:80] or None,
+                    str(user_agent or '')[:500] or None,
+                    str(entity_type or '')[:80] or None,
+                    str(entity_id or '')[:120] or None,
+                    json.dumps(metadata or {}, ensure_ascii=False),
+                ),
+            )
+            return int(cur.lastrowid or 0)
+    except Exception:
+        return None
+
+
+
+# --- v80 login brute-force protection ------------------------------------------
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _utcnow_iso() -> str:
+    return _utcnow().isoformat(timespec='seconds')
+
+
+def _parse_utc_iso(value: Any) -> datetime | None:
+    if value in (None, ''):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith('Z'):
+        text = text[:-1] + '+00:00'
+    try:
+        dt = datetime.fromisoformat(text)
+    except Exception:
+        try:
+            dt = datetime.fromisoformat(text.replace(' ', 'T'))
+        except Exception:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _normalize_login_key(username: str | None) -> str:
+    return str(username or '').strip().lower()[:180]
+
+
+def ensure_login_security_tables() -> None:
+    with get_connection() as conn:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS login_lockouts (
+                username_norm TEXT NOT NULL,
+                ip TEXT NOT NULL,
+                failed_count INTEGER NOT NULL DEFAULT 0,
+                first_failed_at TEXT,
+                last_failed_at TEXT,
+                locked_until TEXT,
+                PRIMARY KEY(username_norm, ip)
+            );
+            CREATE INDEX IF NOT EXISTS idx_login_lockouts_locked_until ON login_lockouts(locked_until);
+            CREATE INDEX IF NOT EXISTS idx_login_lockouts_ip ON login_lockouts(ip);
+
+            CREATE TABLE IF NOT EXISTS login_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                username_norm TEXT,
+                ip TEXT,
+                user_agent TEXT,
+                success INTEGER NOT NULL DEFAULT 0,
+                reason TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_login_attempts_created_at ON login_attempts(created_at);
+            CREATE INDEX IF NOT EXISTS idx_login_attempts_username_ip ON login_attempts(username_norm, ip, created_at);
+            CREATE INDEX IF NOT EXISTS idx_login_attempts_ip ON login_attempts(ip, created_at);
+            """
+        )
+
+
+def _retry_after_from_iso(value: Any) -> int:
+    until = _parse_utc_iso(value)
+    if not until:
+        return 0
+    return max(0, int((until - _utcnow()).total_seconds()))
+
+
+def get_login_lockout(username: str | None, ip: str | None) -> dict[str, Any]:
+    ensure_login_security_tables()
+    username_norm = _normalize_login_key(username)
+    ip_key = str(ip or 'unknown')[:120]
+    now_iso = _utcnow_iso()
+    with get_connection() as conn:
+        # Clean only clearly expired rows so the table stays small.
+        conn.execute(
+            "DELETE FROM login_lockouts WHERE locked_until IS NOT NULL AND locked_until <= ? AND failed_count <= 0",
+            (now_iso,),
+        )
+        row = conn.execute(
+            "SELECT * FROM login_lockouts WHERE username_norm=? AND ip=?",
+            (username_norm, ip_key),
+        ).fetchone()
+        if not row:
+            return {"locked": False, "retry_after_seconds": 0, "failed_count": 0}
+        data = row_to_dict(row)
+        retry_after = _retry_after_from_iso(data.get('locked_until'))
+        return {
+            "locked": retry_after > 0,
+            "retry_after_seconds": retry_after,
+            "failed_count": int(data.get('failed_count') or 0),
+            "locked_until": data.get('locked_until'),
+        }
+
+
+def record_login_failure(
+    username: str | None,
+    ip: str | None,
+    user_agent: str | None = None,
+    *,
+    max_attempts: int = 5,
+    window_seconds: int = 600,
+    lockout_seconds: int = 900,
+) -> dict[str, Any]:
+    ensure_login_security_tables()
+    username_norm = _normalize_login_key(username)
+    ip_key = str(ip or 'unknown')[:120]
+    now = _utcnow()
+    now_iso = now.isoformat(timespec='seconds')
+    window_seconds = max(60, int(window_seconds or 600))
+    max_attempts = max(1, int(max_attempts or 5))
+    lockout_seconds = max(60, int(lockout_seconds or 900))
+
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM login_lockouts WHERE username_norm=? AND ip=?",
+            (username_norm, ip_key),
+        ).fetchone()
+        if row:
+            data = row_to_dict(row)
+            first_failed_at = _parse_utc_iso(data.get('first_failed_at'))
+            locked_retry = _retry_after_from_iso(data.get('locked_until'))
+            if locked_retry > 0:
+                failed_count = int(data.get('failed_count') or 0)
+                locked_until = data.get('locked_until')
+            elif not first_failed_at or (now - first_failed_at).total_seconds() > window_seconds:
+                failed_count = 1
+                first_failed_iso = now_iso
+                locked_until = None
+            else:
+                failed_count = int(data.get('failed_count') or 0) + 1
+                first_failed_iso = data.get('first_failed_at') or now_iso
+                locked_until = None
+        else:
+            failed_count = 1
+            first_failed_iso = now_iso
+            locked_until = None
+
+        if failed_count >= max_attempts:
+            locked_until = (now + timedelta(seconds=lockout_seconds)).isoformat(timespec='seconds')
+
+        conn.execute(
+            """
+            INSERT INTO login_lockouts (username_norm, ip, failed_count, first_failed_at, last_failed_at, locked_until)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(username_norm, ip) DO UPDATE SET
+              failed_count=excluded.failed_count,
+              first_failed_at=excluded.first_failed_at,
+              last_failed_at=excluded.last_failed_at,
+              locked_until=excluded.locked_until
+            """,
+            (username_norm, ip_key, failed_count, first_failed_iso, now_iso, locked_until),
+        )
+        conn.execute(
+            "INSERT INTO login_attempts (username_norm, ip, user_agent, success, reason) VALUES (?, ?, ?, 0, ?)",
+            (username_norm, ip_key, str(user_agent or '')[:500] or None, 'bad_credentials'),
+        )
+
+    retry_after = _retry_after_from_iso(locked_until)
+    return {
+        "locked": retry_after > 0,
+        "retry_after_seconds": retry_after,
+        "failed_count": failed_count,
+        "remaining_attempts": max(0, max_attempts - failed_count),
+        "locked_until": locked_until,
+    }
+
+
+def record_login_success(username: str | None, ip: str | None, user_agent: str | None = None) -> None:
+    ensure_login_security_tables()
+    username_norm = _normalize_login_key(username)
+    ip_key = str(ip or 'unknown')[:120]
+    with get_connection() as conn:
+        conn.execute("DELETE FROM login_lockouts WHERE username_norm=? AND ip=?", (username_norm, ip_key))
+        conn.execute(
+            "INSERT INTO login_attempts (username_norm, ip, user_agent, success, reason) VALUES (?, ?, ?, 1, ?)",
+            (username_norm, ip_key, str(user_agent or '')[:500] or None, 'success'),
+        )
 
 def _ensure_reply_templates_table(conn) -> None:
     conn.executescript(
