@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import ipaddress
 import json
 import os
 import re
@@ -14,7 +13,6 @@ from datetime import datetime, timedelta, timezone
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
@@ -22,6 +20,12 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 
 from app import repository as repo
+from app.asset_proxy_policy import (
+    asset_url_allowed,
+    asset_url_requires_ozon_credentials,
+    parse_allowed_asset_hosts,
+    resolve_asset_redirect,
+)
 from app.services.analytics import build_chat_analytics, build_chat_analytics_drilldown
 from app.connectors.mock import MockConnector
 from app.connectors.ozon import OzonConnector
@@ -1359,33 +1363,13 @@ def _asset_proxy_allowed(url: str) -> bool:
     The proxy only accepts https URLs, blocks local/private IPs, and limits hosts to
     marketplace/CDN-like domains.
     """
-    try:
-        parsed = urlparse(url)
-    except Exception:
-        return False
-    if parsed.scheme != "https" or not parsed.hostname:
-        return False
-
-    host = parsed.hostname.lower()
-    try:
-        ip = ipaddress.ip_address(host)
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-            return False
-    except ValueError:
-        pass
-
-    raw_allowed = os.getenv(
-        "IMAGE_PROXY_ALLOWED_HOSTS",
-        "ozon.ru,ozone.ru,ozonusercontent.com,cdn.ngenix.net,o3static.com,o3.ru",
-    )
-    allowed = [item.strip().lower() for item in raw_allowed.split(",") if item.strip()]
-    return any(host == domain or host.endswith("." + domain) or domain in host for domain in allowed)
+    raw_allowed = os.getenv("IMAGE_PROXY_ALLOWED_HOSTS")
+    return asset_url_allowed(url, parse_allowed_asset_hosts(raw_allowed))
 
 
 def _asset_proxy_headers(url: str) -> dict[str, str]:
     headers = {"Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"}
-    host = (urlparse(url).hostname or "").lower()
-    if "ozon" in host or "ozone" in host or "o3" in host:
+    if asset_url_requires_ozon_credentials(url):
         connector = connectors.get("ozon")
         if connector and getattr(connector, "client_id", None) and getattr(connector, "api_key", None):
             headers.update({"Client-Id": connector.client_id, "Api-Key": connector.api_key})
@@ -4128,16 +4112,43 @@ def chat_analytics_drilldown(
     )
 
 
+_ASSET_PROXY_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+_ASSET_PROXY_MAX_REDIRECTS = 3
+
+
+async def _fetch_proxy_image_response(url: str) -> httpx.Response:
+    current_url = url
+    try:
+        async with httpx.AsyncClient(timeout=25, follow_redirects=False) as client:
+            for redirects_followed in range(_ASSET_PROXY_MAX_REDIRECTS + 1):
+                if not _asset_proxy_allowed(current_url):
+                    raise HTTPException(status_code=502, detail="Image preview redirect is not allowed")
+
+                response = await client.get(current_url, headers=_asset_proxy_headers(current_url))
+                if response.status_code not in _ASSET_PROXY_REDIRECT_STATUSES:
+                    response.raise_for_status()
+                    return response
+
+                if redirects_followed >= _ASSET_PROXY_MAX_REDIRECTS:
+                    raise HTTPException(status_code=502, detail="Image preview redirect limit exceeded")
+
+                next_url = resolve_asset_redirect(current_url, response.headers.get("location"))
+                if not next_url or not _asset_proxy_allowed(next_url):
+                    raise HTTPException(status_code=502, detail="Image preview redirect is not allowed")
+                current_url = next_url
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Image preview request failed") from exc
+
+    raise HTTPException(status_code=502, detail="Image preview request failed")
+
+
 @app.get("/api/assets/image")
 async def proxy_image(url: str) -> Response:
     if not _asset_proxy_allowed(url):
         raise HTTPException(status_code=400, detail="Image host is not allowed for preview proxy")
-    try:
-        async with httpx.AsyncClient(timeout=25, follow_redirects=True) as client:
-            response = await client.get(url, headers=_asset_proxy_headers(url))
-        response.raise_for_status()
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Image preview failed: {exc}") from exc
+    response = await _fetch_proxy_image_response(url)
 
     content_type = response.headers.get("content-type", "application/octet-stream").split(";")[0].lower()
     if not (content_type.startswith("image/") or content_type in {"application/octet-stream", "binary/octet-stream"}):
