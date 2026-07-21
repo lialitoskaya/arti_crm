@@ -10,6 +10,11 @@ from typing import Any
 import httpx
 
 from app.connectors.base import MarketplaceConnector, UnifiedChat, UnifiedMessage
+from app.marketplace_sender import (
+    extract_sender_designations as _shared_extract_sender_designations,
+    normalize_system_sender as _shared_normalize_system_sender,
+    system_sender_matches as _shared_system_sender_matches,
+)
 
 
 class OzonConnector(MarketplaceConnector):
@@ -412,15 +417,11 @@ class OzonConnector(MarketplaceConnector):
 
     @staticmethod
     def _normalize_system_sender(value: Any) -> str:
-        return re.sub(r"[\s_\-]+", "", str(value or "").strip().lower())
+        return _shared_normalize_system_sender(value)
 
     @classmethod
     def _system_sender_matches(cls, value: Any, markers: tuple[str, ...]) -> bool:
-        normalized = cls._normalize_system_sender(value)
-        if not normalized:
-            return False
-        normalized_markers = {cls._normalize_system_sender(marker) for marker in markers if marker}
-        return normalized in normalized_markers
+        return _shared_system_sender_matches(value, markers)
 
     @classmethod
     def _exact_sender_designations_from_payload(cls, payload: Any, depth: int = 0) -> list[str]:
@@ -430,29 +431,7 @@ class OzonConnector(MarketplaceConnector):
         skipped because raw payloads contained words like chatbot/notification in
         unrelated metadata.
         """
-        if depth > 4 or payload in (None, ""):
-            return []
-        values: list[str] = []
-        name_keys = {
-            "name", "login", "username", "user_name", "display_name", "displayname",
-            "nickname", "author_name", "authorname", "sender_name", "sendername",
-            "from_name", "fromname", "system_name", "systemname",
-        }
-        container_keys = {"user", "author", "sender", "from", "participant", "profile"}
-        if isinstance(payload, dict):
-            for key, nested in payload.items():
-                key_l = str(key).lower()
-                if key_l in name_keys and isinstance(nested, (str, int, float)):
-                    values.append(str(nested))
-                elif key_l in container_keys:
-                    if isinstance(nested, (str, int, float)):
-                        values.append(str(nested))
-                    elif isinstance(nested, dict):
-                        values.extend(cls._exact_sender_designations_from_payload(nested, depth + 1))
-        elif isinstance(payload, list):
-            for item in payload[:20]:
-                values.extend(cls._exact_sender_designations_from_payload(item, depth + 1))
-        return values
+        return _shared_extract_sender_designations(payload, depth)
 
     @classmethod
     def _looks_like_notification_user_chat(cls, item: dict[str, Any]) -> bool:

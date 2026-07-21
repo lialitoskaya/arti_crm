@@ -26,6 +26,11 @@ from app.asset_proxy_policy import (
     parse_allowed_asset_hosts,
     resolve_asset_redirect,
 )
+from app.marketplace_sender import (
+    extract_sender_designations as _shared_extract_sender_designations,
+    normalize_system_sender as _shared_normalize_system_sender,
+    system_sender_matches as _shared_system_sender_matches,
+)
 from app.services.analytics import build_chat_analytics, build_chat_analytics_drilldown
 from app.connectors.mock import MockConnector
 from app.connectors.ozon import OzonConnector
@@ -745,42 +750,16 @@ def _ozon_chatbot_message_markers() -> tuple[str, ...]:
 
 
 def _normalize_system_sender(value: Any) -> str:
-    return re.sub(r"[\s_\-]+", "", str(value or "").strip().lower())
+    return _shared_normalize_system_sender(value)
 
 
 def _system_sender_matches(value: Any, markers: tuple[str, ...]) -> bool:
-    normalized = _normalize_system_sender(value)
-    if not normalized:
-        return False
-    normalized_markers = {_normalize_system_sender(marker) for marker in markers if marker}
-    return normalized in normalized_markers
+    return _shared_system_sender_matches(value, markers)
 
 
 def _extract_sender_designations(value: Any, depth: int = 0) -> list[str]:
     """Extract sender/user names only; do not scan arbitrary raw text."""
-    if depth > 4 or value in (None, ""):
-        return []
-    values: list[str] = []
-    name_keys = {
-        "name", "login", "username", "user_name", "display_name", "displayname",
-        "nickname", "author_name", "authorname", "sender_name", "sendername",
-        "from_name", "fromname", "system_name", "systemname",
-    }
-    container_keys = {"user", "author", "sender", "from", "participant", "profile"}
-    if isinstance(value, dict):
-        for key, nested in value.items():
-            key_l = str(key).lower()
-            if key_l in name_keys and isinstance(nested, (str, int, float)):
-                values.append(str(nested))
-            elif key_l in container_keys:
-                if isinstance(nested, (str, int, float)):
-                    values.append(str(nested))
-                elif isinstance(nested, dict):
-                    values.extend(_extract_sender_designations(nested, depth + 1))
-    elif isinstance(value, list):
-        for item in value[:20]:
-            values.extend(_extract_sender_designations(item, depth + 1))
-    return values
+    return _shared_extract_sender_designations(value, depth)
 
 
 def _message_system_designations(message: Any) -> list[str]:
