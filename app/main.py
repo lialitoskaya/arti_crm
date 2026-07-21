@@ -26,6 +26,10 @@ from app.asset_proxy_policy import (
     parse_allowed_asset_hosts,
     resolve_asset_redirect,
 )
+from app.auth_dependencies import (
+    current_user as _shared_current_user,
+    require_admin as _shared_require_admin,
+)
 from app.marketplace_sender import (
     extract_sender_designations as _shared_extract_sender_designations,
     normalize_system_sender as _shared_normalize_system_sender,
@@ -399,19 +403,11 @@ async def add_fastfox_cache_headers(request: Request, call_next):
 
 
 def _current_user(request: Request) -> dict[str, Any]:
-    if AUTH_DISABLED:
-        return {"id": 0, "username": "local", "display_name": "Local", "role": "admin", "is_active": True}
-    user = getattr(request.state, "user", None)
-    if not user:
-        raise HTTPException(status_code=401, detail="Требуется авторизация")
-    return user
+    return _shared_current_user(request, auth_disabled=AUTH_DISABLED)
 
 
 def _require_admin(request: Request) -> dict[str, Any]:
-    user = getattr(request.state, "user", None)
-    if not user or user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Нужны права администратора")
-    return user
+    return _shared_require_admin(request)
 
 
 def _web_push_public_key() -> str:
