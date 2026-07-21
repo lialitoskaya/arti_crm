@@ -35,6 +35,7 @@ from app.marketplace_sender import (
     normalize_system_sender as _shared_normalize_system_sender,
     system_sender_matches as _shared_system_sender_matches,
 )
+from app.notifications_router import create_notifications_router
 from app.services.analytics import build_chat_analytics, build_chat_analytics_drilldown
 from app.connectors.mock import MockConnector
 from app.connectors.ozon import OzonConnector
@@ -4608,24 +4609,7 @@ def get_chat(chat_id: int, messages_limit: int = 120) -> dict[str, Any]:
 
 
 
-@app.get("/api/notifications")
-def api_notifications(request: Request, limit: int = 30, unread_only: bool = False) -> dict[str, Any]:
-    user = _current_user(request)
-    return repo.list_notifications(int(user["id"]), limit=limit, unread_only=unread_only)
-
-
-@app.post("/api/notifications/{notification_id}/read")
-def api_mark_notification_read(notification_id: int, request: Request) -> dict[str, Any]:
-    user = _current_user(request)
-    ok = repo.mark_notification_read(notification_id, int(user["id"]))
-    return {"ok": ok, "unread_count": repo.list_notifications(int(user["id"]), limit=1)["unread_count"]}
-
-
-@app.post("/api/notifications/read-all")
-def api_mark_all_notifications_read(request: Request) -> dict[str, Any]:
-    user = _current_user(request)
-    count = repo.mark_all_notifications_read(int(user["id"]))
-    return {"ok": True, "marked": count, "unread_count": 0}
+app.include_router(create_notifications_router(repo, _current_user))
 
 
 @app.get("/api/push/public-key")
