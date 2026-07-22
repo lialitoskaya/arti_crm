@@ -5803,7 +5803,7 @@ async function syncSupplyPlanningFromApi(options = {}) {
   setSupplyPlanningApiStatus(`Загружаю данные из API: ${marketplace === 'all' ? 'все площадки' : marketplaceLabel(marketplace)}...`, 'loading');
   try {
     const result = await api(`/api/supply-planning/sync?marketplace=${encodeURIComponent(marketplace)}&target_days=${encodeURIComponent(targetDays)}&sales_days=30`, {
-      method: 'GET',
+      method: 'POST',
       timeoutMs: 120000,
     });
     const rows = Array.isArray(result.rows) ? result.rows : [];
