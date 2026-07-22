@@ -37,12 +37,13 @@ from app.marketplace_sender import (
 )
 from app.notifications_router import create_notifications_router
 from app.services.analytics import build_chat_analytics, build_chat_analytics_drilldown
+from app.task_types_router import create_task_types_router
 from app.connectors.mock import MockConnector
 from app.connectors.ozon import OzonConnector
 from app.connectors.wildberries import WildberriesConnector
 from app.connectors.yandex_market import YandexMarketConnector
 from app.db import get_connection, init_db
-from app.schemas import AiReplyCreate, ChatCreate, ChatUpdate, InternalNoteCreate, InternalNoteUpdate, LoginCreate, MessageCreate, ReviewReplyCreate, QuestionAnswerCreate, TaskCreate, TaskUpdate, UserCreate, UserPasswordUpdate, UserUpdate, ProfileUpdate, KnowledgeCategoryCreate, KnowledgeArticleCreate, KnowledgeArticleUpdate, ChatFunnelCreate, ChatFunnelUpdate, ChatStatusCreate, ChatStatusUpdate, ReplyTemplateCreate, TaskTypeCreate, TaskTypeUpdate
+from app.schemas import AiReplyCreate, ChatCreate, ChatUpdate, InternalNoteCreate, InternalNoteUpdate, LoginCreate, MessageCreate, ReviewReplyCreate, QuestionAnswerCreate, TaskCreate, TaskUpdate, UserCreate, UserPasswordUpdate, UserUpdate, ProfileUpdate, KnowledgeCategoryCreate, KnowledgeArticleCreate, KnowledgeArticleUpdate, ChatFunnelCreate, ChatFunnelUpdate, ChatStatusCreate, ChatStatusUpdate, ReplyTemplateCreate
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -4419,37 +4420,7 @@ def list_tasks(
     )
 
 
-@app.get("/api/task-types")
-def api_list_task_types(request: Request, include_inactive: bool = False) -> list[dict[str, Any]]:
-    _current_user(request)
-    return repo.list_task_types(include_inactive=include_inactive)
-
-
-@app.post("/api/task-types")
-def api_create_task_type(payload: TaskTypeCreate, request: Request) -> dict[str, Any]:
-    _current_user(request)
-    try:
-        return repo.create_task_type(payload)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
-
-@app.patch("/api/task-types/{type_id}")
-def api_update_task_type(type_id: int, payload: TaskTypeUpdate, request: Request) -> dict[str, Any]:
-    _current_user(request)
-    task_type = repo.update_task_type(type_id, payload)
-    if not task_type:
-        raise HTTPException(status_code=404, detail="Task type not found")
-    return task_type
-
-
-@app.delete("/api/task-types/{type_id}")
-def api_delete_task_type(type_id: int, request: Request) -> dict[str, bool]:
-    _current_user(request)
-    ok = repo.delete_task_type(type_id)
-    if not ok:
-        raise HTTPException(status_code=404, detail="Task type not found")
-    return {"ok": True}
+app.include_router(create_task_types_router(repo, _current_user))
 
 
 
