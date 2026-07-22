@@ -16,6 +16,7 @@ _DATABASE_PATH = (_TEMP_ROOT / "crm-test.sqlite3").resolve()
 _ATTACHMENTS_PATH = (_TEMP_ROOT / "attachments").resolve()
 
 _SAFE_ENV = {
+    "APP_ENV": "test",
     "DATABASE_PATH": str(_DATABASE_PATH),
     "CRM_CHAT_ATTACHMENTS_DIR": str(_ATTACHMENTS_PATH),
     "CRM_AUTH_DISABLED": "0",
@@ -26,8 +27,9 @@ _SAFE_ENV = {
     "WB_EVENTS_CURSOR_STATE_FILE": str(_TEMP_ROOT / "wb-cursor.json"),
     "WB_EVENTS_AUTO_IMPORT_PLAN_FILE": str(_TEMP_ROOT / "wb-plan.json"),
     "SUPPLY_PLANNING_CACHE_FILE": str(_TEMP_ROOT / "supply-cache.json"),
-    "CRM_ADMIN_USERNAME": "test-admin",
-    "CRM_ADMIN_PASSWORD": "test-only-password",
+    "BOOTSTRAP_ADMIN_USERNAME": "test-bootstrap-admin",
+    "BOOTSTRAP_ADMIN_PASSWORD": "test-bootstrap-password-2026",
+    "ALLOW_INSECURE_DEV_AUTH": "false",
     "PYTHON_DOTENV_DISABLED": "1",
     "OZON_CLIENT_ID": "",
     "OZON_API_KEY": "",

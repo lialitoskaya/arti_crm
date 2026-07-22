@@ -3822,6 +3822,11 @@ def _verify_password(password: str, stored: str) -> bool:
         return False
 
 
+def users_exist() -> bool:
+    with get_connection() as conn:
+        return conn.execute("SELECT 1 FROM users LIMIT 1").fetchone() is not None
+
+
 def ensure_initial_admin(username: str, password: str, display_name: str | None = None) -> dict[str, Any] | None:
     """Create first admin user if the users table is empty."""
     with get_connection() as conn:
