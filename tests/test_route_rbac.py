@@ -152,7 +152,6 @@ class RouteRbacTests(unittest.TestCase):
             ("GET", "/"),
             ("GET", "/health"),
             ("POST", "/api/auth/login"),
-            ("GET", "/api/background/tick"),
             ("POST", "/api/background/tick"),
         )
         for method, path in routes:
@@ -224,7 +223,6 @@ class RouteRbacTests(unittest.TestCase):
             ("GET", "/api/chat-settings"): "authenticated_read",
             ("POST", "/api/notifications/{notification_id}/read"): "viewer_self_service",
             ("POST", "/api/notifications/read-all"): "viewer_self_service",
-            ("GET", "/api/background/tick"): "token_only",
             ("POST", "/api/background/tick"): "token_only",
             ("POST", "/api/webhooks/yandex"): "webhook_unchanged",
         }

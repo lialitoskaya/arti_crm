@@ -593,17 +593,13 @@ def _background_tick_token() -> str:
     ).strip()
 
 
-def _require_background_tick_access(request: Request, token: str | None = None) -> None:
+def _require_background_tick_access(request: Request) -> None:
     expected = _background_tick_token()
-    if expected:
-        provided = (token or request.headers.get("x-crm-tick-token") or "").strip()
-        if provided != expected:
-            raise HTTPException(status_code=403, detail="Invalid background tick token")
-        return
-
-    # If no token is configured, allow only an authenticated CRM user.
-    # For an external cron/uptime monitor, set CRM_BACKGROUND_TICK_TOKEN in .env.
-    _current_user(request)
+    if not expected:
+        raise HTTPException(status_code=503, detail="Background tick token is not configured")
+    provided = (request.headers.get("x-background-token") or "").strip()
+    if not provided or not hmac.compare_digest(provided, expected):
+        raise HTTPException(status_code=403, detail="Invalid background tick token")
 
 
 def _background_tick_lock() -> asyncio.Lock:
@@ -1551,7 +1547,6 @@ async def _sync_ozon_fast_inbox_locked(*, background: bool = True) -> dict[str, 
         return await _sync_ozon_fast_inbox_unlocked(background=background)
 
 
-@app.get("/api/debug/ozon/fast-sync")
 @app.post("/api/debug/ozon/fast-sync")
 async def debug_ozon_fast_sync() -> dict[str, Any]:
     """Run the lightweight Ozon new/recent chats sync once."""
@@ -2501,7 +2496,6 @@ async def debug_ozon_chats() -> dict[str, Any]:
     }
 
 
-@app.get("/api/debug/ozon/backfill-chats")
 @app.post("/api/debug/ozon/backfill-chats")
 async def debug_ozon_backfill_chats(
     max_chats: int = 5000,
@@ -2591,7 +2585,6 @@ async def debug_ozon_backfill_chats(
     return result
 
 
-@app.get("/api/debug/wb/import-events")
 @app.post("/api/debug/wb/import-events")
 async def debug_wb_import_events(
     days: int = 30,
@@ -2964,7 +2957,6 @@ async def _wb_events_import_planner_loop() -> None:
             app.state.last_wb_events_auto_import = _decorate_wb_events_plan(plan)
 
 
-@app.get("/api/debug/wb/import-events-auto")
 @app.post("/api/debug/wb/import-events-auto")
 async def debug_wb_import_events_auto(action: str = "status") -> dict[str, Any]:
     """Manage automatic WB events import. Actions: status/start/stop/reset."""
@@ -4054,8 +4046,8 @@ def supply_planning_api_status(request: Request) -> dict[str, Any]:
     return {"ok": True, "configured": _supply_status()}
 
 
-@app.api_route("/api/supply-planning/sync", methods=["GET", "POST"])
-@app.api_route("/api/supply-planning/sync/", methods=["GET", "POST"])
+@app.api_route("/api/supply-planning/sync", methods=["POST"])
+@app.api_route("/api/supply-planning/sync/", methods=["POST"])
 async def supply_planning_sync(request: Request) -> dict[str, Any]:
     _current_user(request)
     _rate_limit(
@@ -4666,9 +4658,8 @@ def api_push_status(request: Request) -> dict[str, Any]:
     }
 
 
-@app.get("/api/background/tick")
 @app.post("/api/background/tick")
-async def api_background_tick(request: Request, token: str | None = None) -> dict[str, Any]:
+async def api_background_tick(request: Request) -> dict[str, Any]:
     """External cron/uptime monitor endpoint.
 
     On shared hosting, the Python process and browser JS timers can sleep when
@@ -4681,7 +4672,7 @@ async def api_background_tick(request: Request, token: str | None = None) -> dic
         limit=_security_env_int("CRM_BACKGROUND_TICK_RATE_LIMIT", 60, minimum=1, maximum=1000),
         window_seconds=_security_env_int("CRM_BACKGROUND_TICK_RATE_WINDOW_SECONDS", 3600, minimum=60, maximum=86400),
     )
-    _require_background_tick_access(request, token=token)
+    _require_background_tick_access(request)
     return await _run_background_tick_once(source="api")
 
 
