@@ -143,8 +143,10 @@ class AuthDependenciesParityTests(unittest.TestCase):
         request = _request_for(include_user=False)
         self.assertEqual(expected, _legacy_current_user(request, auth_disabled=True))
         self.assertEqual(expected, auth_dependencies.current_user(request, auth_disabled=True))
+        self.assertEqual(expected, auth_dependencies.require_admin(request, auth_disabled=True))
         with mock.patch.object(main, "AUTH_DISABLED", True):
             self.assertEqual(expected, main._current_user(request))
+            self.assertEqual(expected, main._require_admin(request))
 
     def test_shared_module_has_no_db_network_or_environment_imports(self) -> None:
         source_path = Path(auth_dependencies.__file__).resolve()
@@ -160,7 +162,7 @@ class AuthDependenciesParityTests(unittest.TestCase):
             for node in ast.walk(tree)
             if isinstance(node, ast.ImportFrom) and node.module
         )
-        self.assertEqual({"__future__", "typing", "fastapi"}, imported_roots)
+        self.assertEqual({"__future__", "re", "typing", "fastapi"}, imported_roots)
         self.assertNotIn("os", source_path.read_text(encoding="utf-8"))
 
 

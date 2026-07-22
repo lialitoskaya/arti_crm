@@ -79,8 +79,12 @@ class _RecordingRepository:
 class TaskTypesRouterTests(unittest.TestCase):
     def setUp(self) -> None:
         self.repo = _RecordingRepository()
-        self.user = {"id": 7, "role": "viewer", "is_active": True}
-        self.router = create_task_types_router(self.repo, lambda _request: self.user)
+        self.user = {"id": 7, "role": "admin", "is_active": True}
+        self.router = create_task_types_router(
+            self.repo,
+            lambda _request: self.user,
+            lambda _request: self.user,
+        )
 
     def test_route_paths_methods_and_main_registration_are_unchanged(self) -> None:
         expected = {
@@ -109,7 +113,11 @@ class TaskTypesRouterTests(unittest.TestCase):
         for role in ("viewer", "admin"):
             repo = _RecordingRepository()
             user = {"id": 7, "role": role, "is_active": True}
-            router = create_task_types_router(repo, lambda _request, user=user: user)
+            router = create_task_types_router(
+                repo,
+                lambda _request, user=user: user,
+                lambda _request, user=user: user,
+            )
             endpoint = _route(router, "/api/task-types", "GET").endpoint
             with self.subTest(role=role):
                 self.assertEqual([{"id": 10, "name": "Existing"}], endpoint(_request_without_user(), True))
@@ -159,13 +167,32 @@ class TaskTypesRouterTests(unittest.TestCase):
         self.assertEqual([("delete_task_type", 404)], self.repo.calls)
 
     def test_missing_user_preserves_401_contract_without_repository_calls(self) -> None:
-        router = create_task_types_router(self.repo, main._current_user)
+        router = create_task_types_router(self.repo, main._current_user, main._require_admin)
         endpoint = _route(router, "/api/task-types", "GET").endpoint
         with mock.patch.object(main, "AUTH_DISABLED", False):
             with self.assertRaises(HTTPException) as error:
                 endpoint(_request_without_user(), False)
         self.assertEqual(401, error.exception.status_code)
         self.assertEqual("Требуется авторизация", error.exception.detail)
+        self.assertEqual([], self.repo.calls)
+
+    def test_viewer_is_denied_for_all_task_type_mutations(self) -> None:
+        viewer = {"id": 8, "role": "viewer", "is_active": True}
+        request = _request_without_user()
+        request.state.user = viewer
+        router = create_task_types_router(self.repo, main._current_user, main._require_admin)
+        payload_create = TaskTypeCreate.model_construct()
+        payload_update = TaskTypeUpdate.model_construct()
+        invocations = (
+            lambda: _route(router, "/api/task-types", "POST").endpoint(payload_create, request),
+            lambda: _route(router, "/api/task-types/{type_id}", "PATCH").endpoint(12, payload_update, request),
+            lambda: _route(router, "/api/task-types/{type_id}", "DELETE").endpoint(12, request),
+        )
+        for index, invoke in enumerate(invocations):
+            with self.subTest(handler=index), self.assertRaises(HTTPException) as error:
+                invoke()
+            self.assertEqual(403, error.exception.status_code)
+            self.assertEqual("Нужны права администратора", error.exception.detail)
         self.assertEqual([], self.repo.calls)
 
     def test_router_has_no_main_db_network_or_environment_imports(self) -> None:
