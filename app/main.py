@@ -36,6 +36,7 @@ from app.marketplace_sender import (
     system_sender_matches as _shared_system_sender_matches,
 )
 from app.notifications_router import create_notifications_router
+from app.reply_templates_router import create_reply_templates_router
 from app.services.analytics import build_chat_analytics, build_chat_analytics_drilldown
 from app.task_types_router import create_task_types_router
 from app.connectors.mock import MockConnector
@@ -43,7 +44,7 @@ from app.connectors.ozon import OzonConnector
 from app.connectors.wildberries import WildberriesConnector
 from app.connectors.yandex_market import YandexMarketConnector
 from app.db import get_connection, init_db
-from app.schemas import AiReplyCreate, ChatCreate, ChatUpdate, InternalNoteCreate, InternalNoteUpdate, LoginCreate, MessageCreate, ReviewReplyCreate, QuestionAnswerCreate, TaskCreate, TaskUpdate, UserCreate, UserPasswordUpdate, UserUpdate, ProfileUpdate, KnowledgeCategoryCreate, KnowledgeArticleCreate, KnowledgeArticleUpdate, ChatFunnelCreate, ChatFunnelUpdate, ChatStatusCreate, ChatStatusUpdate, ReplyTemplateCreate
+from app.schemas import AiReplyCreate, ChatCreate, ChatUpdate, InternalNoteCreate, InternalNoteUpdate, LoginCreate, MessageCreate, ReviewReplyCreate, QuestionAnswerCreate, TaskCreate, TaskUpdate, UserCreate, UserPasswordUpdate, UserUpdate, ProfileUpdate, KnowledgeCategoryCreate, KnowledgeArticleCreate, KnowledgeArticleUpdate, ChatFunnelCreate, ChatFunnelUpdate, ChatStatusCreate, ChatStatusUpdate
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -5215,24 +5216,7 @@ def api_update_knowledge_article(article_id: int, payload: KnowledgeArticleUpdat
     return article
 
 
-@app.get("/api/reply-templates")
-def api_list_reply_templates(request: Request, q: str | None = None) -> list[dict[str, Any]]:
-    _current_user(request)
-    return repo.list_reply_templates(q=q)
-
-
-@app.post("/api/reply-templates")
-def api_create_reply_template(payload: ReplyTemplateCreate, request: Request) -> dict[str, Any]:
-    user = _current_user(request)
-    try:
-        return repo.create_reply_template(
-            title=payload.title,
-            content=payload.content,
-            sort_order=payload.sort_order,
-            user_id=int(user["id"]),
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+app.include_router(create_reply_templates_router(repo, _current_user))
 
 
 def _frontend_operator_sync_lock() -> asyncio.Lock:
