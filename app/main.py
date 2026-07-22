@@ -31,6 +31,12 @@ from app.auth_dependencies import (
     require_admin as _shared_require_admin,
     route_requires_admin as _shared_route_requires_admin,
 )
+from app.auth_bootstrap import (
+    AuthBootstrapError,
+    auth_disabled_request_allowed,
+    resolve_bootstrap_admin_credentials,
+    validate_auth_disabled_config,
+)
 from app.chat_settings_router import create_chat_settings_router
 from app.marketplace_sender import (
     extract_sender_designations as _shared_extract_sender_designations,
@@ -60,7 +66,16 @@ app = FastAPI(title="Arti CRM", version="1.0.3")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 AUTH_COOKIE_NAME = "arti_crm_session"
-AUTH_DISABLED = os.getenv("CRM_AUTH_DISABLED", "0").strip().lower() in {"1", "true", "yes", "on", "да"}
+_AUTH_DISABLED_CONFIGURATION_ERROR: AuthBootstrapError | None = None
+try:
+    AUTH_DISABLED = validate_auth_disabled_config(
+        app_env=os.getenv("APP_ENV"),
+        auth_disabled=os.getenv("CRM_AUTH_DISABLED"),
+        allow_insecure_dev_auth=os.getenv("ALLOW_INSECURE_DEV_AUTH"),
+    )
+except AuthBootstrapError as exc:
+    AUTH_DISABLED = False
+    _AUTH_DISABLED_CONFIGURATION_ERROR = exc
 
 # v75 security hardening: keep browser-visible state separate from server secrets.
 CSRF_COOKIE_NAME = "arti_crm_csrf"
@@ -323,7 +338,18 @@ def _auth_public_path(path: str) -> bool:
 
 @app.middleware("http")
 async def require_auth_for_api(request: Request, call_next):
-    if AUTH_DISABLED or not request.url.path.startswith("/api/") or _auth_public_path(request.url.path):
+    if AUTH_DISABLED:
+        client_host = request.client.host if request.client is not None else None
+        if not auth_disabled_request_allowed(client_host, request.headers.keys()):
+            response = JSONResponse(
+                status_code=403,
+                content={"detail": "Insecure development authentication is limited to direct loopback requests"},
+            )
+            _delete_legacy_csrf_cookie(response, request)
+            _apply_security_headers(request, response)
+            return response
+        return await call_next(request)
+    if not request.url.path.startswith("/api/") or _auth_public_path(request.url.path):
         return await call_next(request)
     token = request.cookies.get(AUTH_COOKIE_NAME)
     user = repo.get_user_by_session(token)
@@ -2103,19 +2129,35 @@ async def _background_sync_loop() -> None:
         await asyncio.sleep(interval)
 
 
+def _ensure_initial_admin() -> dict[str, Any] | None:
+    if repo.users_exist():
+        return None
+    credentials = resolve_bootstrap_admin_credentials(
+        os.getenv("BOOTSTRAP_ADMIN_USERNAME"),
+        os.getenv("BOOTSTRAP_ADMIN_PASSWORD"),
+        os.getenv("BOOTSTRAP_ADMIN_DISPLAY_NAME"),
+    )
+    created_admin = repo.ensure_initial_admin(
+        credentials.username,
+        credentials.password,
+        credentials.display_name,
+    )
+    if created_admin:
+        print("[Arti CRM] Created initial administrator from explicit bootstrap configuration.")
+    return created_admin
+
+
 @app.on_event("startup")
 async def on_startup() -> None:
+    if _AUTH_DISABLED_CONFIGURATION_ERROR is not None:
+        raise _AUTH_DISABLED_CONFIGURATION_ERROR
     init_db()
     try:
         repo.ensure_security_tables()
         repo.ensure_login_security_tables()
     except Exception as exc:
         print(f"[Arti CRM] Security table migration failed: {_mask_sensitive(str(exc))}")
-    admin_user = os.getenv("CRM_ADMIN_USERNAME", "admin")
-    admin_pass = os.getenv("CRM_ADMIN_PASSWORD", "admin123")
-    created_admin = repo.ensure_initial_admin(admin_user, admin_pass, os.getenv("CRM_ADMIN_DISPLAY_NAME", "Администратор"))
-    if created_admin:
-        print(f"[Arti CRM] Created initial admin user: {created_admin.get('username')}. Change CRM_ADMIN_PASSWORD after first login.")
+    _ensure_initial_admin()
     repo.cleanup_expired_sessions()
     repo.delete_mock_chats()
     repo.delete_ozon_support_chats()
