@@ -14,6 +14,7 @@ CurrentUserDependency = Callable[[Request], dict[str, Any]]
 def create_task_types_router(
     repo: Any,
     current_user_dependency: CurrentUserDependency,
+    require_admin_dependency: CurrentUserDependency,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -24,7 +25,7 @@ def create_task_types_router(
 
     @router.post("/api/task-types")
     def api_create_task_type(payload: TaskTypeCreate, request: Request) -> dict[str, Any]:
-        current_user_dependency(request)
+        require_admin_dependency(request)
         try:
             return repo.create_task_type(payload)
         except ValueError as exc:
@@ -32,7 +33,7 @@ def create_task_types_router(
 
     @router.patch("/api/task-types/{type_id}")
     def api_update_task_type(type_id: int, payload: TaskTypeUpdate, request: Request) -> dict[str, Any]:
-        current_user_dependency(request)
+        require_admin_dependency(request)
         task_type = repo.update_task_type(type_id, payload)
         if not task_type:
             raise HTTPException(status_code=404, detail="Task type not found")
@@ -40,7 +41,7 @@ def create_task_types_router(
 
     @router.delete("/api/task-types/{type_id}")
     def api_delete_task_type(type_id: int, request: Request) -> dict[str, bool]:
-        current_user_dependency(request)
+        require_admin_dependency(request)
         ok = repo.delete_task_type(type_id)
         if not ok:
             raise HTTPException(status_code=404, detail="Task type not found")

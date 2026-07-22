@@ -76,8 +76,12 @@ class _RecordingRepository:
 class ReplyTemplatesRouterTests(unittest.TestCase):
     def setUp(self) -> None:
         self.repo = _RecordingRepository()
-        self.user = {"id": 7, "role": "viewer", "is_active": True}
-        self.router = create_reply_templates_router(self.repo, lambda _request: self.user)
+        self.user = {"id": 7, "role": "admin", "is_active": True}
+        self.router = create_reply_templates_router(
+            self.repo,
+            lambda _request: self.user,
+            lambda _request: self.user,
+        )
 
     def test_route_paths_methods_and_main_registration_are_unchanged(self) -> None:
         expected = {
@@ -101,7 +105,7 @@ class ReplyTemplatesRouterTests(unittest.TestCase):
             self.assertIsNone(matches[0].status_code)
 
     def test_missing_user_preserves_401_contract_without_repository_calls(self) -> None:
-        router = create_reply_templates_router(self.repo, main._current_user)
+        router = create_reply_templates_router(self.repo, main._current_user, main._require_admin)
         endpoint = _route(router, "/api/reply-templates", "GET").endpoint
         with mock.patch.object(main, "AUTH_DISABLED", False):
             with self.assertRaises(HTTPException) as error:
@@ -114,7 +118,11 @@ class ReplyTemplatesRouterTests(unittest.TestCase):
         for role in ("viewer", "admin"):
             repo = _RecordingRepository()
             user = {"id": 7, "role": role, "is_active": True}
-            router = create_reply_templates_router(repo, lambda _request, user=user: user)
+            router = create_reply_templates_router(
+                repo,
+                lambda _request, user=user: user,
+                lambda _request, user=user: user,
+            )
             endpoint = _route(router, "/api/reply-templates", "GET").endpoint
             with self.subTest(role=role):
                 self.assertEqual([{"id": 11, "title": "Existing"}], endpoint(_request_without_user(), "hello"))
@@ -144,7 +152,7 @@ class ReplyTemplatesRouterTests(unittest.TestCase):
         )
 
     def test_auth_disabled_semantics_preserve_local_user_id(self) -> None:
-        router = create_reply_templates_router(self.repo, main._current_user)
+        router = create_reply_templates_router(self.repo, main._current_user, main._require_admin)
         endpoint = _route(router, "/api/reply-templates", "POST").endpoint
         payload = ReplyTemplateCreate.model_construct(title="Local", content="Text", sort_order=1)
         with mock.patch.object(main, "AUTH_DISABLED", True):
@@ -153,6 +161,19 @@ class ReplyTemplatesRouterTests(unittest.TestCase):
             [("create_reply_template", "Local", "Text", 1, 0)],
             self.repo.calls,
         )
+
+    def test_viewer_is_denied_reply_template_creation(self) -> None:
+        viewer = {"id": 8, "role": "viewer", "is_active": True}
+        request = _request_without_user()
+        request.state.user = viewer
+        router = create_reply_templates_router(self.repo, main._current_user, main._require_admin)
+        endpoint = _route(router, "/api/reply-templates", "POST").endpoint
+        payload = ReplyTemplateCreate.model_construct(title="Viewer", content="Denied", sort_order=1)
+        with self.assertRaises(HTTPException) as error:
+            endpoint(payload, request)
+        self.assertEqual(403, error.exception.status_code)
+        self.assertEqual("Нужны права администратора", error.exception.detail)
+        self.assertEqual([], self.repo.calls)
 
     def test_router_has_no_main_db_network_or_environment_imports(self) -> None:
         module_path = Path(sys.modules[create_reply_templates_router.__module__].__file__).resolve()

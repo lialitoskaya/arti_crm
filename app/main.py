@@ -29,6 +29,7 @@ from app.asset_proxy_policy import (
 from app.auth_dependencies import (
     current_user as _shared_current_user,
     require_admin as _shared_require_admin,
+    route_requires_admin as _shared_route_requires_admin,
 )
 from app.chat_settings_router import create_chat_settings_router
 from app.marketplace_sender import (
@@ -336,6 +337,14 @@ async def require_auth_for_api(request: Request, call_next):
         _apply_security_headers(request, response)
         return response
     request.state.user = user
+    if _shared_route_requires_admin(request.method, request.url.path):
+        try:
+            _shared_require_admin(request)
+        except HTTPException as exc:
+            response = JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+            _delete_legacy_csrf_cookie(response, request)
+            _apply_security_headers(request, response)
+            return response
     return await call_next(request)
 
 
@@ -411,7 +420,7 @@ def _current_user(request: Request) -> dict[str, Any]:
 
 
 def _require_admin(request: Request) -> dict[str, Any]:
-    return _shared_require_admin(request)
+    return _shared_require_admin(request, auth_disabled=AUTH_DISABLED)
 
 
 def _web_push_public_key() -> str:
@@ -4422,7 +4431,7 @@ def list_tasks(
     )
 
 
-app.include_router(create_task_types_router(repo, _current_user))
+app.include_router(create_task_types_router(repo, _current_user, _require_admin))
 
 
 
@@ -5155,7 +5164,7 @@ def api_update_knowledge_article(article_id: int, payload: KnowledgeArticleUpdat
     return article
 
 
-app.include_router(create_reply_templates_router(repo, _current_user))
+app.include_router(create_reply_templates_router(repo, _current_user, _require_admin))
 
 
 def _frontend_operator_sync_lock() -> asyncio.Lock:

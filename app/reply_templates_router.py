@@ -14,6 +14,7 @@ CurrentUserDependency = Callable[[Request], dict[str, Any]]
 def create_reply_templates_router(
     repo: Any,
     current_user_dependency: CurrentUserDependency,
+    require_admin_dependency: CurrentUserDependency,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -24,7 +25,7 @@ def create_reply_templates_router(
 
     @router.post("/api/reply-templates")
     def api_create_reply_template(payload: ReplyTemplateCreate, request: Request) -> dict[str, Any]:
-        user = current_user_dependency(request)
+        user = require_admin_dependency(request)
         try:
             return repo.create_reply_template(
                 title=payload.title,
