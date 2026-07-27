@@ -21,9 +21,11 @@ from fastapi.staticfiles import StaticFiles
 
 from app import repository as repo
 from app.asset_proxy_policy import (
+    asset_url_resolves_globally,
     asset_url_allowed,
     asset_url_requires_ozon_credentials,
     parse_allowed_asset_hosts,
+    resolve_asset_host_addresses,
     resolve_asset_redirect,
 )
 from app.auth_dependencies import (
@@ -1378,7 +1380,10 @@ def _asset_proxy_allowed(url: str) -> bool:
 
 
 def _asset_proxy_headers(url: str) -> dict[str, str]:
-    headers = {"Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"}
+    headers = {
+        "Accept": "image/jpeg,image/png,image/webp,image/gif",
+        "Accept-Encoding": "identity",
+    }
     if asset_url_requires_ozon_credentials(url):
         connector = connectors.get("ozon")
         if connector and getattr(connector, "client_id", None) and getattr(connector, "api_key", None):
@@ -4136,28 +4141,88 @@ def chat_analytics_drilldown(
 
 _ASSET_PROXY_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 _ASSET_PROXY_MAX_REDIRECTS = 3
+_ASSET_PROXY_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+_ASSET_PROXY_STREAM_CHUNK_BYTES = 64 * 1024
 
 
-async def _fetch_proxy_image_response(url: str) -> httpx.Response:
+def _asset_proxy_content_type(response: httpx.Response) -> str:
+    values = response.headers.get_list("content-type")
+    if len(values) != 1 or "," in values[0]:
+        raise HTTPException(status_code=415, detail="URL did not return a supported image")
+    content_type = values[0].split(";", 1)[0].strip().lower()
+    if content_type not in _ASSET_PROXY_CONTENT_TYPES:
+        raise HTTPException(status_code=415, detail="URL did not return a supported image")
+    return content_type
+
+
+def _asset_proxy_validate_content_encoding(response: httpx.Response) -> None:
+    values = response.headers.get_list("content-encoding")
+    if values and (
+        len(values) != 1
+        or "," in values[0]
+        or values[0].strip().lower() != "identity"
+    ):
+        raise HTTPException(status_code=502, detail="Invalid image response")
+
+
+def _asset_proxy_signature_matches(content_type: str, body: bytes) -> bool:
+    if content_type == "image/jpeg":
+        return body.startswith(b"\xff\xd8\xff")
+    if content_type == "image/png":
+        return body.startswith(b"\x89PNG\r\n\x1a\n")
+    if content_type == "image/gif":
+        return body.startswith((b"GIF87a", b"GIF89a"))
+    if content_type == "image/webp":
+        return len(body) >= 12 and body.startswith(b"RIFF") and body[8:12] == b"WEBP"
+    return False
+
+
+async def _fetch_proxy_image_response(url: str, *, max_bytes: int) -> tuple[bytes, str]:
     current_url = url
     try:
         async with httpx.AsyncClient(timeout=25, follow_redirects=False) as client:
             for redirects_followed in range(_ASSET_PROXY_MAX_REDIRECTS + 1):
                 if not _asset_proxy_allowed(current_url):
                     raise HTTPException(status_code=502, detail="Image preview redirect is not allowed")
+                if not asset_url_resolves_globally(current_url, resolve_asset_host_addresses):
+                    raise HTTPException(status_code=502, detail="Image preview host resolution is not allowed")
 
-                response = await client.get(current_url, headers=_asset_proxy_headers(current_url))
-                if response.status_code not in _ASSET_PROXY_REDIRECT_STATUSES:
+                async with client.stream("GET", current_url, headers=_asset_proxy_headers(current_url)) as response:
+                    if response.status_code in _ASSET_PROXY_REDIRECT_STATUSES:
+                        if redirects_followed >= _ASSET_PROXY_MAX_REDIRECTS:
+                            raise HTTPException(status_code=502, detail="Image preview redirect limit exceeded")
+
+                        next_url = resolve_asset_redirect(current_url, response.headers.get("location"))
+                        if not next_url or not _asset_proxy_allowed(next_url):
+                            raise HTTPException(status_code=502, detail="Image preview redirect is not allowed")
+                        current_url = next_url
+                        continue
+
                     response.raise_for_status()
-                    return response
+                    _asset_proxy_validate_content_encoding(response)
+                    content_type = _asset_proxy_content_type(response)
 
-                if redirects_followed >= _ASSET_PROXY_MAX_REDIRECTS:
-                    raise HTTPException(status_code=502, detail="Image preview redirect limit exceeded")
+                    content_length = response.headers.get("content-length")
+                    if content_length is not None:
+                        try:
+                            declared_length = int(content_length)
+                        except (TypeError, ValueError) as exc:
+                            raise HTTPException(status_code=502, detail="Invalid image response") from exc
+                        if declared_length < 0:
+                            raise HTTPException(status_code=502, detail="Invalid image response")
+                        if declared_length > max_bytes:
+                            raise HTTPException(status_code=413, detail="Image is too large for preview")
 
-                next_url = resolve_asset_redirect(current_url, response.headers.get("location"))
-                if not next_url or not _asset_proxy_allowed(next_url):
-                    raise HTTPException(status_code=502, detail="Image preview redirect is not allowed")
-                current_url = next_url
+                    body = bytearray()
+                    async for chunk in response.aiter_raw(_ASSET_PROXY_STREAM_CHUNK_BYTES):
+                        if len(body) + len(chunk) > max_bytes:
+                            raise HTTPException(status_code=413, detail="Image is too large for preview")
+                        body.extend(chunk)
+
+                    content = bytes(body)
+                    if not _asset_proxy_signature_matches(content_type, content):
+                        raise HTTPException(status_code=415, detail="URL did not return a supported image")
+                    return content, content_type
     except HTTPException:
         raise
     except Exception as exc:
@@ -4170,18 +4235,14 @@ async def _fetch_proxy_image_response(url: str) -> httpx.Response:
 async def proxy_image(url: str) -> Response:
     if not _asset_proxy_allowed(url):
         raise HTTPException(status_code=400, detail="Image host is not allowed for preview proxy")
-    response = await _fetch_proxy_image_response(url)
-
-    content_type = response.headers.get("content-type", "application/octet-stream").split(";")[0].lower()
-    if not (content_type.startswith("image/") or content_type in {"application/octet-stream", "binary/octet-stream"}):
-        raise HTTPException(status_code=415, detail=f"URL did not return an image: {content_type}")
-
     max_bytes = _env_int("IMAGE_PROXY_MAX_BYTES", 10_000_000, minimum=100_000, maximum=30_000_000)
-    if len(response.content) > max_bytes:
-        raise HTTPException(status_code=413, detail="Image is too large for preview")
+    content, content_type = await _fetch_proxy_image_response(url, max_bytes=max_bytes)
 
-    headers = {"Cache-Control": "private, max-age=3600"}
-    return Response(content=response.content, media_type=content_type if content_type.startswith("image/") else "image/jpeg", headers=headers)
+    headers = {
+        "Cache-Control": "private, max-age=3600",
+        "X-Content-Type-Options": "nosniff",
+    }
+    return Response(content=content, media_type=content_type, headers=headers)
 
 
 
