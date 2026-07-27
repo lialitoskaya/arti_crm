@@ -3914,19 +3914,82 @@ def update_user_profile(user_id: int, *, username: str | None = None, display_na
     return get_user_by_id(user_id)
 
 
-def verify_user_password(user_id: int, password: str) -> bool:
+def update_user_password(user_id: int, password: str) -> bool:
+    password_hash = _hash_password(password)
     with get_connection() as conn:
-        row = conn.execute('SELECT password_hash FROM users WHERE id=? AND is_active=1', (user_id,)).fetchone()
-        if not row:
-            return False
-        return _verify_password(password or '', row['password_hash'] or '')
-
-def update_user_password(user_id: int, password: str) -> None:
-    with get_connection() as conn:
-        conn.execute(
+        conn.execute("BEGIN IMMEDIATE")
+        updated = conn.execute(
             "UPDATE users SET password_hash=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-            (_hash_password(password), user_id),
+            (password_hash, user_id),
         )
+        if updated.rowcount != 1:
+            return False
+        conn.execute(
+            "UPDATE sessions SET revoked_at=CURRENT_TIMESTAMP WHERE user_id=? AND revoked_at IS NULL",
+            (user_id,),
+        )
+        return True
+
+
+def change_user_password_and_rotate_session(
+    user_id: int,
+    *,
+    current_password: str,
+    new_password: str,
+    username: str | None = None,
+    display_name: str | None = None,
+    user_agent: str | None = None,
+    ip: str | None = None,
+    days: int = 14,
+    seconds: int | None = None,
+) -> str | None:
+    password_hash = _hash_password(new_password)
+    token = secrets.token_urlsafe(48)
+    ttl = timedelta(seconds=max(1800, int(seconds))) if seconds is not None else timedelta(days=days)
+    expires_at = (datetime.now(timezone.utc) + ttl).isoformat(timespec='seconds')
+
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        current = conn.execute(
+            "SELECT password_hash FROM users WHERE id=? AND is_active=1",
+            (user_id,),
+        ).fetchone()
+        if not current or not _verify_password(current_password or '', current['password_hash'] or ''):
+            return None
+        fields = ['password_hash=?']
+        params: list[Any] = [password_hash]
+        if username is not None:
+            username_clean = username.strip()
+            if not username_clean:
+                raise ValueError('Логин не может быть пустым')
+            existing = conn.execute(
+                'SELECT id FROM users WHERE lower(username)=lower(?) AND id<>?',
+                (username_clean, user_id),
+            ).fetchone()
+            if existing:
+                raise ValueError('Такой логин уже используется')
+            fields.append('username=?')
+            params.append(username_clean)
+        if display_name is not None:
+            fields.append('display_name=?')
+            params.append((display_name or '').strip() or None)
+        fields.append('updated_at=CURRENT_TIMESTAMP')
+        params.append(user_id)
+        updated = conn.execute(
+            f"UPDATE users SET {', '.join(fields)} WHERE id=? AND is_active=1",
+            params,
+        )
+        if updated.rowcount != 1:
+            return None
+        conn.execute(
+            "UPDATE sessions SET revoked_at=CURRENT_TIMESTAMP WHERE user_id=? AND revoked_at IS NULL",
+            (user_id,),
+        )
+        conn.execute(
+            "INSERT INTO sessions (session_token, user_id, expires_at, user_agent, ip) VALUES (?, ?, ?, ?, ?)",
+            (token, user_id, expires_at, user_agent, ip),
+        )
+        return token
 
 
 def get_user_by_id(user_id: int) -> dict[str, Any] | None:
@@ -3944,6 +4007,42 @@ def authenticate_user(username: str, password: str) -> dict[str, Any] | None:
         if not _verify_password(password, data.get('password_hash') or ''):
             return None
         return {k: data[k] for k in ('id', 'username', 'display_name', 'role', 'is_active', 'created_at', 'updated_at') if k in data}
+
+
+def authenticate_user_and_create_session(
+    username: str,
+    password: str,
+    *,
+    user_agent: str | None = None,
+    ip: str | None = None,
+    days: int = 14,
+    seconds: int | None = None,
+) -> tuple[dict[str, Any], str] | None:
+    token = secrets.token_urlsafe(48)
+    ttl = timedelta(seconds=max(1800, int(seconds))) if seconds is not None else timedelta(days=days)
+    expires_at = (datetime.now(timezone.utc) + ttl).isoformat(timespec='seconds')
+
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT * FROM users WHERE lower(username)=lower(?) AND is_active=1",
+            (username.strip(),),
+        ).fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        if not _verify_password(password, data.get('password_hash') or ''):
+            return None
+        conn.execute(
+            "INSERT INTO sessions (session_token, user_id, expires_at, user_agent, ip) VALUES (?, ?, ?, ?, ?)",
+            (token, int(data['id']), expires_at, user_agent, ip),
+        )
+        user = {
+            key: data[key]
+            for key in ('id', 'username', 'display_name', 'role', 'is_active', 'created_at', 'updated_at')
+            if key in data
+        }
+        return user, token
 
 
 def create_session(user_id: int, *, user_agent: str | None = None, ip: str | None = None, days: int = 14, seconds: int | None = None) -> str:
