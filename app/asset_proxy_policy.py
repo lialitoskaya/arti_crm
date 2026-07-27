@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import ipaddress
+import socket
 from collections.abc import Iterable
+from collections.abc import Callable
 from urllib.parse import urljoin, urlsplit
 
 
@@ -15,6 +17,8 @@ DEFAULT_ASSET_PROXY_ALLOWED_HOSTS = (
 )
 
 OZON_CREDENTIAL_ORIGIN = ("https", "api-seller.ozon.ru", 443)
+
+AssetHostResolver = Callable[[str], Iterable[str]]
 
 
 def _normalized_host(host: str | None) -> str:
@@ -93,6 +97,53 @@ def asset_url_allowed(url: str, allowed_hosts: Iterable[str]) -> bool:
 
 def asset_url_requires_ozon_credentials(url: str) -> bool:
     return _validated_origin(url) == OZON_CREDENTIAL_ORIGIN
+
+
+def resolve_asset_host_addresses(hostname: str) -> tuple[str, ...]:
+    """Resolve a hostname for fail-closed SSRF preflight validation."""
+    records = socket.getaddrinfo(hostname, 443, type=socket.SOCK_STREAM)
+    addresses: list[str] = []
+    for record in records:
+        address = str(record[4][0])
+        if address not in addresses:
+            addresses.append(address)
+    return tuple(addresses)
+
+
+def asset_addresses_are_global(addresses: Iterable[str]) -> bool:
+    """Accept only a non-empty DNS answer containing exclusively global IPs."""
+    parsed: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+    try:
+        for value in addresses:
+            parsed.append(ipaddress.ip_address(value))
+    except (TypeError, ValueError):
+        return False
+    return bool(parsed) and all(
+        address.is_global
+        and not address.is_loopback
+        and not address.is_private
+        and not address.is_link_local
+        and not address.is_multicast
+        and not address.is_reserved
+        and not address.is_unspecified
+        for address in parsed
+    )
+
+
+def asset_url_resolves_globally(url: str, resolver: AssetHostResolver) -> bool:
+    """Run injectable DNS/IP validation without weakening hostname TLS checks.
+
+    This is a fail-closed preflight. The HTTP transport still resolves the
+    hostname independently, so callers must not treat it as DNS pinning.
+    """
+    origin = _validated_origin(url)
+    if origin is None:
+        return False
+    _scheme, hostname, _port = origin
+    try:
+        return asset_addresses_are_global(resolver(hostname))
+    except Exception:
+        return False
 
 
 def resolve_asset_redirect(current_url: str, location: str | None) -> str | None:
