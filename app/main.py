@@ -222,6 +222,18 @@ def _delete_cookie_secure(response: Response, key: str, request: Request | None 
     )
 
 
+def _set_auth_cookie(response: Response, token: str, request: Request, *, max_age: int) -> None:
+    response.set_cookie(
+        AUTH_COOKIE_NAME,
+        token,
+        httponly=True,
+        samesite=os.getenv("CRM_COOKIE_SAMESITE", "lax"),
+        secure=_cookie_secure_enabled(request),
+        max_age=max_age,
+        path="/",
+    )
+
+
 def _delete_legacy_csrf_cookie(response: Response, request: Request | None = None) -> None:
     # v75-v77 used a browser-readable double-submit CSRF cookie.
     # v78+ switches to a session-bound token returned by /api/security/csrf.
@@ -2247,8 +2259,15 @@ def auth_login(payload: LoginCreate, request: Request, response: Response) -> di
         window_seconds=_security_env_int("CRM_LOGIN_RATE_WINDOW_SECONDS", 600, minimum=60, maximum=86400),
     )
 
-    user = repo.authenticate_user(username, payload.password)
-    if not user:
+    session_ttl_seconds = _security_env_int("CRM_SESSION_TTL_SECONDS", 14 * 24 * 60 * 60, minimum=1800, maximum=60 * 24 * 60 * 60)
+    authentication = repo.authenticate_user_and_create_session(
+        username,
+        payload.password,
+        user_agent=user_agent,
+        ip=client_ip,
+        seconds=session_ttl_seconds,
+    )
+    if not authentication:
         state = repo.record_login_failure(
             username,
             client_ip,
@@ -2266,23 +2285,9 @@ def auth_login(payload: LoginCreate, request: Request, response: Response) -> di
             )
         raise HTTPException(status_code=401, detail="Неверный логин или пароль")
 
+    user, token = authentication
     repo.record_login_success(username, client_ip, user_agent)
-    session_ttl_seconds = _security_env_int("CRM_SESSION_TTL_SECONDS", 14 * 24 * 60 * 60, minimum=1800, maximum=60 * 24 * 60 * 60)
-    token = repo.create_session(
-        int(user["id"]),
-        user_agent=request.headers.get("user-agent"),
-        ip=_client_ip(request),
-        seconds=session_ttl_seconds,
-    )
-    response.set_cookie(
-        AUTH_COOKIE_NAME,
-        token,
-        httponly=True,
-        samesite=os.getenv("CRM_COOKIE_SAMESITE", "lax"),
-        secure=_cookie_secure_enabled(request),
-        max_age=session_ttl_seconds,
-        path="/",
-    )
+    _set_auth_cookie(response, token, request, max_age=session_ttl_seconds)
     _delete_legacy_csrf_cookie(response, request)
     return {"ok": True, "user": user}
 
@@ -2320,18 +2325,35 @@ def security_csrf(request: Request, response: Response) -> dict[str, Any]:
 
 
 @app.patch("/api/auth/profile")
-def auth_update_profile(payload: ProfileUpdate, request: Request) -> dict[str, Any]:
+def auth_update_profile(payload: ProfileUpdate, request: Request, response: Response) -> dict[str, Any]:
     user = _current_user(request)
     user_id = int(user["id"])
-    try:
-        updated = repo.update_user_profile(user_id, username=payload.username, display_name=payload.display_name)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
+    updated = None
     if payload.new_password:
-        if not payload.current_password or not repo.verify_user_password(user_id, payload.current_password):
+        if not payload.current_password:
             raise HTTPException(status_code=400, detail="Текущий пароль указан неверно")
-        repo.update_user_password(user_id, payload.new_password)
+        session_ttl_seconds = _security_env_int("CRM_SESSION_TTL_SECONDS", 14 * 24 * 60 * 60, minimum=1800, maximum=60 * 24 * 60 * 60)
+        try:
+            token = repo.change_user_password_and_rotate_session(
+                user_id,
+                current_password=payload.current_password,
+                new_password=payload.new_password,
+                username=payload.username,
+                display_name=payload.display_name,
+                user_agent=request.headers.get("user-agent"),
+                ip=_client_ip(request),
+                seconds=session_ttl_seconds,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not token:
+            raise HTTPException(status_code=400, detail="Текущий пароль указан неверно")
+        _set_auth_cookie(response, token, request, max_age=session_ttl_seconds)
+    else:
+        try:
+            updated = repo.update_user_profile(user_id, username=payload.username, display_name=payload.display_name)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "user": repo.get_user_by_id(user_id) or updated}
 
 
@@ -2369,9 +2391,8 @@ def api_update_user(user_id: int, payload: UserUpdate, request: Request) -> dict
 @app.post("/api/users/{user_id}/password")
 def api_update_user_password(user_id: int, payload: UserPasswordUpdate, request: Request) -> dict[str, Any]:
     _require_admin(request)
-    if not repo.get_user_by_id(user_id):
+    if not repo.update_user_password(user_id, payload.password):
         raise HTTPException(status_code=404, detail="Сотрудник не найден")
-    repo.update_user_password(user_id, payload.password)
     return {"ok": True}
 
 
