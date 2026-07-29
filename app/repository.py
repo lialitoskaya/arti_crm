@@ -3378,10 +3378,11 @@ def create_knowledge_article(*, category_id: int | None, title: str, content: st
             INSERT INTO knowledge_articles (category_id, title, content, tags, image_url, is_published, created_by_user_id, updated_by_user_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (category_id, title.strip(), content or '', (tags or '').strip() or None, (image_url or '').strip() or None, 1 if is_published else 0, user_id, user_id))
-        return get_knowledge_article(int(cur.lastrowid)) or {}
+        article_id = int(cur.lastrowid)
+    return get_knowledge_article(article_id) or {}
 
 
-def update_knowledge_article(article_id: int, *, category_id: int | None = None, title: str | None = None, content: str | None = None, tags: str | None = None, image_url: str | None = None, clear_image: bool = False, is_published: bool | None = None, user_id: int | None = None) -> dict[str, Any] | None:
+def update_knowledge_article(article_id: int, *, category_id: int | None = None, title: str | None = None, content: str | None = None, tags: str | None = None, is_published: bool | None = None, user_id: int | None = None) -> dict[str, Any] | None:
     fields = []
     params: list[Any] = []
     if category_id is not None:
@@ -3392,10 +3393,6 @@ def update_knowledge_article(article_id: int, *, category_id: int | None = None,
         fields.append("content=?"); params.append(content)
     if tags is not None:
         fields.append("tags=?"); params.append(tags.strip() or None)
-    if clear_image:
-        fields.append("image_url=?"); params.append(None)
-    elif image_url is not None:
-        fields.append("image_url=?"); params.append(image_url.strip() or None)
     if is_published is not None:
         fields.append("is_published=?"); params.append(1 if is_published else 0)
     fields.append("updated_by_user_id=?"); params.append(user_id)
@@ -3406,6 +3403,36 @@ def update_knowledge_article(article_id: int, *, category_id: int | None = None,
         if not exists:
             return None
         conn.execute(f"UPDATE knowledge_articles SET {', '.join(fields)} WHERE id=?", params)
+    return get_knowledge_article(article_id)
+
+
+def set_knowledge_article_image_reference(article_id: int, image_reference: str, user_id: int | None) -> dict[str, Any] | None:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE knowledge_articles
+            SET image_url=?, updated_by_user_id=?, updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (image_reference, user_id, article_id),
+        )
+        if int(cursor.rowcount) == 0:
+            return None
+    return get_knowledge_article(article_id)
+
+
+def clear_knowledge_article_image_reference(article_id: int, user_id: int | None) -> dict[str, Any] | None:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE knowledge_articles
+            SET image_url=NULL, updated_by_user_id=?, updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (user_id, article_id),
+        )
+        if int(cursor.rowcount) == 0:
+            return None
     return get_knowledge_article(article_id)
 
 def log_webhook_event(source: str, event_type: str | None, external_id: str | None, payload: dict[str, Any]) -> int:

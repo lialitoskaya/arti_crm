@@ -48,6 +48,17 @@ from app.marketplace_sender import (
 from app.notifications_router import create_notifications_router
 from app.reply_templates_router import create_reply_templates_router
 from app.services.analytics import build_chat_analytics, build_chat_analytics_drilldown
+from app.services.knowledge_images import (
+    article_knowledge_image_url,
+    knowledge_image_media_type,
+    lexical_path_is_within,
+    normalized_static_lookup_path,
+    private_knowledge_image_reference,
+    private_storage_root,
+    resolved_path_is_within,
+    resolve_article_image_reference,
+    resolve_knowledge_image_path,
+)
 from app.task_types_router import create_task_types_router
 from app.connectors.mock import MockConnector
 from app.connectors.ozon import OzonConnector
@@ -59,13 +70,33 @@ from app.schemas import AiReplyCreate, ChatCreate, ChatUpdate, InternalNoteCreat
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 CHAT_ATTACHMENTS_DIR = Path(os.getenv("CRM_CHAT_ATTACHMENTS_DIR", str(Path.cwd() / "chat_attachments"))).resolve()
+KNOWLEDGE_IMAGES_DIR = Path(os.getenv("CRM_KNOWLEDGE_IMAGES_DIR", str(Path.cwd() / "knowledge_images"))).resolve()
 MAX_CHAT_IMAGE_BYTES = int(os.getenv("CRM_MAX_CHAT_IMAGE_MB", "12")) * 1024 * 1024
 ALLOWED_CHAT_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 
 CRM_BUILD_VERSION = "v80-login-bruteforce-lockout-20260708"
 
+
+class KnowledgeSafeStaticFiles(StaticFiles):
+    def lookup_path(self, path: str) -> tuple[str, os.stat_result | None]:
+        normalized_path = normalized_static_lookup_path(path)
+        for directory in self.all_directories:
+            lexical_path = Path(os.path.abspath(os.path.join(os.fspath(directory), normalized_path)))
+            lexical_legacy_root = Path(os.path.abspath(os.path.join(os.fspath(directory), "uploads", "knowledge")))
+            if lexical_path_is_within(lexical_path, lexical_legacy_root):
+                return "", None
+        full_path, stat_result = super().lookup_path(path)
+        if stat_result is None:
+            return full_path, stat_result
+        for directory in self.all_directories:
+            legacy_root = Path(os.fspath(directory)) / "uploads" / "knowledge"
+            if resolved_path_is_within(full_path, legacy_root):
+                return "", None
+        return full_path, stat_result
+
+
 app = FastAPI(title="Arti CRM", version="1.0.3")
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.mount("/static", KnowledgeSafeStaticFiles(directory=STATIC_DIR), name="static")
 
 AUTH_COOKIE_NAME = "arti_crm_session"
 _AUTH_DISABLED_CONFIGURATION_ERROR: AuthBootstrapError | None = None
@@ -5202,14 +5233,27 @@ def api_knowledge_categories(request: Request) -> list[dict[str, Any]]:
 
 @app.post("/api/knowledge/categories")
 def api_create_knowledge_category(payload: KnowledgeCategoryCreate, request: Request) -> dict[str, Any]:
-    _current_user(request)
+    _require_admin(request)
     return repo.create_knowledge_category(payload.title, payload.description, payload.sort_order)
 
 
 @app.get("/api/knowledge/articles")
 def api_knowledge_articles(request: Request, category_id: int | None = None, q: str | None = None) -> list[dict[str, Any]]:
     _current_user(request)
-    return repo.list_knowledge_articles(category_id=category_id, q=q)
+    return [
+        _knowledge_article_response(article)
+        for article in repo.list_knowledge_articles(category_id=category_id, q=q)
+    ]
+
+
+def _knowledge_article_response(article: dict[str, Any]) -> dict[str, Any]:
+    response = dict(article)
+    response["image_url"] = (
+        article_knowledge_image_url(int(article["id"]))
+        if article.get("image_url")
+        else None
+    )
+    return response
 
 
 @app.get("/api/knowledge/articles/{article_id}")
@@ -5218,12 +5262,39 @@ def api_get_knowledge_article(article_id: int, request: Request) -> dict[str, An
     article = repo.get_knowledge_article(article_id)
     if not article:
         raise HTTPException(status_code=404, detail="Article not found")
-    return article
+    return _knowledge_article_response(article)
 
 
-@app.post("/api/knowledge/upload-image")
-async def api_upload_knowledge_image(request: Request, file: UploadFile = File(...)) -> dict[str, Any]:
+@app.get("/api/knowledge/articles/{article_id}/image")
+def api_get_knowledge_image(article_id: int, request: Request) -> FileResponse:
     _current_user(request)
+    article = repo.get_knowledge_article(article_id)
+    if not article:
+        raise HTTPException(status_code=404, detail="Image not found")
+    path = resolve_article_image_reference(
+        article.get("image_url"),
+        legacy_root=STATIC_DIR / "uploads" / "knowledge",
+        private_root=KNOWLEDGE_IMAGES_DIR,
+        public_static_root=STATIC_DIR,
+    )
+    media_type = knowledge_image_media_type(path) if path is not None else None
+    if path is None or media_type is None:
+        raise HTTPException(status_code=404, detail="Image not found")
+    return FileResponse(
+        path,
+        media_type=media_type,
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@app.post("/api/knowledge/articles/{article_id}/image")
+async def api_upload_knowledge_image(article_id: int, request: Request, file: UploadFile = File(...)) -> dict[str, Any]:
+    user = _require_admin(request)
+    if not repo.get_knowledge_article(article_id):
+        raise HTTPException(status_code=404, detail="Article not found")
     allowed = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif"}
     content_type = (file.content_type or "").lower()
     ext = allowed.get(content_type)
@@ -5235,12 +5306,15 @@ async def api_upload_knowledge_image(request: Request, file: UploadFile = File(.
                 break
     if not ext:
         raise HTTPException(status_code=400, detail="Можно загрузить только изображение JPG, PNG, WEBP или GIF")
-    uploads_dir = STATIC_DIR / "uploads" / "knowledge"
+    uploads_dir = private_storage_root(KNOWLEDGE_IMAGES_DIR, STATIC_DIR)
     uploads_dir.mkdir(parents=True, exist_ok=True)
     filename = f"{uuid.uuid4().hex}{ext}"
-    path = uploads_dir / filename
+    path = resolve_knowledge_image_path(uploads_dir, filename)
+    image_reference = private_knowledge_image_reference(filename)
+    if path is None or image_reference is None:
+        raise HTTPException(status_code=500, detail="Image storage error")
     size = 0
-    with path.open("wb") as out:
+    with path.open("xb") as out:
         while True:
             chunk = await file.read(1024 * 1024)
             if not chunk:
@@ -5251,32 +5325,51 @@ async def api_upload_knowledge_image(request: Request, file: UploadFile = File(.
                     path.unlink()
                 raise HTTPException(status_code=413, detail="Изображение слишком большое. Максимум 8 МБ")
             out.write(chunk)
-    return {"url": f"/static/uploads/knowledge/{filename}", "filename": filename, "size": size}
+    if not path.is_file() or path.stat().st_size != size:
+        with suppress(OSError):
+            path.unlink()
+        raise HTTPException(status_code=500, detail="Image storage error")
+    article = repo.set_knowledge_article_image_reference(
+        article_id,
+        image_reference,
+        int(user["id"]),
+    )
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found")
+    return _knowledge_article_response(article)
+
+
+@app.delete("/api/knowledge/articles/{article_id}/image")
+def api_delete_knowledge_image(article_id: int, request: Request) -> dict[str, Any]:
+    user = _require_admin(request)
+    article = repo.clear_knowledge_article_image_reference(article_id, int(user["id"]))
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found")
+    return _knowledge_article_response(article)
 
 
 @app.post("/api/knowledge/articles")
 def api_create_knowledge_article(payload: KnowledgeArticleCreate, request: Request) -> dict[str, Any]:
-    user = _current_user(request)
-    return repo.create_knowledge_article(category_id=payload.category_id, title=payload.title, content=payload.content, tags=payload.tags, image_url=payload.image_url, is_published=payload.is_published, user_id=int(user["id"]))
+    user = _require_admin(request)
+    article = repo.create_knowledge_article(category_id=payload.category_id, title=payload.title, content=payload.content, tags=payload.tags, is_published=payload.is_published, user_id=int(user["id"]))
+    return _knowledge_article_response(article)
 
 
 @app.patch("/api/knowledge/articles/{article_id}")
 def api_update_knowledge_article(article_id: int, payload: KnowledgeArticleUpdate, request: Request) -> dict[str, Any]:
-    user = _current_user(request)
+    user = _require_admin(request)
     article = repo.update_knowledge_article(
         article_id,
         category_id=payload.category_id,
         title=payload.title,
         content=payload.content,
         tags=payload.tags,
-        image_url=payload.image_url,
-        clear_image=bool(payload.clear_image),
         is_published=payload.is_published,
         user_id=int(user["id"]),
     )
     if not article:
         raise HTTPException(status_code=404, detail="Article not found")
-    return article
+    return _knowledge_article_response(article)
 
 
 app.include_router(create_reply_templates_router(repo, _current_user, _require_admin))

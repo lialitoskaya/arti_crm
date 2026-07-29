@@ -5179,13 +5179,13 @@ function showKnowledgeEditor(article = null) {
   $('knowledgeEmpty')?.classList.add('hidden');
   $('knowledgeReader')?.classList.add('hidden');
   $('knowledgeArticleForm')?.classList.remove('hidden');
+  updateAuthUiForUser();
   closeKnowledgeModal();
   syncKnowledgeLayoutState();
   if ($('knowledgeFormTitle')) $('knowledgeFormTitle').textContent = article?.id ? 'Редактирование статьи' : 'Новая статья';
   if ($('knowledgeArticleTitle')) $('knowledgeArticleTitle').value = article?.title || '';
   if ($('knowledgeArticleContent')) $('knowledgeArticleContent').value = article?.content || '';
   if ($('knowledgeArticleTags')) $('knowledgeArticleTags').value = article?.tags || '';
-  if ($('knowledgeArticleImageUrl')) $('knowledgeArticleImageUrl').value = article?.image_url || '';
   if ($('knowledgeArticleImageFile')) $('knowledgeArticleImageFile').value = '';
   if ($('knowledgeClearImage')) $('knowledgeClearImage').checked = false;
   $('knowledgeClearImageLabel')?.classList.toggle('hidden', !article?.image_url);
@@ -5208,14 +5208,13 @@ function updateKnowledgeImagePreview(url) {
   box.innerHTML = `<img src="${escapeHtml(url)}" alt="Превью изображения статьи" /><span>Изображение будет показано в статье</span>`;
 }
 
-async function uploadKnowledgeImageIfNeeded() {
+async function uploadKnowledgeImageIfNeeded(articleId) {
   const fileInput = $('knowledgeArticleImageFile');
   const file = fileInput?.files?.[0];
   if (!file) return null;
   const form = new FormData();
   form.append('file', file);
-  const data = await apiForm('/api/knowledge/upload-image', form);
-  return data.url;
+  return apiForm(`/api/knowledge/articles/${articleId}/image`, form);
 }
 
 async function openKnowledgeArticle(articleId) {
@@ -7380,16 +7379,11 @@ function init() {
       const submitBtn = knowledgeArticleForm.querySelector('button[type="submit"]');
       if (submitBtn) submitBtn.disabled = true;
       try {
-        let imageUrl = $('knowledgeArticleImageUrl')?.value?.trim() || null;
-        const uploadedUrl = await uploadKnowledgeImageIfNeeded();
-        if (uploadedUrl) imageUrl = uploadedUrl;
         const payload = {
           title: $('knowledgeArticleTitle')?.value?.trim(),
           category_id: $('knowledgeArticleCategory')?.value ? Number($('knowledgeArticleCategory').value) : null,
           tags: $('knowledgeArticleTags')?.value?.trim() || null,
           content: $('knowledgeArticleContent')?.value || '',
-          image_url: imageUrl,
-          clear_image: !!$('knowledgeClearImage')?.checked,
           is_published: true,
         };
         if (!payload.title) return notify('Укажите название статьи', 'Название обязательно.');
@@ -7400,6 +7394,11 @@ function init() {
           savedArticle = await api('/api/knowledge/articles', { method: 'POST', body: JSON.stringify(payload) });
           currentKnowledgeArticleId = savedArticle.id;
         }
+        if ($('knowledgeClearImage')?.checked) {
+          savedArticle = await api(`/api/knowledge/articles/${savedArticle.id}/image`, { method: 'DELETE' });
+        } else {
+          savedArticle = await uploadKnowledgeImageIfNeeded(savedArticle.id) || savedArticle;
+        }
         await loadKnowledge();
         await openKnowledgeArticle(savedArticle.id || currentKnowledgeArticleId);
         notify('База знаний', 'Статья сохранена.');
@@ -7409,7 +7408,6 @@ function init() {
         if (submitBtn) submitBtn.disabled = false;
       }
     });
-    $('knowledgeArticleImageUrl')?.addEventListener('input', () => updateKnowledgeImagePreview($('knowledgeArticleImageUrl')?.value?.trim() || ''));
     $('knowledgeArticleImageFile')?.addEventListener('change', () => {
       const file = $('knowledgeArticleImageFile')?.files?.[0];
       if (file) updateKnowledgeImagePreview(URL.createObjectURL(file));

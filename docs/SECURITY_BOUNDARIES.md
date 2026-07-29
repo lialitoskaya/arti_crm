@@ -1,0 +1,70 @@
+# Security boundaries
+
+## Knowledge article images
+
+Knowledge articles and their images require a normal authenticated CRM session.
+Images are read only through `GET /api/knowledge/articles/{article_id}/image`, with
+the same viewer-and-admin permission semantics as article reads. The endpoint first
+loads the article and uses its server-stored image reference; anonymous requests
+return `401`, while unknown articles, invalid references, and missing files return a
+generic `404` without filesystem details.
+
+Article API responses never expose a legacy static URL, private storage reference, or
+private basename. When an article has an internal image reference, serialization
+derives `/api/knowledge/articles/{article_id}/image`. Text create/update DTOs reject
+raw `image_url` and `clear_image` fields. Text updates do not write `image_url`, so a
+stale client cannot restore or replace an image reference.
+
+Knowledge mutation endpoints require the admin role. The shared frontend
+`admin-only hidden` mechanism hides article creation/editing, image upload/removal,
+and category management controls from viewers, but backend RBAC remains the source
+of truth. Viewers retain article and image read access.
+
+New files are attached with
+`POST /api/knowledge/articles/{article_id}/image`. The server chooses the filename,
+writes and verifies the file in `CRM_KNOWLEDGE_IMAGES_DIR`, then stores an internal
+reference in the exact rollback-compatible form
+`/api/knowledge/images/<uuid>.<extension>`. Article serialization still exposes only
+the article-id endpoint. This directory defaults to `knowledge_images/`
+outside `app/static/` and is never mounted as static content. The corresponding
+`DELETE` clears only the database reference; it intentionally retains the physical
+file to favor recovery over data loss. Orphan cleanup is deferred.
+
+Existing database references under `/static/uploads/knowledge/` remain unchanged.
+The article-id endpoint strictly resolves an exact legacy reference beneath
+`app/static/uploads/knowledge` with lexical and resolved containment. Existing
+private references resolve beneath the configured private root. The server chooses a
+safe image content type from the validated extension and returns `nosniff` and
+private/no-store response headers.
+
+This slice has not been deployed with the temporary `knowledge-private:` write
+format. New writes deliberately retain the `/api/knowledge/images/<uuid>` internal
+format, so rolling back to the previous application keeps newly attached images
+readable. The current resolver accepts both formats for compatibility, but performs
+no database conversion and does not change existing `updated_at` values.
+
+There is no startup or request-time physical legacy migration in this slice. Startup
+does not rewrite article rows, change `updated_at`, copy files, or delete legacy
+sources. Old files are intentionally retained. A physical migration, deduplication,
+and orphan lifecycle require a separate rollout and recovery plan.
+
+The mounted FastAPI static application blocks the complete legacy namespace. It
+normalizes repeated and encoded separators and dot segments, then refuses a lookup
+when its lexical path is inside `app/static/uploads/knowledge` or its resolved target
+is inside that directory. Windows-safe `commonpath` containment is used instead of
+string-prefix checks. Symlink/reparse aliases into the legacy tree and links located
+inside the tree are denied; unrelated static assets remain available.
+
+FastAPI cannot enforce this boundary if a reverse proxy, CDN, or web server serves
+`app/static` before the ASGI application. Every deployment must explicitly deny or
+exclude `app/static/uploads/knowledge` from its static alias/root. Release checks
+must cover direct, encoded, dot-segment, mixed-separator, and reparse/junction paths
+through the public proxy.
+
+This boundary applies only to knowledge article images. Chat uploads retain their
+existing storage, routes, and RBAC behavior. MIME signature validation, aggregate
+quotas, physical legacy migration, and orphan cleanup are intentionally outside this
+change.
+
+Regression coverage is in `tests/test_knowledge_image_security.py` and uses only a
+temporary SQLite database and synthetic files under the test temporary directory.

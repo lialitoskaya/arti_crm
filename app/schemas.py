@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 Marketplace = Literal["ozon", "yandex", "wildberries", "mock"]
 ChatStatus = str
@@ -167,21 +167,22 @@ class KnowledgeCategoryUpdate(BaseModel):
 
 
 class KnowledgeArticleCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     category_id: int | None = None
     title: str = Field(min_length=1, max_length=220)
     content: str = Field(default='', max_length=50000)
     tags: str | None = Field(default=None, max_length=1000)
-    image_url: str | None = Field(default=None, max_length=2000)
     is_published: bool = True
 
 
 class KnowledgeArticleUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     category_id: int | None = None
     title: str | None = Field(default=None, min_length=1, max_length=220)
     content: str | None = Field(default=None, max_length=50000)
     tags: str | None = Field(default=None, max_length=1000)
-    image_url: str | None = Field(default=None, max_length=2000)
-    clear_image: bool | None = None
     is_published: bool | None = None
 
 
