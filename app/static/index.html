@@ -677,7 +677,7 @@
             </div>
             <div class="knowledge-search-row">
               <input id="knowledgeSearch" placeholder="Поиск по названию, тегам и содержанию" />
-              <button id="knowledgeNewArticleBtn" type="button">Добавить статью</button>
+              <button id="knowledgeNewArticleBtn" class="admin-only hidden" type="button">Добавить статью</button>
             </div>
           </div>
           <div class="knowledge-layout knowledge-layout-v51">
@@ -689,7 +689,7 @@
                 </div>
               </div>
               <div id="knowledgeCategories" class="knowledge-category-list knowledge-tree"></div>
-              <form id="knowledgeCategoryForm" class="knowledge-category-form">
+              <form id="knowledgeCategoryForm" class="knowledge-category-form admin-only hidden">
                 <div class="knowledge-form-caption">Быстрое добавление раздела</div>
                 <input id="knowledgeCategoryTitle" placeholder="Новый раздел" />
                 <button class="small secondary" type="submit">Добавить раздел</button>
@@ -711,14 +711,14 @@
                   </div>
                   <div class="knowledge-reader-actions">
                     <button id="knowledgeBackToListBtn" class="secondary small knowledge-mobile-back hidden" type="button">← К списку</button>
-                    <button id="knowledgeEditArticleBtn" class="icon-btn knowledge-edit-icon" type="button" title="Редактировать статью" aria-label="Редактировать статью">✎</button>
+                    <button id="knowledgeEditArticleBtn" class="icon-btn knowledge-edit-icon admin-only hidden" type="button" title="Редактировать статью" aria-label="Редактировать статью">✎</button>
                   </div>
                 </div>
                 <img id="knowledgeReaderImage" class="knowledge-reader-image hidden" alt="Изображение статьи" />
                 <div id="knowledgeReaderContent" class="knowledge-reader-content"></div>
               </article>
 
-              <form id="knowledgeArticleForm" class="knowledge-article-form hidden">
+              <form id="knowledgeArticleForm" class="knowledge-article-form admin-only hidden">
                 <div class="knowledge-form-head">
                   <h3 id="knowledgeFormTitle">Новая статья</h3>
                   <div class="knowledge-form-actions">
@@ -733,7 +733,6 @@
                   <span>Изображение к статье</span>
                   <input id="knowledgeArticleImageFile" type="file" accept="image/*" />
                 </label>
-                <input id="knowledgeArticleImageUrl" placeholder="Или ссылка на изображение" />
                 <div id="knowledgeImagePreview" class="knowledge-image-preview hidden"></div>
                 <label class="knowledge-clear-image hidden" id="knowledgeClearImageLabel"><input id="knowledgeClearImage" type="checkbox" /> Удалить изображение из статьи</label>
                 <textarea id="knowledgeArticleContent" placeholder="Текст инструкции, шаблон ответа, важные нюансы..."></textarea>
@@ -936,7 +935,7 @@
       <div class="knowledge-modal-topbar">
         <button id="knowledgeModalBackBtn" class="knowledge-modal-nav" type="button" aria-label="Назад к списку">←</button>
         <div class="knowledge-modal-toolbar-actions">
-          <button id="knowledgeModalEditBtn" class="secondary small" type="button">Редактировать</button>
+          <button id="knowledgeModalEditBtn" class="secondary small admin-only hidden" type="button">Редактировать</button>
           <button id="knowledgeModalCloseBtn" class="knowledge-modal-close" type="button" aria-label="Закрыть">✕</button>
         </div>
       </div>
