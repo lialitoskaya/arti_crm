@@ -22,13 +22,26 @@ of truth. Viewers retain article and image read access.
 
 New files are attached with
 `POST /api/knowledge/articles/{article_id}/image`. The server chooses the filename,
-writes and verifies the file in `CRM_KNOWLEDGE_IMAGES_DIR`, then stores an internal
-reference in the exact rollback-compatible form
+writes the file in `CRM_KNOWLEDGE_IMAGES_DIR`, then stores an internal reference in
+the exact rollback-compatible form
 `/api/knowledge/images/<uuid>.<extension>`. Article serialization still exposes only
 the article-id endpoint. This directory defaults to `knowledge_images/`
 outside `app/static/` and is never mounted as static content. The corresponding
 `DELETE` clears only the database reference; it intentionally retains the physical
 file to favor recovery over data loss. Orphan cleanup is deferred.
+
+The original filename and multipart `Content-Type` are metadata, not proof that an
+upload is an image. Before creating the final private file or changing the article,
+the endpoint reads the upload in 1 MiB chunks, rejects empty content and content over
+8 MiB, then uses Pillow for two decoder passes: `Image.open(...).verify()`, followed
+by reopen and full `load()`. Only decoder-confirmed JPEG, PNG, WebP, and GIF are
+accepted. The decoder format must strictly match both the original extension and
+MIME type: JPEG uses `.jpg` or `.jpeg` with `image/jpeg`; PNG uses `.png` with
+`image/png`; WebP uses `.webp` with `image/webp`; GIF uses `.gif` with `image/gif`.
+The persisted UUID filename uses the canonical decoder-derived extension (`.jpg` for
+JPEG). Empty, unsupported, corrupt, truncated, and metadata-mismatched uploads return
+a generic `400`; oversize uploads return `413`. Validation failures create no private
+file and do not change the existing article reference.
 
 Existing database references under `/static/uploads/knowledge/` remain unchanged.
 The article-id endpoint strictly resolves an exact legacy reference beneath
@@ -61,10 +74,13 @@ exclude `app/static/uploads/knowledge` from its static alias/root. Release check
 must cover direct, encoded, dot-segment, mixed-separator, and reparse/junction paths
 through the public proxy.
 
-This boundary applies only to knowledge article images. Chat uploads retain their
-existing storage, routes, and RBAC behavior. MIME signature validation, aggregate
-quotas, physical legacy migration, and orphan cleanup are intentionally outside this
-change.
+This decoder boundary applies only to knowledge article images. Chat uploads retain
+their existing storage, routes, validation, and RBAC behavior. Custom dimension,
+pixel-count, frame-count, animation, and decompression-bomb policies remain future
+work; Pillow's built-in warning/error behavior is not disabled. Decoder validation
+without re-encoding does not guarantee removal of all trailing bytes or polyglot
+content. Re-encoding, metadata stripping, aggregate quotas, physical legacy
+migration, and generalized orphan cleanup are intentionally outside this change.
 
 Regression coverage is in `tests/test_knowledge_image_security.py` and uses only a
 temporary SQLite database and synthetic files under the test temporary directory.
