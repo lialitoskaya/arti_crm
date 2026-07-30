@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO
 from urllib.parse import unquote
+
+from PIL import Image, UnidentifiedImageError
 
 
 LEGACY_KNOWLEDGE_IMAGE_URL_PREFIX = "/static/uploads/knowledge/"
@@ -15,6 +19,64 @@ _MEDIA_TYPES = {
     ".webp": "image/webp",
     ".gif": "image/gif",
 }
+_UPLOAD_FORMATS = {
+    "JPEG": (frozenset({".jpg", ".jpeg"}), "image/jpeg", ".jpg"),
+    "PNG": (frozenset({".png"}), "image/png", ".png"),
+    "WEBP": (frozenset({".webp"}), "image/webp", ".webp"),
+    "GIF": (frozenset({".gif"}), "image/gif", ".gif"),
+}
+
+
+@dataclass(frozen=True)
+class ValidatedKnowledgeImage:
+    decoder_format: str
+    canonical_extension: str
+    media_type: str
+
+
+def validate_knowledge_image_upload(
+    stream: BinaryIO,
+    *,
+    original_filename: str | None,
+    content_type: str | None,
+) -> ValidatedKnowledgeImage:
+    try:
+        stream.seek(0)
+        with Image.open(stream) as image:
+            decoder_format = str(image.format or "").upper()
+            image.verify()
+        stream.seek(0)
+        with Image.open(stream) as image:
+            if str(image.format or "").upper() != decoder_format:
+                raise ValueError("Decoder format changed between validation passes")
+            image.load()
+        stream.seek(0)
+    except (
+        Image.DecompressionBombError,
+        OSError,
+        SyntaxError,
+        UnidentifiedImageError,
+        ValueError,
+    ) as exc:
+        try:
+            stream.seek(0)
+        except OSError:
+            pass
+        raise ValueError("Invalid knowledge image") from exc
+
+    policy = _UPLOAD_FORMATS.get(decoder_format)
+    extension = Path(str(original_filename or "")).suffix.lower()
+    declared_content_type = str(content_type or "").lower()
+    if policy is None:
+        raise ValueError("Invalid knowledge image")
+    allowed_extensions, required_content_type, canonical_extension = policy
+    if extension not in allowed_extensions or declared_content_type != required_content_type:
+        raise ValueError("Invalid knowledge image")
+    return ValidatedKnowledgeImage(
+        decoder_format=decoder_format,
+        canonical_extension=canonical_extension,
+        media_type=required_content_type,
+    )
 
 
 def private_storage_root(storage_root: Path, public_static_root: Path) -> Path:

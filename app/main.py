@@ -58,6 +58,7 @@ from app.services.knowledge_images import (
     resolved_path_is_within,
     resolve_article_image_reference,
     resolve_knowledge_image_path,
+    validate_knowledge_image_upload,
 )
 from app.task_types_router import create_task_types_router
 from app.connectors.mock import MockConnector
@@ -5290,52 +5291,121 @@ def api_get_knowledge_image(article_id: int, request: Request) -> FileResponse:
     )
 
 
+async def _read_knowledge_image_upload_chunk(file: UploadFile) -> bytes:
+    return await file.read(1024 * 1024)
+
+
+def _write_knowledge_image_chunk(output: Any, chunk: bytes) -> None:
+    output.write(chunk)
+
+
+def _knowledge_image_persisted_size(path: Path) -> int:
+    return path.stat().st_size
+
+
+def _delete_new_knowledge_image(path: Path) -> None:
+    path.unlink()
+
+
+def _add_exception_note_best_effort(error: BaseException, note: str) -> None:
+    try:
+        error.add_note(note)
+    except BaseException:
+        return
+
+
+def _cleanup_new_knowledge_image(path: Path, original_error: BaseException) -> None:
+    try:
+        _delete_new_knowledge_image(path)
+    except BaseException as cleanup_error:
+        _add_exception_note_best_effort(
+            original_error,
+            "Knowledge image cleanup failed: "
+            f"{cleanup_error.__class__.__name__}",
+        )
+
+
 @app.post("/api/knowledge/articles/{article_id}/image")
 async def api_upload_knowledge_image(article_id: int, request: Request, file: UploadFile = File(...)) -> dict[str, Any]:
     user = _require_admin(request)
-    if not repo.get_knowledge_article(article_id):
+    existing_article = repo.get_knowledge_article(article_id)
+    if not existing_article:
         raise HTTPException(status_code=404, detail="Article not found")
-    allowed = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif"}
-    content_type = (file.content_type or "").lower()
-    ext = allowed.get(content_type)
-    if not ext:
-        original = (file.filename or "").lower()
-        for suffix in [".jpg", ".jpeg", ".png", ".webp", ".gif"]:
-            if original.endswith(suffix):
-                ext = ".jpg" if suffix == ".jpeg" else suffix
-                break
-    if not ext:
-        raise HTTPException(status_code=400, detail="Можно загрузить только изображение JPG, PNG, WEBP или GIF")
+
+    size = 0
+    while True:
+        chunk = await _read_knowledge_image_upload_chunk(file)
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > 8 * 1024 * 1024:
+            await file.seek(0)
+            raise HTTPException(status_code=413, detail="Изображение слишком большое. Максимум 8 МБ")
+    await file.seek(0)
+    if size == 0:
+        raise HTTPException(status_code=400, detail="Invalid knowledge image")
+    try:
+        validated = validate_knowledge_image_upload(
+            file.file,
+            original_filename=file.filename,
+            content_type=file.content_type,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid knowledge image") from exc
+    await file.seek(0)
+
     uploads_dir = private_storage_root(KNOWLEDGE_IMAGES_DIR, STATIC_DIR)
     uploads_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"{uuid.uuid4().hex}{ext}"
+    filename = f"{uuid.uuid4().hex}{validated.canonical_extension}"
     path = resolve_knowledge_image_path(uploads_dir, filename)
     image_reference = private_knowledge_image_reference(filename)
     if path is None or image_reference is None:
         raise HTTPException(status_code=500, detail="Image storage error")
-    size = 0
-    with path.open("xb") as out:
-        while True:
-            chunk = await file.read(1024 * 1024)
-            if not chunk:
-                break
-            size += len(chunk)
-            if size > 8 * 1024 * 1024:
-                with suppress(Exception):
-                    path.unlink()
-                raise HTTPException(status_code=413, detail="Изображение слишком большое. Максимум 8 МБ")
-            out.write(chunk)
-    if not path.is_file() or path.stat().st_size != size:
-        with suppress(OSError):
-            path.unlink()
-        raise HTTPException(status_code=500, detail="Image storage error")
-    article = repo.set_knowledge_article_image_reference(
-        article_id,
-        image_reference,
-        int(user["id"]),
-    )
+
+    created_file = False
+    persisted_size = 0
+    try:
+        with path.open("xb") as out:
+            created_file = True
+            while True:
+                chunk = await _read_knowledge_image_upload_chunk(file)
+                if not chunk:
+                    break
+                persisted_size += len(chunk)
+                _write_knowledge_image_chunk(out, chunk)
+        if persisted_size != size or _knowledge_image_persisted_size(path) != size:
+            raise OSError("Knowledge image persisted size mismatch")
+    except BaseException as exc:
+        if created_file:
+            _cleanup_new_knowledge_image(path, exc)
+        if isinstance(exc, OSError):
+            raise HTTPException(status_code=500, detail="Image storage error") from exc
+        raise
+
+    try:
+        article = repo.set_knowledge_article_image_reference(
+            article_id,
+            image_reference,
+            int(user["id"]),
+        )
+    except BaseException as exc:
+        cleanup_new_file = False
+        try:
+            current_article = repo.get_knowledge_article(article_id)
+            cleanup_new_file = not current_article or current_article.get("image_url") != image_reference
+        except BaseException as reconciliation_error:
+            _add_exception_note_best_effort(
+                exc,
+                "Knowledge image database reconciliation failed: "
+                f"{reconciliation_error.__class__.__name__}",
+            )
+        if cleanup_new_file:
+            _cleanup_new_knowledge_image(path, exc)
+        raise
     if not article:
-        raise HTTPException(status_code=404, detail="Article not found")
+        error = HTTPException(status_code=404, detail="Article not found")
+        _cleanup_new_knowledge_image(path, error)
+        raise error
     return _knowledge_article_response(article)
 
 
