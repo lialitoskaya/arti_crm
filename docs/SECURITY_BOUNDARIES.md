@@ -9,6 +9,43 @@ non-revoked legacy sessions for that user in the same transaction and never clea
 `sessions.revoked_at`, so previously issued tokens cannot become valid again.
 Repeated deactivation is safe and does not affect other users' sessions.
 
+## Opt-in administrator TOTP
+
+RFC 6238 TOTP is optional and available only as self-service for the currently
+authenticated administrator. Viewer and manager accounts cannot enroll, confirm, or
+disable it. The authenticator profile is compatible with Яндекс ID (Ключ): SHA-1,
+six digits, a 30-second period, and a verification window of at most one step in
+either direction. Servers and administrator devices must have synchronized clocks.
+
+`CRM_TOTP_ENCRYPTION_KEY` is a dedicated Fernet key. It has no fallback and must be
+configured before the first enrollment, remain identical on every application
+worker, and be retained for as long as any TOTP credential is enabled. Missing,
+malformed, or mismatched keys fail closed: password-only accounts continue to work,
+but enrollment, disable, and enabled-TOTP login do not change authentication state
+or expose internal cryptographic details. The key, plaintext secret, ciphertext,
+otpauth URI, and submitted codes must never be logged. The manual secret and full
+otpauth URI are returned only by a successful enrollment-start response.
+
+An incomplete enrollment has `enabled_at=NULL` and does not change login behavior.
+Confirmation atomically records the accepted time step, enables the credential,
+revokes all prior sessions, creates one new session, and rotates the browser cookie.
+After activation, a password creates only a five-minute pending challenge with five
+attempts; the database stores only its SHA-256 hash. A pending cookie is distinct
+from the CRM session cookie and is never accepted for normal API access. Successful
+verification consumes both the challenge and TOTP step before creating a full
+session, so concurrent or repeated verification cannot create another session.
+
+Disable requires the current password and a valid TOTP step newer than the last
+accepted one. Success deletes the credential, revokes all sessions, and clears the
+current session cookie. QR provisioning, recovery codes, mandatory 2FA, and
+management of another user's TOTP are outside this slice.
+
+The additive schema is safe to roll back only before the first TOTP activation. Once
+any account is enabled, deploying old application code is forbidden because it would
+accept password-only login and bypass the second factor. Forward recovery requires
+restoring the same encryption key and TOTP-aware application code; deleting or
+rewriting credentials is not an automatic recovery mechanism.
+
 ## Knowledge article images
 
 Knowledge articles and their images require a normal authenticated CRM session.

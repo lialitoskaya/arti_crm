@@ -5,3 +5,5 @@ httpx==0.28.1
 python-dotenv==1.0.1
 python-multipart==0.0.20
 Pillow==12.3.0
+PyOTP==2.10.0
+cryptography==49.0.0

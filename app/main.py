@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 
 from app import repository as repo
+from app import totp_auth
 from app.asset_proxy_policy import (
     asset_url_resolves_globally,
     asset_url_allowed,
@@ -66,7 +67,7 @@ from app.connectors.ozon import OzonConnector
 from app.connectors.wildberries import WildberriesConnector
 from app.connectors.yandex_market import YandexMarketConnector
 from app.db import get_connection, init_db
-from app.schemas import AiReplyCreate, ChatCreate, ChatUpdate, InternalNoteCreate, InternalNoteUpdate, LoginCreate, MessageCreate, ReviewReplyCreate, QuestionAnswerCreate, TaskCreate, TaskUpdate, UserCreate, UserPasswordUpdate, UserUpdate, ProfileUpdate, KnowledgeCategoryCreate, KnowledgeArticleCreate, KnowledgeArticleUpdate
+from app.schemas import AiReplyCreate, ChatCreate, ChatUpdate, InternalNoteCreate, InternalNoteUpdate, LoginCreate, MessageCreate, ReviewReplyCreate, QuestionAnswerCreate, TaskCreate, TaskUpdate, UserCreate, UserPasswordUpdate, UserUpdate, ProfileUpdate, KnowledgeCategoryCreate, KnowledgeArticleCreate, KnowledgeArticleUpdate, TotpCode, TotpDisable, TotpEnrollmentStart
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -100,6 +101,7 @@ app = FastAPI(title="Arti CRM", version="1.0.3")
 app.mount("/static", KnowledgeSafeStaticFiles(directory=STATIC_DIR), name="static")
 
 AUTH_COOKIE_NAME = "arti_crm_session"
+TOTP_PENDING_COOKIE_NAME = "arti_crm_totp_pending"
 _AUTH_DISABLED_CONFIGURATION_ERROR: AuthBootstrapError | None = None
 try:
     AUTH_DISABLED = validate_auth_disabled_config(
@@ -123,7 +125,7 @@ SENSITIVE_PUBLIC_PATH_RE = re.compile(
 SENSITIVE_ENV_NAMES = (
     "OZON_API_KEY", "OZON_CLIENT_ID", "WB_ANALYTICS_TOKEN", "WB_STATISTICS_TOKEN", "WB_API_TOKEN",
     "YANDEX_MARKET_API_KEY", "YANDEX_API_KEY", "WEB_PUSH_VAPID_PRIVATE_KEY", "VAPID_PRIVATE_KEY",
-    "CRM_BACKGROUND_TICK_TOKEN", "SECRET_KEY", "DATABASE_URL",
+    "CRM_BACKGROUND_TICK_TOKEN", "CRM_TOTP_ENCRYPTION_KEY", "SECRET_KEY", "DATABASE_URL",
 )
 
 
@@ -266,6 +268,35 @@ def _set_auth_cookie(response: Response, token: str, request: Request, *, max_ag
     )
 
 
+def _set_totp_pending_cookie(response: Response, token: str, request: Request) -> None:
+    response.set_cookie(
+        TOTP_PENDING_COOKIE_NAME,
+        token,
+        httponly=True,
+        samesite=os.getenv("CRM_COOKIE_SAMESITE", "lax"),
+        secure=_cookie_secure_enabled(request),
+        max_age=300,
+        path="/api/auth/totp",
+    )
+
+
+def _delete_totp_pending_cookie(
+    response: Response,
+    request: Request | None = None,
+    *,
+    force: bool = False,
+) -> None:
+    if not force and request is not None and TOTP_PENDING_COOKIE_NAME not in request.cookies:
+        return
+    response.delete_cookie(
+        TOTP_PENDING_COOKIE_NAME,
+        path="/api/auth/totp",
+        secure=_cookie_secure_enabled(request),
+        httponly=True,
+        samesite=os.getenv("CRM_COOKIE_SAMESITE", "lax"),
+    )
+
+
 def _delete_legacy_csrf_cookie(response: Response, request: Request | None = None) -> None:
     # v75-v77 used a browser-readable double-submit CSRF cookie.
     # v78+ switches to a session-bound token returned by /api/security/csrf.
@@ -278,7 +309,7 @@ def _delete_legacy_csrf_cookie(response: Response, request: Request | None = Non
 
 def _csrf_exempt_path(path: str) -> bool:
     normalized = path.rstrip("/") or "/"
-    return normalized in {"/api/auth/login", "/api/auth/me", "/api/background/tick"}
+    return normalized in {"/api/auth/login", "/api/auth/me", "/api/auth/totp/verify", "/api/background/tick"}
 
 
 def _validate_csrf(request: Request) -> None:
@@ -378,7 +409,7 @@ def _auth_public_path(path: str) -> bool:
         normalized_path == "/"
         or normalized_path == "/health"
         or normalized_path.startswith("/static/")
-        or normalized_path in {"/api/auth/login", "/api/auth/me", "/api/background/tick"}
+        or normalized_path in {"/api/auth/login", "/api/auth/me", "/api/auth/totp/verify", "/api/background/tick"}
     )
 
 
@@ -2299,6 +2330,8 @@ def auth_login(payload: LoginCreate, request: Request, response: Response) -> di
         ip=client_ip,
         seconds=session_ttl_seconds,
     )
+    if isinstance(authentication, dict) and authentication.get("totp_unavailable"):
+        raise HTTPException(status_code=503, detail="Двухфакторная аутентификация временно недоступна")
     if not authentication:
         state = repo.record_login_failure(
             username,
@@ -2317,17 +2350,120 @@ def auth_login(payload: LoginCreate, request: Request, response: Response) -> di
             )
         raise HTTPException(status_code=401, detail="Неверный логин или пароль")
 
-    user, token = authentication
     repo.record_login_success(username, client_ip, user_agent)
+    if isinstance(authentication, dict) and authentication.get("requires_totp"):
+        pending_token = str(authentication["pending_token"])
+        _delete_cookie_secure(response, AUTH_COOKIE_NAME, request, httponly=True)
+        _set_totp_pending_cookie(response, pending_token, request)
+        _delete_legacy_csrf_cookie(response, request)
+        return {"ok": True, "requires_totp": True}
+    user, token = authentication
     _set_auth_cookie(response, token, request, max_age=session_ttl_seconds)
+    _delete_totp_pending_cookie(response, request)
     _delete_legacy_csrf_cookie(response, request)
     return {"ok": True, "user": user}
+
+
+@app.post("/api/auth/totp/verify")
+def auth_totp_verify(payload: TotpCode, request: Request) -> Any:
+    pending_token = request.cookies.get(TOTP_PENDING_COOKIE_NAME) or ""
+    if not pending_token:
+        response = JSONResponse(status_code=401, content={"detail": "Неверный или просроченный код"})
+        _delete_totp_pending_cookie(response, request)
+        return response
+    session_ttl_seconds = _security_env_int("CRM_SESSION_TTL_SECONDS", 14 * 24 * 60 * 60, minimum=1800, maximum=60 * 24 * 60 * 60)
+    result = repo.verify_totp_challenge(
+        pending_token,
+        payload.code,
+        user_agent=request.headers.get("user-agent"),
+        ip=_client_ip(request),
+        seconds=session_ttl_seconds,
+    )
+    if result.get("status") == "success":
+        response = JSONResponse(content={"ok": True, "user": result["user"]})
+        _set_auth_cookie(response, str(result["token"]), request, max_age=session_ttl_seconds)
+        _delete_totp_pending_cookie(response, request)
+        return response
+    if result.get("status") == "unavailable":
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Двухфакторная аутентификация временно недоступна"},
+        )
+    terminal = bool(result.get("terminal"))
+    response = JSONResponse(
+        status_code=401 if terminal else 400,
+        content={"detail": "Неверный или просроченный код"},
+    )
+    if terminal:
+        _delete_totp_pending_cookie(response, request)
+    return response
+
+
+@app.get("/api/auth/totp/status")
+def auth_totp_status(request: Request) -> dict[str, Any]:
+    user = _require_admin(request)
+    return {"ok": True, **repo.get_totp_status(int(user["id"]))}
+
+
+@app.post("/api/auth/totp/enroll/start")
+def auth_totp_enroll_start(payload: TotpEnrollmentStart, request: Request) -> dict[str, Any]:
+    user = _require_admin(request)
+    try:
+        secret = totp_auth.generate_secret()
+        secret_ciphertext = totp_auth.encrypt_secret(secret)
+        otpauth_uri = totp_auth.build_otpauth_uri(secret, str(user.get("username") or user["id"]))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Двухфакторная аутентификация временно недоступна",
+        ) from exc
+    status = repo.start_totp_enrollment(int(user["id"]), payload.current_password, secret_ciphertext)
+    if status == "already_enabled":
+        raise HTTPException(status_code=409, detail="Двухфакторная аутентификация уже включена")
+    if status != "started":
+        raise HTTPException(status_code=400, detail="Не удалось начать подключение двухфакторной аутентификации")
+    return {"ok": True, "secret": secret, "otpauth_uri": otpauth_uri}
+
+
+@app.post("/api/auth/totp/enroll/confirm")
+def auth_totp_enroll_confirm(payload: TotpCode, request: Request) -> Any:
+    user = _require_admin(request)
+    session_ttl_seconds = _security_env_int("CRM_SESSION_TTL_SECONDS", 14 * 24 * 60 * 60, minimum=1800, maximum=60 * 24 * 60 * 60)
+    result = repo.confirm_totp_enrollment(
+        int(user["id"]),
+        payload.code,
+        user_agent=request.headers.get("user-agent"),
+        ip=_client_ip(request),
+        seconds=session_ttl_seconds,
+    )
+    if result.get("status") == "success":
+        response = JSONResponse(content={"ok": True, "user": result["user"]})
+        _set_auth_cookie(response, str(result["token"]), request, max_age=session_ttl_seconds)
+        return response
+    if result.get("status") == "unavailable":
+        raise HTTPException(status_code=503, detail="Двухфакторная аутентификация временно недоступна")
+    raise HTTPException(status_code=400, detail="Неверный одноразовый код")
+
+
+@app.post("/api/auth/totp/disable")
+def auth_totp_disable(payload: TotpDisable, request: Request) -> Any:
+    user = _require_admin(request)
+    result = repo.disable_totp(int(user["id"]), payload.current_password, payload.code)
+    if result.get("status") == "success":
+        response = JSONResponse(content={"ok": True})
+        _delete_cookie_secure(response, AUTH_COOKIE_NAME, request, httponly=True)
+        _delete_totp_pending_cookie(response, request)
+        return response
+    if result.get("status") == "unavailable":
+        raise HTTPException(status_code=503, detail="Двухфакторная аутентификация временно недоступна")
+    raise HTTPException(status_code=400, detail="Не удалось отключить двухфакторную аутентификацию")
 
 
 @app.post("/api/auth/logout")
 def auth_logout(request: Request, response: Response) -> dict[str, Any]:
     repo.revoke_session(request.cookies.get(AUTH_COOKIE_NAME))
     _delete_cookie_secure(response, AUTH_COOKIE_NAME, request, httponly=True)
+    _delete_totp_pending_cookie(response, request, force=True)
     _delete_cookie_secure(response, CSRF_COOKIE_NAME, request, httponly=True)
     return {"ok": True}
 

@@ -38,6 +38,12 @@
       <input id="loginUsername" autocomplete="username" placeholder="Логин" required />
       <input id="loginPassword" autocomplete="current-password" type="password" placeholder="Пароль" required />
       <button id="loginSubmitBtn" type="submit">Войти</button>
+      <div id="loginTotpStep" class="hidden">
+        <p>Введите шестизначный код из приложения Яндекс Ключ.</p>
+        <input id="loginTotpCode" autocomplete="one-time-code" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" placeholder="Одноразовый код" />
+        <button id="loginTotpSubmitBtn" type="submit">Подтвердить код</button>
+        <button id="loginTotpBackBtn" class="secondary" type="button">Вернуться к логину и паролю</button>
+      </div>
       <div id="loginError" class="login-error"></div>
     </form>
   </section>
@@ -924,6 +930,29 @@
                 <span>Выйти из аккаунта</span>
               </button>
             </div>
+          </div>
+          <div id="totpSettingsCard" class="settings-card panel-card admin-only hidden">
+            <h3>Двухфакторная аутентификация</h3>
+            <p id="totpStatusText" class="muted">Проверяем состояние…</p>
+            <form id="totpStartForm" class="settings-form">
+              <label>Текущий пароль<input id="totpStartPassword" type="password" autocomplete="current-password" /></label>
+              <button type="submit">Подключить Яндекс Ключ</button>
+            </form>
+            <div id="totpEnrollmentDetails" class="hidden">
+              <p>Добавьте аккаунт вручную. Эти данные показываются только сейчас.</p>
+              <label>Секретный ключ<code id="totpManualSecret"></code></label>
+              <label>Ссылка настройки<textarea id="totpOtpauthUri" readonly></textarea></label>
+            </div>
+            <form id="totpConfirmForm" class="settings-form hidden">
+              <label>Код подтверждения<input id="totpConfirmCode" autocomplete="one-time-code" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" /></label>
+              <button type="submit">Подтвердить и включить</button>
+            </form>
+            <form id="totpDisableForm" class="settings-form hidden">
+              <label>Текущий пароль<input id="totpDisablePassword" type="password" autocomplete="current-password" /></label>
+              <label>Новый код из приложения<input id="totpDisableCode" autocomplete="one-time-code" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" /></label>
+              <button type="submit">Отключить двухфакторную аутентификацию</button>
+            </form>
+            <p class="muted">Доступно только для вашей учётной записи администратора. QR-коды и коды восстановления не создаются.</p>
           </div>
         </section>
       </main>

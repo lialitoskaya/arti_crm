@@ -187,6 +187,25 @@ def init_db() -> None:
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS user_totp_credentials (
+                user_id INTEGER PRIMARY KEY,
+                secret_ciphertext TEXT NOT NULL,
+                enrollment_started_at TEXT NOT NULL,
+                enabled_at TEXT,
+                last_used_step INTEGER,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS pending_auth_challenges (
+                challenge_hash TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                attempts_remaining INTEGER NOT NULL,
+                consumed_at TEXT,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS webhook_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 source TEXT NOT NULL,

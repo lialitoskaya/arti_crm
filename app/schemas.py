@@ -130,6 +130,25 @@ class LoginCreate(BaseModel):
     password: str = Field(min_length=1, max_length=500)
 
 
+class TotpCode(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(pattern=r"^\d{6}$")
+
+
+class TotpEnrollmentStart(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    current_password: str = Field(min_length=1, max_length=500)
+
+
+class TotpDisable(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    current_password: str = Field(min_length=1, max_length=500)
+    code: str = Field(pattern=r"^\d{6}$")
+
+
 class UserCreate(BaseModel):
     username: str = Field(min_length=2, max_length=120)
     password: str = Field(min_length=6, max_length=500)

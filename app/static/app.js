@@ -60,6 +60,7 @@ function isCsrfPublicPath(path = '') {
   const normalized = String(path || '').split('?', 1)[0].replace(/\/+$/, '') || '/';
   return normalized === '/api/auth/login'
     || normalized === '/api/auth/me'
+    || normalized === '/api/auth/totp/verify'
     || normalized === '/api/background/tick';
 }
 
@@ -6499,10 +6500,38 @@ function finishAuthBootstrap() {
   document.body.classList.remove('auth-pending');
 }
 
+function setLoginTotpStep(active) {
+  const enabled = Boolean(active);
+  $('loginUsername')?.classList.toggle('hidden', enabled);
+  $('loginPassword')?.classList.toggle('hidden', enabled);
+  $('loginSubmitBtn')?.classList.toggle('hidden', enabled);
+  $('loginTotpStep')?.classList.toggle('hidden', !enabled);
+  if ($('loginUsername')) $('loginUsername').required = !enabled;
+  if ($('loginPassword')) $('loginPassword').required = !enabled;
+  if ($('loginTotpCode')) {
+    $('loginTotpCode').required = enabled;
+    if (!enabled) $('loginTotpCode').value = '';
+  }
+}
+
+function resetTotpSensitiveUi() {
+  ['totpStartPassword', 'totpConfirmCode', 'totpDisablePassword', 'totpDisableCode', 'loginTotpCode'].forEach((id) => {
+    if ($(id)) $(id).value = '';
+  });
+  if ($('totpManualSecret')) $('totpManualSecret').textContent = '';
+  if ($('totpOtpauthUri')) $('totpOtpauthUri').value = '';
+  if ($('totpStatusText')) $('totpStatusText').textContent = '';
+  if ($('loginError')) $('loginError').textContent = '';
+  $('totpEnrollmentDetails')?.classList.add('hidden');
+  $('totpConfirmForm')?.classList.add('hidden');
+  setLoginTotpStep(false);
+}
+
 function showLogin(errorText = '') {
   finishAuthBootstrap();
   currentUser = null;
   csrfToken = '';
+  resetTotpSensitiveUi();
   $('loginScreen')?.classList.remove('hidden');
   $('appShell')?.classList.add('app-locked');
   $('appShell')?.classList.add('hidden');
@@ -6510,6 +6539,7 @@ function showLogin(errorText = '') {
 }
 
 function showApp(user) {
+  resetTotpSensitiveUi();
   currentUser = user || currentUser;
   finishAuthBootstrap();
   $('loginScreen')?.classList.add('hidden');
@@ -6557,6 +6587,98 @@ function fillProfileForm() {
   $('profileDisplayName').value = currentUser?.display_name || '';
   $('profileCurrentPassword').value = '';
   $('profileNewPassword').value = '';
+  if (currentUser?.role === 'admin') {
+    loadTotpStatus().catch(err => notify('Двухфакторная аутентификация', String(err.message || err)));
+  }
+}
+
+function renderTotpStatus(status = {}) {
+  const enabled = Boolean(status.enabled);
+  const pending = Boolean(status.enrollment_pending);
+  if ($('totpStatusText')) {
+    $('totpStatusText').textContent = enabled
+      ? 'Двухфакторная аутентификация включена.'
+      : pending
+        ? 'Подключение начато. Введите код из приложения или начните заново.'
+        : 'Двухфакторная аутентификация отключена.';
+  }
+  $('totpStartForm')?.classList.toggle('hidden', enabled);
+  $('totpConfirmForm')?.classList.toggle('hidden', enabled || !pending);
+  $('totpDisableForm')?.classList.toggle('hidden', !enabled);
+  if (!pending) $('totpEnrollmentDetails')?.classList.add('hidden');
+}
+
+async function loadTotpStatus() {
+  if (currentUser?.role !== 'admin') return;
+  renderTotpStatus(await api('/api/auth/totp/status'));
+}
+
+async function submitTotpStart(event) {
+  event.preventDefault();
+  const currentPassword = $('totpStartPassword')?.value || '';
+  resetTotpSensitiveUi();
+  try {
+    const data = await api('/api/auth/totp/enroll/start', {
+      method: 'POST',
+      body: JSON.stringify({ current_password: currentPassword }),
+    });
+    if ($('totpStartPassword')) $('totpStartPassword').value = '';
+    if ($('totpManualSecret')) $('totpManualSecret').textContent = data.secret || '';
+    if ($('totpOtpauthUri')) $('totpOtpauthUri').value = data.otpauth_uri || '';
+    $('totpEnrollmentDetails')?.classList.remove('hidden');
+    $('totpConfirmForm')?.classList.remove('hidden');
+    if ($('totpStatusText')) $('totpStatusText').textContent = 'Добавьте ключ в приложение и подтвердите код.';
+    $('totpConfirmCode')?.focus();
+  } catch (err) {
+    notify('Не удалось начать подключение', String(err.message || err));
+  }
+}
+
+async function submitTotpConfirm(event) {
+  event.preventDefault();
+  const code = $('totpConfirmCode')?.value?.trim() || '';
+  if (!/^\d{6}$/.test(code)) {
+    notify('Проверьте код', 'Введите ровно шесть цифр.');
+    return;
+  }
+  try {
+    const data = await api('/api/auth/totp/enroll/confirm', {
+      method: 'POST',
+      body: JSON.stringify({ code }),
+    });
+    currentUser = data.user || currentUser;
+    csrfToken = '';
+    resetTotpSensitiveUi();
+    await refreshCsrfToken();
+    await loadTotpStatus();
+    notify('Готово', 'Двухфакторная аутентификация включена.');
+  } catch (err) {
+    notify('Не удалось подтвердить код', String(err.message || err));
+  }
+}
+
+async function submitTotpDisable(event) {
+  event.preventDefault();
+  const currentPassword = $('totpDisablePassword')?.value || '';
+  const code = $('totpDisableCode')?.value?.trim() || '';
+  if (!/^\d{6}$/.test(code)) {
+    notify('Проверьте код', 'Введите ровно шесть цифр.');
+    return;
+  }
+  try {
+    await api('/api/auth/totp/disable', {
+      method: 'POST',
+      body: JSON.stringify({ current_password: currentPassword, code }),
+    });
+    resetTotpSensitiveUi();
+    currentUser = null;
+    csrfToken = '';
+    appInitialized = false;
+    showLogin('Двухфакторная аутентификация отключена. Войдите снова.');
+    window.location.reload();
+  } catch (err) {
+    notify('Не удалось отключить двухфакторную аутентификацию', String(err.message || err));
+  }
 }
 
 async function submitProfile(event) {
@@ -6849,30 +6971,56 @@ function setupAuthUi() {
     form.dataset.bound = '1';
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
-      const btn = $('loginSubmitBtn');
+      const totpStep = !$('loginTotpStep')?.classList.contains('hidden');
+      const btn = totpStep ? $('loginTotpSubmitBtn') : $('loginSubmitBtn');
       if (btn) btn.disabled = true;
       if ($('loginError')) $('loginError').textContent = '';
       try {
-        const data = await api('/api/auth/login', {
-          method: 'POST',
-          body: JSON.stringify({
-            username: $('loginUsername')?.value || '',
-            password: $('loginPassword')?.value || '',
-          }),
-        });
+        const data = totpStep
+          ? await api('/api/auth/totp/verify', {
+              method: 'POST',
+              body: JSON.stringify({ code: $('loginTotpCode')?.value?.trim() || '' }),
+            })
+          : await api('/api/auth/login', {
+              method: 'POST',
+              body: JSON.stringify({
+                username: $('loginUsername')?.value || '',
+                password: $('loginPassword')?.value || '',
+              }),
+            });
+        if (data?.requires_totp) {
+          setLoginTotpStep(true);
+          if ($('loginPassword')) $('loginPassword').value = '';
+          $('loginTotpCode')?.focus();
+          return;
+        }
         showApp(data.user);
         csrfToken = '';
         refreshCsrfToken().catch(err => console.warn('csrf after login failed', err));
         if (!appInitialized) init();
         await refreshVisibleData();
       } catch (err) {
-        showLogin(String(err.message || err).replace(/^401:\s*/, ''));
+        const message = String(err.message || err).replace(/^\d{3}:\s*/, '');
+        if (totpStep && Number(err?.status || 0) !== 401) {
+          if ($('loginError')) $('loginError').textContent = message;
+        } else {
+          showLogin(message);
+        }
       } finally {
         if (btn) btn.disabled = false;
       }
     });
   }
+  const totpBackBtn = $('loginTotpBackBtn');
+  if (totpBackBtn && !totpBackBtn.dataset.bound) {
+    totpBackBtn.dataset.bound = '1';
+    totpBackBtn.addEventListener('click', () => {
+      resetTotpSensitiveUi();
+      $('loginUsername')?.focus();
+    });
+  }
   const doLogout = async () => {
+    resetTotpSensitiveUi();
     try { await api('/api/auth/logout', { method: 'POST' }); } catch (_) {}
     currentUser = null;
     appInitialized = false;
@@ -7049,6 +7197,12 @@ function init() {
   bind('userCreateModal', 'click', handleUserCreateModalBackdropClick);
   const profileForm = $('profileForm');
   if (profileForm && !profileForm.dataset.bound) { profileForm.dataset.bound = '1'; profileForm.addEventListener('submit', submitProfile); }
+  const totpStartForm = $('totpStartForm');
+  if (totpStartForm && !totpStartForm.dataset.bound) { totpStartForm.dataset.bound = '1'; totpStartForm.addEventListener('submit', submitTotpStart); }
+  const totpConfirmForm = $('totpConfirmForm');
+  if (totpConfirmForm && !totpConfirmForm.dataset.bound) { totpConfirmForm.dataset.bound = '1'; totpConfirmForm.addEventListener('submit', submitTotpConfirm); }
+  const totpDisableForm = $('totpDisableForm');
+  if (totpDisableForm && !totpDisableForm.dataset.bound) { totpDisableForm.dataset.bound = '1'; totpDisableForm.addEventListener('submit', submitTotpDisable); }
   const usersList = $('usersList');
   if (usersList && !usersList.dataset.bound) { usersList.dataset.bound = '1'; usersList.addEventListener('click', handleUsersListClick); }
   const userEditForm = $('userEditForm');

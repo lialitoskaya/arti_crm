@@ -7,6 +7,7 @@ import re
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
+from app import totp_auth
 from app.db import get_connection
 from app.marketplace_sender import (
     extract_sender_designations as _shared_extract_sender_designations,
@@ -3925,6 +3926,10 @@ def update_user(user_id: int, *, display_name: str | None = None, role: str | No
                 "UPDATE sessions SET revoked_at=CURRENT_TIMESTAMP WHERE user_id=? AND revoked_at IS NULL",
                 (user_id,),
             )
+            conn.execute(
+                "UPDATE pending_auth_challenges SET consumed_at=CURRENT_TIMESTAMP WHERE user_id=? AND consumed_at IS NULL",
+                (user_id,),
+            )
     return get_user_by_id(user_id)
 
 
@@ -3966,6 +3971,10 @@ def update_user_password(user_id: int, password: str) -> bool:
             return False
         conn.execute(
             "UPDATE sessions SET revoked_at=CURRENT_TIMESTAMP WHERE user_id=? AND revoked_at IS NULL",
+            (user_id,),
+        )
+        conn.execute(
+            "UPDATE pending_auth_challenges SET consumed_at=CURRENT_TIMESTAMP WHERE user_id=? AND consumed_at IS NULL",
             (user_id,),
         )
         return True
@@ -4026,6 +4035,10 @@ def change_user_password_and_rotate_session(
             (user_id,),
         )
         conn.execute(
+            "UPDATE pending_auth_challenges SET consumed_at=CURRENT_TIMESTAMP WHERE user_id=? AND consumed_at IS NULL",
+            (user_id,),
+        )
+        conn.execute(
             "INSERT INTO sessions (session_token, user_id, expires_at, user_agent, ip) VALUES (?, ?, ?, ?, ?)",
             (token, user_id, expires_at, user_agent, ip),
         )
@@ -4057,7 +4070,7 @@ def authenticate_user_and_create_session(
     ip: str | None = None,
     days: int = 14,
     seconds: int | None = None,
-) -> tuple[dict[str, Any], str] | None:
+) -> tuple[dict[str, Any], str] | dict[str, Any] | None:
     token = secrets.token_urlsafe(48)
     ttl = timedelta(seconds=max(1800, int(seconds))) if seconds is not None else timedelta(days=days)
     expires_at = (datetime.now(timezone.utc) + ttl).isoformat(timespec='seconds')
@@ -4065,7 +4078,13 @@ def authenticate_user_and_create_session(
     with get_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT * FROM users WHERE lower(username)=lower(?) AND is_active=1",
+            """
+            SELECT u.*, tc.secret_ciphertext AS totp_secret_ciphertext,
+                   tc.enabled_at AS totp_enabled_at
+            FROM users u
+            LEFT JOIN user_totp_credentials tc ON tc.user_id=u.id
+            WHERE lower(u.username)=lower(?) AND u.is_active=1
+            """,
             (username.strip(),),
         ).fetchone()
         if not row:
@@ -4073,6 +4092,29 @@ def authenticate_user_and_create_session(
         data = dict(row)
         if not _verify_password(password, data.get('password_hash') or ''):
             return None
+        if data.get('totp_enabled_at'):
+            try:
+                totp_auth.decrypt_secret(data.get('totp_secret_ciphertext') or '')
+            except ValueError:
+                return {"totp_unavailable": True}
+            challenge_token = secrets.token_urlsafe(48)
+            challenge_hash = hashlib.sha256(challenge_token.encode('utf-8')).hexdigest()
+            challenge_created_at = datetime.now(timezone.utc)
+            challenge_expires_at = challenge_created_at + timedelta(minutes=5)
+            conn.execute(
+                """
+                INSERT INTO pending_auth_challenges
+                    (challenge_hash, user_id, created_at, expires_at, attempts_remaining, consumed_at)
+                VALUES (?, ?, ?, ?, 5, NULL)
+                """,
+                (
+                    challenge_hash,
+                    int(data['id']),
+                    challenge_created_at.isoformat(timespec='seconds'),
+                    challenge_expires_at.isoformat(timespec='seconds'),
+                ),
+            )
+            return {"requires_totp": True, "pending_token": challenge_token}
         conn.execute(
             "INSERT INTO sessions (session_token, user_id, expires_at, user_agent, ip) VALUES (?, ?, ?, ?, ?)",
             (token, int(data['id']), expires_at, user_agent, ip),
@@ -4126,6 +4168,252 @@ def cleanup_expired_sessions() -> int:
     with get_connection() as conn:
         cur = conn.execute("DELETE FROM sessions WHERE expires_at <= ? OR revoked_at IS NOT NULL", (now,))
         return int(cur.rowcount or 0)
+
+
+def get_totp_status(user_id: int) -> dict[str, bool]:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT enabled_at FROM user_totp_credentials WHERE user_id=?",
+            (user_id,),
+        ).fetchone()
+    return {
+        "enabled": bool(row and row['enabled_at']),
+        "enrollment_pending": bool(row and not row['enabled_at']),
+    }
+
+
+def start_totp_enrollment(user_id: int, current_password: str, secret_ciphertext: str) -> str:
+    now = datetime.now(timezone.utc).isoformat(timespec='seconds')
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        user = conn.execute(
+            "SELECT password_hash, role, is_active FROM users WHERE id=?",
+            (user_id,),
+        ).fetchone()
+        if (
+            not user
+            or user['role'] != 'admin'
+            or not user['is_active']
+            or not _verify_password(current_password or '', user['password_hash'] or '')
+        ):
+            return "invalid"
+        credential = conn.execute(
+            "SELECT enabled_at FROM user_totp_credentials WHERE user_id=?",
+            (user_id,),
+        ).fetchone()
+        if credential and credential['enabled_at']:
+            return "already_enabled"
+        if credential:
+            conn.execute(
+                """
+                UPDATE user_totp_credentials
+                SET secret_ciphertext=?, enrollment_started_at=?, enabled_at=NULL, last_used_step=NULL
+                WHERE user_id=? AND enabled_at IS NULL
+                """,
+                (secret_ciphertext, now, user_id),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO user_totp_credentials
+                    (user_id, secret_ciphertext, enrollment_started_at, enabled_at, last_used_step)
+                VALUES (?, ?, ?, NULL, NULL)
+                """,
+                (user_id, secret_ciphertext, now),
+            )
+    return "started"
+
+
+def confirm_totp_enrollment(
+    user_id: int,
+    code: str,
+    *,
+    user_agent: str | None = None,
+    ip: str | None = None,
+    days: int = 14,
+    seconds: int | None = None,
+) -> dict[str, Any]:
+    token = secrets.token_urlsafe(48)
+    ttl = timedelta(seconds=max(1800, int(seconds))) if seconds is not None else timedelta(days=days)
+    now = datetime.now(timezone.utc)
+    expires_at = (now + ttl).isoformat(timespec='seconds')
+    now_text = now.isoformat(timespec='seconds')
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            """
+            SELECT u.id, u.username, u.display_name, u.role, u.is_active, u.created_at, u.updated_at,
+                   tc.secret_ciphertext, tc.enabled_at, tc.last_used_step
+            FROM users u
+            JOIN user_totp_credentials tc ON tc.user_id=u.id
+            WHERE u.id=? AND u.is_active=1 AND u.role='admin'
+            """,
+            (user_id,),
+        ).fetchone()
+        if not row or row['enabled_at']:
+            return {"status": "invalid"}
+        try:
+            secret = totp_auth.decrypt_secret(row['secret_ciphertext'])
+        except ValueError:
+            return {"status": "unavailable"}
+        accepted_step = totp_auth.verify_code(secret, code)
+        last_used_step = row['last_used_step']
+        if accepted_step is None or (last_used_step is not None and accepted_step <= int(last_used_step)):
+            return {"status": "invalid"}
+        enabled = conn.execute(
+            """
+            UPDATE user_totp_credentials
+            SET enabled_at=?, last_used_step=?
+            WHERE user_id=? AND enabled_at IS NULL
+            """,
+            (now_text, accepted_step, user_id),
+        )
+        if enabled.rowcount != 1:
+            return {"status": "invalid"}
+        conn.execute(
+            "UPDATE sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL",
+            (now_text, user_id),
+        )
+        conn.execute(
+            "INSERT INTO sessions (session_token, user_id, expires_at, user_agent, ip) VALUES (?, ?, ?, ?, ?)",
+            (token, user_id, expires_at, user_agent, ip),
+        )
+        user = {
+            key: row[key]
+            for key in ('id', 'username', 'display_name', 'role', 'is_active', 'created_at', 'updated_at')
+        }
+        return {"status": "success", "token": token, "user": user, "accepted_step": accepted_step}
+
+
+def verify_totp_challenge(
+    challenge_token: str,
+    code: str,
+    *,
+    user_agent: str | None = None,
+    ip: str | None = None,
+    days: int = 14,
+    seconds: int | None = None,
+) -> dict[str, Any]:
+    challenge_hash = hashlib.sha256((challenge_token or '').encode('utf-8')).hexdigest()
+    session_token = secrets.token_urlsafe(48)
+    ttl = timedelta(seconds=max(1800, int(seconds))) if seconds is not None else timedelta(days=days)
+    now = datetime.now(timezone.utc)
+    now_text = now.isoformat(timespec='seconds')
+    expires_at = (now + ttl).isoformat(timespec='seconds')
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            """
+            SELECT pc.challenge_hash, pc.user_id, pc.expires_at, pc.attempts_remaining, pc.consumed_at,
+                   u.username, u.display_name, u.role, u.is_active, u.created_at, u.updated_at,
+                   tc.secret_ciphertext, tc.enabled_at, tc.last_used_step
+            FROM pending_auth_challenges pc
+            JOIN users u ON u.id=pc.user_id
+            LEFT JOIN user_totp_credentials tc ON tc.user_id=pc.user_id
+            WHERE pc.challenge_hash=?
+            """,
+            (challenge_hash,),
+        ).fetchone()
+        if not row or row['consumed_at'] or int(row['attempts_remaining'] or 0) <= 0 or not row['is_active']:
+            return {"status": "invalid", "terminal": True}
+        try:
+            challenge_expires_at = datetime.fromisoformat(str(row['expires_at']))
+            if challenge_expires_at.tzinfo is None:
+                challenge_expires_at = challenge_expires_at.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            return {"status": "invalid", "terminal": True}
+        if challenge_expires_at <= now or not row['enabled_at'] or not row['secret_ciphertext']:
+            return {"status": "invalid", "terminal": True}
+        try:
+            secret = totp_auth.decrypt_secret(row['secret_ciphertext'])
+        except ValueError:
+            return {"status": "unavailable", "terminal": False}
+        accepted_step = totp_auth.verify_code(secret, code)
+        last_used_step = row['last_used_step']
+        if accepted_step is None or (last_used_step is not None and accepted_step <= int(last_used_step)):
+            remaining = max(0, int(row['attempts_remaining']) - 1)
+            conn.execute(
+                """
+                UPDATE pending_auth_challenges
+                SET attempts_remaining=?
+                WHERE challenge_hash=? AND consumed_at IS NULL
+                """,
+                (remaining, challenge_hash),
+            )
+            return {"status": "invalid", "terminal": remaining == 0, "attempts_remaining": remaining}
+        credential_update = conn.execute(
+            """
+            UPDATE user_totp_credentials
+            SET last_used_step=?
+            WHERE user_id=? AND enabled_at IS NOT NULL
+              AND (last_used_step IS NULL OR last_used_step < ?)
+            """,
+            (accepted_step, int(row['user_id']), accepted_step),
+        )
+        challenge_update = conn.execute(
+            """
+            UPDATE pending_auth_challenges
+            SET consumed_at=?
+            WHERE challenge_hash=? AND consumed_at IS NULL AND attempts_remaining > 0
+            """,
+            (now_text, challenge_hash),
+        )
+        if credential_update.rowcount != 1 or challenge_update.rowcount != 1:
+            raise RuntimeError("TOTP verification state conflict")
+        conn.execute(
+            "INSERT INTO sessions (session_token, user_id, expires_at, user_agent, ip) VALUES (?, ?, ?, ?, ?)",
+            (session_token, int(row['user_id']), expires_at, user_agent, ip),
+        )
+        user = {
+            key: row[key]
+            for key in ('user_id', 'username', 'display_name', 'role', 'is_active', 'created_at', 'updated_at')
+        }
+        user['id'] = user.pop('user_id')
+        return {
+            "status": "success",
+            "token": session_token,
+            "user": user,
+            "accepted_step": accepted_step,
+        }
+
+
+def disable_totp(user_id: int, current_password: str, code: str) -> dict[str, Any]:
+    now_text = datetime.now(timezone.utc).isoformat(timespec='seconds')
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            """
+            SELECT u.password_hash, u.role, u.is_active,
+                   tc.secret_ciphertext, tc.enabled_at, tc.last_used_step
+            FROM users u
+            JOIN user_totp_credentials tc ON tc.user_id=u.id
+            WHERE u.id=?
+            """,
+            (user_id,),
+        ).fetchone()
+        if (
+            not row
+            or row['role'] != 'admin'
+            or not row['is_active']
+            or not row['enabled_at']
+            or not _verify_password(current_password or '', row['password_hash'] or '')
+        ):
+            return {"status": "invalid"}
+        try:
+            secret = totp_auth.decrypt_secret(row['secret_ciphertext'])
+        except ValueError:
+            return {"status": "unavailable"}
+        accepted_step = totp_auth.verify_code(secret, code)
+        last_used_step = row['last_used_step']
+        if accepted_step is None or last_used_step is None or accepted_step <= int(last_used_step):
+            return {"status": "invalid"}
+        conn.execute("DELETE FROM user_totp_credentials WHERE user_id=?", (user_id,))
+        conn.execute("DELETE FROM pending_auth_challenges WHERE user_id=?", (user_id,))
+        conn.execute(
+            "UPDATE sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL",
+            (now_text, user_id),
+        )
+        return {"status": "success", "accepted_step": accepted_step}
 
 
 
