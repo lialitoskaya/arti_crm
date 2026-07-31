@@ -3911,7 +3911,20 @@ def update_user(user_id: int, *, display_name: str | None = None, role: str | No
     fields.append('updated_at=CURRENT_TIMESTAMP')
     params.append(user_id)
     with get_connection() as conn:
-        conn.execute(f"UPDATE users SET {', '.join(fields)} WHERE id=?", params)
+        was_active = False
+        if is_active is not None:
+            conn.execute("BEGIN IMMEDIATE")
+            current = conn.execute(
+                "SELECT is_active FROM users WHERE id=?",
+                (user_id,),
+            ).fetchone()
+            was_active = bool(current and current['is_active'])
+        updated = conn.execute(f"UPDATE users SET {', '.join(fields)} WHERE id=?", params)
+        if is_active is not None and was_active != is_active and updated.rowcount == 1:
+            conn.execute(
+                "UPDATE sessions SET revoked_at=CURRENT_TIMESTAMP WHERE user_id=? AND revoked_at IS NULL",
+                (user_id,),
+            )
     return get_user_by_id(user_id)
 
 
