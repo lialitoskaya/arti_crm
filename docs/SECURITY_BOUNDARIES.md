@@ -1,5 +1,14 @@
 # Security boundaries
 
+## User deactivation and sessions
+
+User management remains admin-only. An active-to-inactive user transition and
+revocation of every still-active session for that user are committed in one SQLite
+transaction. A database error rolls both changes back. Reactivation also revokes any
+non-revoked legacy sessions for that user in the same transaction and never clears
+`sessions.revoked_at`, so previously issued tokens cannot become valid again.
+Repeated deactivation is safe and does not affect other users' sessions.
+
 ## Knowledge article images
 
 Knowledge articles and their images require a normal authenticated CRM session.

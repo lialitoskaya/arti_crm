@@ -58,6 +58,7 @@ def _run(coroutine):
 class AuthSessionRevocationTests(unittest.TestCase):
     def setUp(self) -> None:
         foundation._NETWORK_ATTEMPTS.clear()
+        main.app.state.security_rate_limits = {}
         foundation._remove_test_runtime_files()
         db.init_db()
         self.admin = repo.create_user("security-admin", _OLD_PASSWORD, "Admin", "admin")
@@ -352,6 +353,204 @@ class AuthSessionRevocationTests(unittest.TestCase):
         self.assertEqual(403, forbidden.status_code)
         self.assertIsNotNone(repo.get_user_by_session(target_token))
         self.assertIsNotNone(repo.authenticate_user("security-target", _OLD_PASSWORD))
+
+    def test_deactivation_revokes_sessions_without_revival_after_reactivation(self) -> None:
+        async def exercise():
+            async with await _client() as admin, await _client() as target, await _client() as other:
+                await _login(admin, "security-admin", _OLD_PASSWORD)
+                await _login(target, "security-target", _OLD_PASSWORD)
+                await _login(other, "security-other", _OLD_PASSWORD)
+                target_token = target.cookies.get(main.AUTH_COOKIE_NAME)
+                other_token = other.cookies.get(main.AUTH_COOKIE_NAME)
+
+                self.assertEqual(200, (await target.get("/api/auth/me")).status_code)
+                deactivated = await admin.patch(
+                    f"/api/users/{self.target['id']}",
+                    json={"is_active": False},
+                    headers=await _csrf_headers(admin),
+                )
+                after_deactivation = await _me_with_token(target_token)
+                repeated = await admin.patch(
+                    f"/api/users/{self.target['id']}",
+                    json={"is_active": False},
+                    headers=await _csrf_headers(admin),
+                )
+                reactivated = await admin.patch(
+                    f"/api/users/{self.target['id']}",
+                    json={"is_active": True},
+                    headers=await _csrf_headers(admin),
+                )
+                after_reactivation = await _me_with_token(target_token)
+                other_me = await _me_with_token(other_token)
+
+            return (
+                deactivated,
+                after_deactivation,
+                repeated,
+                reactivated,
+                after_reactivation,
+                other_me,
+                target_token,
+                other_token,
+            )
+
+        (
+            deactivated,
+            after_deactivation,
+            repeated,
+            reactivated,
+            after_reactivation,
+            other_me,
+            target_token,
+            other_token,
+        ) = _run(exercise())
+
+        self.assertEqual(200, deactivated.status_code)
+        self.assertEqual(0, deactivated.json()["is_active"])
+        self.assertEqual(401, after_deactivation.status_code)
+        self.assertEqual(200, repeated.status_code)
+        self.assertEqual(0, repeated.json()["is_active"])
+        self.assertEqual(200, reactivated.status_code)
+        self.assertEqual(1, reactivated.json()["is_active"])
+        self.assertEqual(401, after_reactivation.status_code)
+        self.assertEqual(200, other_me.status_code)
+
+        with db.get_connection() as connection:
+            target_session = connection.execute(
+                "SELECT revoked_at FROM sessions WHERE session_token=?",
+                (target_token,),
+            ).fetchone()
+            other_session = connection.execute(
+                "SELECT revoked_at FROM sessions WHERE session_token=?",
+                (other_token,),
+            ).fetchone()
+        self.assertIsNotNone(target_session["revoked_at"])
+        self.assertIsNone(other_session["revoked_at"])
+
+    def test_activation_revokes_legacy_unrevoked_session(self) -> None:
+        repo.update_user(int(self.target["id"]), is_active=False)
+        legacy_token = repo.create_session(
+            int(self.target["id"]),
+            user_agent="legacy-inactive-session",
+            ip="127.0.0.1",
+        )
+        other_token = repo.create_session(
+            int(self.other["id"]),
+            user_agent="legacy-other-session",
+            ip="127.0.0.1",
+        )
+
+        async def exercise():
+            before_activation = await _me_with_token(legacy_token)
+            async with await _client() as admin:
+                await _login(admin, "security-admin", _OLD_PASSWORD)
+                activated = await admin.patch(
+                    f"/api/users/{self.target['id']}",
+                    json={"is_active": True},
+                    headers=await _csrf_headers(admin),
+                )
+            after_activation = await _me_with_token(legacy_token)
+            other_me = await _me_with_token(other_token)
+            return before_activation, activated, after_activation, other_me
+
+        before_activation, activated, after_activation, other_me = _run(exercise())
+        self.assertEqual(401, before_activation.status_code)
+        self.assertEqual(200, activated.status_code)
+        self.assertEqual(1, activated.json()["is_active"])
+        self.assertEqual(401, after_activation.status_code)
+        self.assertEqual(200, other_me.status_code)
+
+        with db.get_connection() as connection:
+            legacy_session = connection.execute(
+                "SELECT revoked_at FROM sessions WHERE session_token=?",
+                (legacy_token,),
+            ).fetchone()
+            other_session = connection.execute(
+                "SELECT revoked_at FROM sessions WHERE session_token=?",
+                (other_token,),
+            ).fetchone()
+        self.assertIsNotNone(legacy_session["revoked_at"])
+        self.assertIsNone(other_session["revoked_at"])
+
+    def test_only_admin_can_change_active_state(self) -> None:
+        manager = repo.create_user("security-manager", _OLD_PASSWORD, "Manager", "manager")
+
+        async def exercise():
+            async with await _client() as viewer, await _client() as manager_client, await _client() as target:
+                await _login(viewer, "security-other", _OLD_PASSWORD)
+                await _login(manager_client, "security-manager", _OLD_PASSWORD)
+                await _login(target, "security-target", _OLD_PASSWORD)
+                target_token = target.cookies.get(main.AUTH_COOKIE_NAME)
+                viewer_response = await viewer.patch(
+                    f"/api/users/{self.target['id']}",
+                    json={"is_active": False},
+                    headers=await _csrf_headers(viewer),
+                )
+                manager_response = await manager_client.patch(
+                    f"/api/users/{self.target['id']}",
+                    json={"is_active": False},
+                    headers=await _csrf_headers(manager_client),
+                )
+            return viewer_response, manager_response, target_token
+
+        viewer_response, manager_response, target_token = _run(exercise())
+        self.assertEqual(403, viewer_response.status_code)
+        self.assertEqual(403, manager_response.status_code)
+        self.assertEqual(1, repo.get_user_by_id(int(self.target["id"]))["is_active"])
+        self.assertIsNotNone(repo.get_user_by_session(target_token))
+        self.assertEqual("manager", manager["role"])
+
+    def test_active_state_revoke_failure_rolls_back_user_and_session(self) -> None:
+        target_token = repo.create_session(
+            int(self.target["id"]),
+            user_agent="deactivation-rollback",
+            ip="127.0.0.1",
+        )
+
+        class FailingConnection:
+            def __init__(self, connection):
+                self._connection = connection
+
+            def execute(self, sql, parameters=()):
+                if "UPDATE sessions SET revoked_at" in sql:
+                    raise RuntimeError("synthetic deactivation revoke failure")
+                return self._connection.execute(sql, parameters)
+
+        @contextlib.contextmanager
+        def failing_connection():
+            with db.get_connection() as connection:
+                yield FailingConnection(connection)
+
+        with mock.patch.object(repo, "get_connection", failing_connection):
+            with self.assertRaisesRegex(RuntimeError, "synthetic deactivation revoke failure"):
+                repo.update_user(int(self.target["id"]), is_active=False)
+
+        self.assertEqual(1, repo.get_user_by_id(int(self.target["id"]))["is_active"])
+        self.assertIsNotNone(repo.get_user_by_session(target_token))
+        with db.get_connection() as connection:
+            session = connection.execute(
+                "SELECT revoked_at FROM sessions WHERE session_token=?",
+                (target_token,),
+            ).fetchone()
+        self.assertIsNone(session["revoked_at"])
+
+        repo.update_user(int(self.target["id"]), is_active=False)
+        legacy_token = repo.create_session(
+            int(self.target["id"]),
+            user_agent="activation-rollback",
+            ip="127.0.0.1",
+        )
+        with mock.patch.object(repo, "get_connection", failing_connection):
+            with self.assertRaisesRegex(RuntimeError, "synthetic deactivation revoke failure"):
+                repo.update_user(int(self.target["id"]), is_active=True)
+
+        self.assertEqual(0, repo.get_user_by_id(int(self.target["id"]))["is_active"])
+        with db.get_connection() as connection:
+            legacy_session = connection.execute(
+                "SELECT revoked_at FROM sessions WHERE session_token=?",
+                (legacy_token,),
+            ).fetchone()
+        self.assertIsNone(legacy_session["revoked_at"])
 
     def test_in_progress_old_password_login_cannot_survive_concurrent_reset(self) -> None:
         verification_started = threading.Event()
