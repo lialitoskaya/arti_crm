@@ -1,4 +1,4 @@
-const ARTI_CRM_SW_VERSION = 'v52-light-dark-ui-redesign-20260630';
+const ARTI_CRM_SW_VERSION = 'v85-yandex-oauth-cache-fix-20260803';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
@@ -6,6 +6,12 @@ self.addEventListener('install', (event) => {
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim());
+});
+
+self.addEventListener('fetch', (event) => {
+  const requestUrl = new URL(event.request.url);
+  if (requestUrl.origin !== self.location.origin || !requestUrl.pathname.startsWith('/api/auth/')) return;
+  event.respondWith(fetch(event.request, { cache: 'no-store' }));
 });
 
 self.addEventListener('push', (event) => {

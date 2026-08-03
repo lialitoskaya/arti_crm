@@ -14,11 +14,22 @@ PKCE verifier are held only in a signed, short-lived, `HttpOnly`, `Secure`,
 localStorage or sessionStorage. The provider access token is used only for the
 immediate profile request and is not persisted, returned, or logged.
 
-Provider identities are mapped explicitly through `YANDEX_OAUTH_USER_MAP` in
-id, login, then email priority. Login and email matching is trimmed and
-case-insensitive. A callback creates a new CRM session only for the mapped, already
-existing, active CRM user. OAuth never creates CRM users. Provider, state, mapping,
-and inactive-user failures return a generic login failure and create no session.
+`YANDEX_OAUTH_USER_MAP` is used only to bootstrap a provider identity that has no
+stored link yet, in id, login, then email priority. Login and email matching is
+trimmed and case-insensitive. The first successful callback stores the immutable
+Yandex user ID against `users.id` in `yandex_oauth_links`; subsequent callbacks use
+that numeric CRM identity and never rebind it from a changed or reused username.
+Link creation and CRM session creation share one `BEGIN IMMEDIATE` transaction.
+OAuth never creates CRM users and creates a session only while the linked user still
+exists and is active.
+
+OAuth failures redirect with one short allowlisted code: `cancelled`,
+`account_not_allowed`, `account_inactive`, `flow_expired`, `provider_unavailable`,
+`oauth_rate_limited`, or `failed`. Start/callback rate-limit rejection also returns
+to the login screen with `oauth_rate_limited`, rather than exposing an API error
+page. The frontend maps these codes to safe Russian messages. Provider responses,
+access tokens, profile email/login, filesystem or SQL details, and raw exception
+messages are never included in the redirect.
 
 ## User deactivation and sessions
 

@@ -187,6 +187,17 @@ def init_db() -> None:
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS yandex_oauth_links (
+                yandex_user_id TEXT PRIMARY KEY,
+                crm_user_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(crm_user_id) REFERENCES users(id) ON DELETE RESTRICT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_yandex_oauth_links_crm_user_id
+            ON yandex_oauth_links(crm_user_id);
+
             CREATE TABLE IF NOT EXISTS webhook_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 source TEXT NOT NULL,

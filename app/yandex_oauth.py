@@ -190,6 +190,7 @@ def build_authorization_url(config: YandexOAuthConfig, *, state: str, code_chall
             "state": state,
             "code_challenge": code_challenge,
             "code_challenge_method": "S256",
+            "force_confirm": "yes",
         }
     )
     return f"{AUTHORIZE_URL}?{query}"
@@ -241,8 +242,12 @@ async def fetch_profile_for_code(
         raise YandexOAuthError("Yandex OAuth provider request failed") from exc
 
 
+def get_yandex_user_id(profile: dict[str, Any]) -> str:
+    return str(profile.get("id") or "").strip()
+
+
 def resolve_crm_username(config: YandexOAuthConfig, profile: dict[str, Any]) -> str | None:
-    yandex_id = str(profile.get("id") or "").strip()
+    yandex_id = get_yandex_user_id(profile)
     if yandex_id:
         username = config.user_map.get(f"id:{yandex_id}")
         if username:
