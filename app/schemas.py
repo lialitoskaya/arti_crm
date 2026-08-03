@@ -147,6 +147,20 @@ class UserUpdate(BaseModel):
     is_active: bool | None = None
 
 
+class YandexOAuthManagedLinkCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    identifier_type: Literal["login", "email"]
+    identifier: str = Field(min_length=1, max_length=320)
+    crm_user_id: int = Field(ge=1)
+
+
+class YandexOAuthManagedLinkUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    is_active: bool
+
+
 class ProfileUpdate(BaseModel):
     username: str | None = Field(default=None, min_length=2, max_length=120)
     display_name: str | None = Field(default=None, max_length=160)
