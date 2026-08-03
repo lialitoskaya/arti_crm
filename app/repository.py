@@ -24,6 +24,14 @@ class InactiveUserAuthenticationError(RuntimeError):
     """Credentials or OAuth mapping resolved to an inactive CRM user."""
 
 
+class YandexOAuthDatabaseLinkError(RuntimeError):
+    """Yandex identity link lookup or publication failed."""
+
+
+class YandexOAuthSessionCreationError(RuntimeError):
+    """CRM session creation for a resolved Yandex identity failed."""
+
+
 STATUS_LABELS = {
     "new": "Новый",
     "in_progress": "В работе",
@@ -4120,45 +4128,54 @@ def create_session_for_yandex_identity(
     ttl = timedelta(seconds=max(1800, int(seconds))) if seconds is not None else timedelta(days=days)
     expires_at = (datetime.now(timezone.utc) + ttl).isoformat(timespec='seconds')
 
-    with get_connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        link = conn.execute(
-            "SELECT crm_user_id FROM yandex_oauth_links WHERE yandex_user_id=?",
-            (identity,),
-        ).fetchone()
-        if link:
-            row = conn.execute(
-                "SELECT * FROM users WHERE id=?",
-                (int(link['crm_user_id']),),
+    failure_stage = "database_link"
+    try:
+        with get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            link = conn.execute(
+                "SELECT crm_user_id FROM yandex_oauth_links WHERE yandex_user_id=?",
+                (identity,),
             ).fetchone()
-        else:
-            username = str(bootstrap_username or '').strip()
-            if not username:
+            if link:
+                row = conn.execute(
+                    "SELECT * FROM users WHERE id=?",
+                    (int(link['crm_user_id']),),
+                ).fetchone()
+            else:
+                username = str(bootstrap_username or '').strip()
+                if not username:
+                    return None
+                row = conn.execute(
+                    "SELECT * FROM users WHERE lower(username)=lower(?)",
+                    (username,),
+                ).fetchone()
+            if not row:
                 return None
-            row = conn.execute(
-                "SELECT * FROM users WHERE lower(username)=lower(?)",
-                (username,),
-            ).fetchone()
-        if not row:
-            return None
-        data = dict(row)
-        if not data.get('is_active'):
-            raise InactiveUserAuthenticationError
-        if not link:
+            data = dict(row)
+            if not data.get('is_active'):
+                raise InactiveUserAuthenticationError
+            if not link:
+                conn.execute(
+                    "INSERT INTO yandex_oauth_links (yandex_user_id, crm_user_id) VALUES (?, ?)",
+                    (identity, int(data['id'])),
+                )
+            failure_stage = "session_creation"
             conn.execute(
-                "INSERT INTO yandex_oauth_links (yandex_user_id, crm_user_id) VALUES (?, ?)",
-                (identity, int(data['id'])),
+                "INSERT INTO sessions (session_token, user_id, expires_at, user_agent, ip) VALUES (?, ?, ?, ?, ?)",
+                (token, int(data['id']), expires_at, user_agent, ip),
             )
-        conn.execute(
-            "INSERT INTO sessions (session_token, user_id, expires_at, user_agent, ip) VALUES (?, ?, ?, ?, ?)",
-            (token, int(data['id']), expires_at, user_agent, ip),
-        )
-        user = {
-            key: data[key]
-            for key in ('id', 'username', 'display_name', 'role', 'is_active', 'created_at', 'updated_at')
-            if key in data
-        }
-        return user, token
+            user = {
+                key: data[key]
+                for key in ('id', 'username', 'display_name', 'role', 'is_active', 'created_at', 'updated_at')
+                if key in data
+            }
+            return user, token
+    except InactiveUserAuthenticationError:
+        raise
+    except Exception as exc:
+        if failure_stage == "database_link":
+            raise YandexOAuthDatabaseLinkError from exc
+        raise YandexOAuthSessionCreationError from exc
 
 
 def create_session(user_id: int, *, user_agent: str | None = None, ip: str | None = None, days: int = 14, seconds: int | None = None) -> str:

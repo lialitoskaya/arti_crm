@@ -24,6 +24,21 @@ class YandexOAuthError(RuntimeError):
     """Safe marker for a rejected or failed Yandex OAuth flow."""
 
 
+_PROVIDER_FAILURE_STAGES = frozenset(
+    {"token_exchange", "profile_request", "profile_validation"}
+)
+
+
+class YandexOAuthCallbackError(YandexOAuthError):
+    """Provider failure classified by a fixed, non-sensitive callback stage."""
+
+    def __init__(self, stage: str):
+        if stage not in _PROVIDER_FAILURE_STAGES:
+            raise ValueError("Unsupported Yandex OAuth callback failure stage")
+        self.stage = stage
+        super().__init__("Yandex OAuth callback failed")
+
+
 @dataclass(frozen=True)
 class YandexOAuthConfig:
     client_id: str
@@ -208,38 +223,50 @@ async def fetch_profile_for_code(
 ) -> dict[str, Any]:
     try:
         async with _provider_client() as client:
-            token_response = await client.post(
-                TOKEN_URL,
-                data={
-                    "grant_type": "authorization_code",
-                    "code": code,
-                    "client_id": config.client_id,
-                    "client_secret": config.client_secret,
-                    "redirect_uri": config.redirect_uri,
-                    "code_verifier": code_verifier,
-                },
-                headers={"Accept": "application/json"},
-            )
-            token_response.raise_for_status()
-            token_payload = token_response.json()
-            if not isinstance(token_payload, dict):
-                raise ValueError("invalid token response")
-            access_token = token_payload.get("access_token")
-            if not isinstance(access_token, str) or not access_token.strip():
-                raise ValueError("missing access token")
+            try:
+                token_response = await client.post(
+                    TOKEN_URL,
+                    data={
+                        "grant_type": "authorization_code",
+                        "code": code,
+                        "client_id": config.client_id,
+                        "client_secret": config.client_secret,
+                        "redirect_uri": config.redirect_uri,
+                        "code_verifier": code_verifier,
+                    },
+                    headers={"Accept": "application/json"},
+                )
+                token_response.raise_for_status()
+                token_payload = token_response.json()
+                if not isinstance(token_payload, dict):
+                    raise ValueError("invalid token response")
+                access_token = token_payload.get("access_token")
+                if not isinstance(access_token, str) or not access_token.strip():
+                    raise ValueError("missing access token")
+            except (httpx.HTTPError, TypeError, ValueError) as exc:
+                raise YandexOAuthCallbackError("token_exchange") from exc
 
-            profile_response = await client.get(
-                PROFILE_URL,
-                params={"format": "json"},
-                headers={"Accept": "application/json", "Authorization": f"OAuth {access_token}"},
-            )
-            profile_response.raise_for_status()
-            profile = profile_response.json()
-            if not isinstance(profile, dict):
-                raise ValueError("invalid profile response")
-            return profile
-    except (httpx.HTTPError, TypeError, ValueError) as exc:
-        raise YandexOAuthError("Yandex OAuth provider request failed") from exc
+            try:
+                profile_response = await client.get(
+                    PROFILE_URL,
+                    params={"format": "json"},
+                    headers={"Accept": "application/json", "Authorization": f"OAuth {access_token}"},
+                )
+                profile_response.raise_for_status()
+            except httpx.HTTPError as exc:
+                raise YandexOAuthCallbackError("profile_request") from exc
+
+            try:
+                profile = profile_response.json()
+                if not isinstance(profile, dict):
+                    raise ValueError("invalid profile response")
+                return profile
+            except (TypeError, ValueError) as exc:
+                raise YandexOAuthCallbackError("profile_validation") from exc
+    except YandexOAuthCallbackError:
+        raise
+    except Exception as exc:
+        raise YandexOAuthCallbackError("token_exchange") from exc
 
 
 def get_yandex_user_id(profile: dict[str, Any]) -> str:

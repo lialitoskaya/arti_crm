@@ -31,6 +31,11 @@ page. The frontend maps these codes to safe Russian messages. Provider responses
 access tokens, profile email/login, filesystem or SQL details, and raw exception
 messages are never included in the redirect.
 
+Callback diagnostics emit only one fixed failure stage: `token_exchange`,
+`profile_request`, `profile_validation`, `user_mapping`, `database_link`, or
+`session_creation`. Logs never include the authorization code, provider token or
+payload, OAuth client secret, cookies, profile email/login, or exception text.
+
 ## User deactivation and sessions
 
 User management remains admin-only. An active-to-inactive user transition and
