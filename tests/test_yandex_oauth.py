@@ -661,6 +661,107 @@ class YandexOAuthTests(unittest.TestCase):
                 self.assertEqual(0, sessions_after_callback)
                 self.assertEqual(200, password_login.status_code)
 
+    def test_callback_logs_only_allowlisted_failure_stage(self) -> None:
+        environment = _oauth_environment({"id:mapped-id": "oauth-admin"})
+        sensitive_profile = {
+            "id": "unmapped-private-id",
+            "login": "private-login",
+            "default_email": "private@example.test",
+        }
+        internal_details = (
+            "local-code",
+            "local-provider-token",
+            "local-test-secret-not-real",
+            "provider_failure",
+            "unmapped-private-id",
+            "private-login",
+            "private@example.test",
+            "database-private-detail",
+            "session-private-detail",
+        )
+
+        async def invoke(stage: str) -> tuple[httpx.Response, str]:
+            async with await _client() as client:
+                _start, state = await _start_flow(client)
+                provider_profile: object = {"id": "mapped-id"}
+                token_status = 200
+                profile_status = 200
+                if stage == "token_exchange":
+                    token_status = 502
+                elif stage == "profile_request":
+                    profile_status = 502
+                elif stage == "profile_validation":
+                    provider_profile = []
+                elif stage == "user_mapping":
+                    provider_profile = sensitive_profile
+
+                with contextlib.ExitStack() as stack:
+                    stack.enter_context(
+                        mock.patch.object(
+                            yandex_oauth,
+                            "_provider_client",
+                            side_effect=lambda: _provider_client(
+                                provider_profile,  # type: ignore[arg-type]
+                                token_status=token_status,
+                                profile_status=profile_status,
+                            ),
+                        )
+                    )
+                    if stage == "database_link":
+                        stack.enter_context(
+                            mock.patch.object(
+                                repo,
+                                "get_yandex_oauth_linked_user_id",
+                                side_effect=RuntimeError("database-private-detail"),
+                            )
+                        )
+                    elif stage == "session_creation":
+                        stack.enter_context(
+                            mock.patch.object(
+                                repo,
+                                "create_session_for_yandex_identity",
+                                side_effect=RuntimeError("session-private-detail"),
+                            )
+                        )
+                    callback = await client.get(
+                        "/api/auth/yandex/callback",
+                        params={"code": "local-code", "state": state},
+                    )
+                return callback, state
+
+        for stage in (
+            "token_exchange",
+            "profile_request",
+            "profile_validation",
+            "user_mapping",
+            "database_link",
+            "session_creation",
+        ):
+            with self.subTest(stage=stage):
+                with (
+                    mock.patch.dict(os.environ, environment, clear=False),
+                    self.assertLogs("arti_crm.yandex_oauth", level="WARNING") as captured,
+                ):
+                    callback, state = _run(invoke(stage))
+
+                self.assertEqual(303, callback.status_code)
+                self.assertIn(
+                    callback.headers["location"],
+                    {
+                        "/?yandex_oauth=account_not_allowed",
+                        "/?yandex_oauth=failed",
+                        "/?yandex_oauth=provider_unavailable",
+                    },
+                )
+                self.assertEqual(
+                    [f"WARNING:arti_crm.yandex_oauth:Yandex OAuth callback failed stage={stage}"],
+                    captured.output,
+                )
+                logged = "\n".join(captured.output)
+                self.assertNotIn(state, logged)
+                for detail in internal_details:
+                    self.assertNotIn(detail, logged)
+
     def test_unknown_oauth_error_is_reduced_to_generic_code_with_frontend_fallback(self) -> None:
         request = Request(
             {

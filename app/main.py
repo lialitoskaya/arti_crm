@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import time
@@ -2300,6 +2301,24 @@ def auth_yandex_status() -> JSONResponse:
     )
 
 
+_YANDEX_OAUTH_FAILURE_STAGES = frozenset(
+    {
+        "token_exchange",
+        "profile_request",
+        "profile_validation",
+        "user_mapping",
+        "database_link",
+        "session_creation",
+    }
+)
+_YANDEX_OAUTH_LOGGER = logging.getLogger("arti_crm.yandex_oauth")
+
+
+def _log_yandex_oauth_failure(stage: str) -> None:
+    if stage in _YANDEX_OAUTH_FAILURE_STAGES:
+        _YANDEX_OAUTH_LOGGER.warning("Yandex OAuth callback failed stage=%s", stage)
+
+
 _YANDEX_OAUTH_ERROR_CODES = frozenset(
     {
         "account_inactive",
@@ -2392,9 +2411,12 @@ async def auth_yandex_callback(request: Request) -> RedirectResponse:
     provider_error = str(request.query_params.get("error") or "").strip()
     if provider_error:
         error_code = "cancelled" if provider_error == "access_denied" else "provider_unavailable"
+        if error_code != "cancelled":
+            _log_yandex_oauth_failure("token_exchange")
         return _yandex_oauth_error_response(request, error_code)
     code = str(request.query_params.get("code") or "").strip()
     if not code:
+        _log_yandex_oauth_failure("token_exchange")
         return _yandex_oauth_error_response(request, "failed")
 
     try:
@@ -2403,16 +2425,23 @@ async def auth_yandex_callback(request: Request) -> RedirectResponse:
             code=code,
             code_verifier=verifier,
         )
+    except yandex_oauth.YandexOAuthCallbackError as exc:
+        _log_yandex_oauth_failure(exc.stage)
+        return _yandex_oauth_error_response(request, "provider_unavailable")
     except yandex_oauth.YandexOAuthError:
+        _log_yandex_oauth_failure("token_exchange")
         return _yandex_oauth_error_response(request, "provider_unavailable")
     except Exception:
+        _log_yandex_oauth_failure("token_exchange")
         return _yandex_oauth_error_response(request, "failed")
     yandex_user_id = yandex_oauth.get_yandex_user_id(profile)
     if not yandex_user_id:
+        _log_yandex_oauth_failure("profile_validation")
         return _yandex_oauth_error_response(request, "failed")
     try:
         linked_crm_user_id = repo.get_yandex_oauth_linked_user_id(yandex_user_id)
     except Exception:
+        _log_yandex_oauth_failure("database_link")
         return _yandex_oauth_error_response(request, "failed")
 
     bootstrap_username: str | None = None
@@ -2420,8 +2449,10 @@ async def auth_yandex_callback(request: Request) -> RedirectResponse:
         try:
             bootstrap_username = yandex_oauth.resolve_crm_username(config, profile)
         except Exception:
+            _log_yandex_oauth_failure("user_mapping")
             return _yandex_oauth_error_response(request, "failed")
         if not bootstrap_username:
+            _log_yandex_oauth_failure("user_mapping")
             return _yandex_oauth_error_response(request, "account_not_allowed")
 
     session_ttl_seconds = _security_env_int(
@@ -2439,10 +2470,20 @@ async def auth_yandex_callback(request: Request) -> RedirectResponse:
             seconds=session_ttl_seconds,
         )
     except repo.InactiveUserAuthenticationError:
+        _log_yandex_oauth_failure("user_mapping")
         return _yandex_oauth_error_response(request, "account_inactive")
+    except repo.YandexOAuthDatabaseLinkError:
+        _log_yandex_oauth_failure("database_link")
+        return _yandex_oauth_error_response(request, "failed")
+    except repo.YandexOAuthSessionCreationError:
+        _log_yandex_oauth_failure("session_creation")
+        return _yandex_oauth_error_response(request, "failed")
     except Exception:
+        _log_yandex_oauth_failure("session_creation")
         return _yandex_oauth_error_response(request, "failed")
     if not authentication:
+        failure_stage = "database_link" if linked_crm_user_id is not None else "user_mapping"
+        _log_yandex_oauth_failure(failure_stage)
         return _yandex_oauth_error_response(request, "account_not_allowed")
 
     _user, token = authentication
