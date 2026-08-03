@@ -55,8 +55,10 @@ try:
     attachments_dir = make_absolute_dir_env("CRM_CHAT_ATTACHMENTS_DIR", BASE_DIR / "chat_attachments")
 
     from a2wsgi import ASGIMiddleware
+    from app.db import init_db
     from app.main import app as fastapi_app
 
+    init_db()
     application = ASGIMiddleware(fastapi_app)
 
     write_log(

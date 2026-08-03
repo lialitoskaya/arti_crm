@@ -7,6 +7,8 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
+from app.db import init_db
 from app.main import app as fastapi_app
 
+init_db()
 application = ASGIMiddleware(fastapi_app)
