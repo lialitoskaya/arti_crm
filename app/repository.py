@@ -20,6 +20,10 @@ STANDALONE_TASK_MARKETPLACE = 'internal_tasks'
 STANDALONE_TASK_EXTERNAL_CHAT_ID = 'standalone-tasks'
 
 
+class InactiveUserAuthenticationError(RuntimeError):
+    """Credentials or OAuth mapping resolved to an inactive CRM user."""
+
+
 STATUS_LABELS = {
     "new": "Новый",
     "in_progress": "В работе",
@@ -4065,7 +4069,7 @@ def authenticate_user_and_create_session(
     with get_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT * FROM users WHERE lower(username)=lower(?) AND is_active=1",
+            "SELECT * FROM users WHERE lower(username)=lower(?)",
             (username.strip(),),
         ).fetchone()
         if not row:
@@ -4073,6 +4077,78 @@ def authenticate_user_and_create_session(
         data = dict(row)
         if not _verify_password(password, data.get('password_hash') or ''):
             return None
+        if not data.get('is_active'):
+            raise InactiveUserAuthenticationError
+        conn.execute(
+            "INSERT INTO sessions (session_token, user_id, expires_at, user_agent, ip) VALUES (?, ?, ?, ?, ?)",
+            (token, int(data['id']), expires_at, user_agent, ip),
+        )
+        user = {
+            key: data[key]
+            for key in ('id', 'username', 'display_name', 'role', 'is_active', 'created_at', 'updated_at')
+            if key in data
+        }
+        return user, token
+
+
+def get_yandex_oauth_linked_user_id(yandex_user_id: str) -> int | None:
+    identity = str(yandex_user_id or '').strip()
+    if not identity:
+        return None
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT crm_user_id FROM yandex_oauth_links WHERE yandex_user_id=?",
+            (identity,),
+        ).fetchone()
+        return int(row['crm_user_id']) if row else None
+
+
+def create_session_for_yandex_identity(
+    yandex_user_id: str,
+    *,
+    bootstrap_username: str | None = None,
+    user_agent: str | None = None,
+    ip: str | None = None,
+    days: int = 14,
+    seconds: int | None = None,
+) -> tuple[dict[str, Any], str] | None:
+    """Resolve an immutable Yandex link, bootstrap it once, and create a CRM session."""
+    identity = str(yandex_user_id or '').strip()
+    if not identity:
+        return None
+    token = secrets.token_urlsafe(48)
+    ttl = timedelta(seconds=max(1800, int(seconds))) if seconds is not None else timedelta(days=days)
+    expires_at = (datetime.now(timezone.utc) + ttl).isoformat(timespec='seconds')
+
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        link = conn.execute(
+            "SELECT crm_user_id FROM yandex_oauth_links WHERE yandex_user_id=?",
+            (identity,),
+        ).fetchone()
+        if link:
+            row = conn.execute(
+                "SELECT * FROM users WHERE id=?",
+                (int(link['crm_user_id']),),
+            ).fetchone()
+        else:
+            username = str(bootstrap_username or '').strip()
+            if not username:
+                return None
+            row = conn.execute(
+                "SELECT * FROM users WHERE lower(username)=lower(?)",
+                (username,),
+            ).fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        if not data.get('is_active'):
+            raise InactiveUserAuthenticationError
+        if not link:
+            conn.execute(
+                "INSERT INTO yandex_oauth_links (yandex_user_id, crm_user_id) VALUES (?, ?)",
+                (identity, int(data['id'])),
+            )
         conn.execute(
             "INSERT INTO sessions (session_token, user_id, expires_at, user_agent, ip) VALUES (?, ?, ?, ?, ?)",
             (token, int(data['id']), expires_at, user_agent, ip),

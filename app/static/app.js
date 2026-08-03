@@ -40,6 +40,7 @@ const VIEW_ROUTES = {
 const CRM_THEME_STORAGE_KEY = 'artiCrm.uiTheme';
 const CRM_CSRF_HEADER_NAME = 'X-CSRF-Token';
 let csrfToken = '';
+let yandexOAuthStatusRequestId = 0;
 // Arti CRM — v82-login-csrf-public-fix-20260710: login is CSRF-exempt; do not request a session CSRF token before the first login.
 
 function readCookieValue(name) {
@@ -551,7 +552,10 @@ async function registerPwaServiceWorker() {
   if (pwaServiceWorkerRegistration) return pwaServiceWorkerRegistration;
   if (pwaServiceWorkerRegisterPromise) return pwaServiceWorkerRegisterPromise;
 
-  pwaServiceWorkerRegisterPromise = navigator.serviceWorker.register('/static/sw.js?v=v63-knowledge-category-clean-markup-20260703')
+  pwaServiceWorkerRegisterPromise = navigator.serviceWorker.register(
+    '/static/sw.js?v=v85-yandex-oauth-cache-fix-20260803',
+    { updateViaCache: 'none' },
+  )
     .then((registration) => {
       pwaServiceWorkerRegistration = registration;
       return registration;
@@ -6499,6 +6503,70 @@ function finishAuthBootstrap() {
   document.body.classList.remove('auth-pending');
 }
 
+const PASSWORD_LOGIN_ERROR_MESSAGES = Object.freeze({
+  invalid_credentials: 'Неверный логин или пароль',
+  password_account_inactive: 'Учетная запись отключена. Обратитесь к администратору',
+  login_rate_limited: 'Слишком много попыток входа. Повторите позже',
+  login_failed: 'Не удалось выполнить вход. Повторите попытку позже',
+});
+
+const YANDEX_OAUTH_ERROR_MESSAGES = Object.freeze({
+  cancelled: 'Вход через Яндекс отменён',
+  account_not_allowed: 'Этот аккаунт Яндекса не имеет доступа к CRM. Выберите другой аккаунт или обратитесь к администратору',
+  account_inactive: 'Доступ к CRM для этого аккаунта отключён',
+  flow_expired: 'Сессия входа истекла. Повторите вход через Яндекс',
+  oauth_rate_limited: 'Слишком много попыток входа через Яндекс. Повторите позже',
+  provider_unavailable: 'Яндекс временно недоступен. Повторите попытку позже или войдите по логину и паролю',
+  failed: 'Не удалось войти через Яндекс',
+});
+
+function authApiErrorCode(error) {
+  const detail = error?.parsed?.detail;
+  return detail && typeof detail === 'object' && typeof detail.code === 'string'
+    ? detail.code
+    : '';
+}
+
+function passwordLoginErrorMessage(code) {
+  return PASSWORD_LOGIN_ERROR_MESSAGES[code]
+    || PASSWORD_LOGIN_ERROR_MESSAGES.login_failed;
+}
+
+function yandexOAuthErrorMessage(code) {
+  return YANDEX_OAUTH_ERROR_MESSAGES[code]
+    || YANDEX_OAUTH_ERROR_MESSAGES.failed;
+}
+
+function consumeYandexOAuthErrorCode() {
+  const params = new URLSearchParams(window.location.search);
+  if (!params.has('yandex_oauth')) return '';
+  const code = params.get('yandex_oauth') || 'failed';
+  window.history.replaceState(null, '', `${window.location.pathname}${window.location.hash}`);
+  return code;
+}
+
+async function refreshYandexOAuthStatus() {
+  const button = $('yandexLoginBtn');
+  if (!button) return;
+  const requestId = ++yandexOAuthStatusRequestId;
+  button.classList.add('hidden');
+  button.disabled = true;
+  try {
+    const response = await fetch('/api/auth/yandex/status', {
+      cache: 'no-store',
+      credentials: 'same-origin',
+      headers: { 'Accept': 'application/json' },
+    });
+    const payload = response.ok ? await response.json() : {};
+    if (requestId !== yandexOAuthStatusRequestId) return;
+    button.classList.toggle('hidden', payload.enabled !== true);
+  } catch (_) {
+    if (requestId === yandexOAuthStatusRequestId) button.classList.add('hidden');
+  } finally {
+    if (requestId === yandexOAuthStatusRequestId) button.disabled = false;
+  }
+}
+
 function showLogin(errorText = '') {
   finishAuthBootstrap();
   currentUser = null;
@@ -6506,12 +6574,18 @@ function showLogin(errorText = '') {
   $('loginScreen')?.classList.remove('hidden');
   $('appShell')?.classList.add('app-locked');
   $('appShell')?.classList.add('hidden');
-  if ($('loginError')) $('loginError').textContent = errorText;
+  const oauthErrorCode = consumeYandexOAuthErrorCode();
+  if ($('loginError')) {
+    $('loginError').textContent = errorText
+      || (oauthErrorCode ? yandexOAuthErrorMessage(oauthErrorCode) : '');
+  }
+  refreshYandexOAuthStatus().catch(() => {});
 }
 
 function showApp(user) {
   currentUser = user || currentUser;
   finishAuthBootstrap();
+  if ($('loginError')) $('loginError').textContent = '';
   $('loginScreen')?.classList.add('hidden');
   $('appShell')?.classList.remove('hidden');
   $('appShell')?.classList.remove('app-locked');
@@ -6866,10 +6940,18 @@ function setupAuthUi() {
         if (!appInitialized) init();
         await refreshVisibleData();
       } catch (err) {
-        showLogin(String(err.message || err).replace(/^401:\s*/, ''));
+        showLogin(passwordLoginErrorMessage(authApiErrorCode(err)));
       } finally {
         if (btn) btn.disabled = false;
       }
+    });
+  }
+  const yandexLoginBtn = $('yandexLoginBtn');
+  if (yandexLoginBtn && !yandexLoginBtn.dataset.bound) {
+    yandexLoginBtn.dataset.bound = '1';
+    yandexLoginBtn.addEventListener('click', () => {
+      if ($('loginError')) $('loginError').textContent = '';
+      window.location.assign('/api/auth/yandex/start');
     });
   }
   const doLogout = async () => {

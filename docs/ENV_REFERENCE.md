@@ -1,5 +1,21 @@
 # Основные переменные `.env`
 
+## Yandex OAuth login (optional)
+
+```env
+YANDEX_OAUTH_ENABLED=false
+YANDEX_OAUTH_CLIENT_ID=
+YANDEX_OAUTH_CLIENT_SECRET=
+YANDEX_OAUTH_REDIRECT_URI=https://crm.example.test/api/auth/yandex/callback
+YANDEX_OAUTH_USER_MAP={"id:<yandex_id>":"existing-crm-username"}
+```
+
+OAuth is enabled only when `YANDEX_OAUTH_ENABLED` is truthy and every setting is
+valid. `YANDEX_OAUTH_USER_MAP` accepts only explicit `id:`, `login:`, and `email:`
+keys mapped to existing CRM usernames. Keep the client secret and mapping in the
+deployment environment; do not commit real values. An invalid mapping disables only
+OAuth and does not affect password login or startup.
+
 ## Общие
 
 ```env

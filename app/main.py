@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 
 from app import repository as repo
+from app import yandex_oauth
 from app.asset_proxy_policy import (
     asset_url_resolves_globally,
     asset_url_allowed,
@@ -100,6 +101,7 @@ app = FastAPI(title="Arti CRM", version="1.0.3")
 app.mount("/static", KnowledgeSafeStaticFiles(directory=STATIC_DIR), name="static")
 
 AUTH_COOKIE_NAME = "arti_crm_session"
+YANDEX_OAUTH_STATE_COOKIE_NAME = "arti_crm_yandex_oauth"
 _AUTH_DISABLED_CONFIGURATION_ERROR: AuthBootstrapError | None = None
 try:
     AUTH_DISABLED = validate_auth_disabled_config(
@@ -123,7 +125,7 @@ SENSITIVE_PUBLIC_PATH_RE = re.compile(
 SENSITIVE_ENV_NAMES = (
     "OZON_API_KEY", "OZON_CLIENT_ID", "WB_ANALYTICS_TOKEN", "WB_STATISTICS_TOKEN", "WB_API_TOKEN",
     "YANDEX_MARKET_API_KEY", "YANDEX_API_KEY", "WEB_PUSH_VAPID_PRIVATE_KEY", "VAPID_PRIVATE_KEY",
-    "CRM_BACKGROUND_TICK_TOKEN", "SECRET_KEY", "DATABASE_URL",
+    "CRM_BACKGROUND_TICK_TOKEN", "YANDEX_OAUTH_CLIENT_SECRET", "SECRET_KEY", "DATABASE_URL",
 )
 
 
@@ -266,6 +268,28 @@ def _set_auth_cookie(response: Response, token: str, request: Request, *, max_ag
     )
 
 
+def _set_yandex_oauth_state_cookie(response: Response, value: str, request: Request) -> None:
+    response.set_cookie(
+        YANDEX_OAUTH_STATE_COOKIE_NAME,
+        value,
+        httponly=True,
+        samesite="lax",
+        secure=_cookie_secure_enabled(request),
+        max_age=yandex_oauth.FLOW_TTL_SECONDS,
+        path="/api/auth/yandex",
+    )
+
+
+def _delete_yandex_oauth_state_cookie(response: Response, request: Request | None = None) -> None:
+    response.delete_cookie(
+        YANDEX_OAUTH_STATE_COOKIE_NAME,
+        path="/api/auth/yandex",
+        secure=_cookie_secure_enabled(request),
+        httponly=True,
+        samesite="lax",
+    )
+
+
 def _delete_legacy_csrf_cookie(response: Response, request: Request | None = None) -> None:
     # v75-v77 used a browser-readable double-submit CSRF cookie.
     # v78+ switches to a session-bound token returned by /api/security/csrf.
@@ -378,7 +402,14 @@ def _auth_public_path(path: str) -> bool:
         normalized_path == "/"
         or normalized_path == "/health"
         or normalized_path.startswith("/static/")
-        or normalized_path in {"/api/auth/login", "/api/auth/me", "/api/background/tick"}
+        or normalized_path in {
+            "/api/auth/login",
+            "/api/auth/me",
+            "/api/auth/yandex/status",
+            "/api/auth/yandex/start",
+            "/api/auth/yandex/callback",
+            "/api/background/tick",
+        }
     )
 
 
@@ -2261,10 +2292,170 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/api/auth/yandex/status")
+def auth_yandex_status() -> JSONResponse:
+    return JSONResponse(
+        {"enabled": yandex_oauth.get_config() is not None},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
-@app.post("/api/auth/login")
-def auth_login(payload: LoginCreate, request: Request, response: Response) -> dict[str, Any]:
+_YANDEX_OAUTH_ERROR_CODES = frozenset(
+    {
+        "account_inactive",
+        "account_not_allowed",
+        "cancelled",
+        "failed",
+        "flow_expired",
+        "oauth_rate_limited",
+        "provider_unavailable",
+    }
+)
+
+
+def _yandex_oauth_error_response(request: Request, code: str) -> RedirectResponse:
+    safe_code = code if code in _YANDEX_OAUTH_ERROR_CODES else "failed"
+    response = RedirectResponse(url=f"/?yandex_oauth={safe_code}", status_code=303)
+    _delete_yandex_oauth_state_cookie(response, request)
+    return response
+
+
+def _yandex_oauth_rate_limit_response(
+    request: Request,
+    key: str,
+    *,
+    limit: int,
+    window_seconds: int,
+) -> RedirectResponse | None:
+    try:
+        _rate_limit(request, key, limit=limit, window_seconds=window_seconds)
+    except HTTPException as exc:
+        if exc.status_code != 429:
+            raise
+        return _yandex_oauth_error_response(request, "oauth_rate_limited")
+    return None
+
+
+@app.get("/api/auth/yandex/start")
+def auth_yandex_start(request: Request) -> RedirectResponse:
+    config = yandex_oauth.get_config()
+    if config is None:
+        return _yandex_oauth_error_response(request, "provider_unavailable")
+    rate_limit_response = _yandex_oauth_rate_limit_response(
+        request,
+        "auth-yandex-start",
+        limit=30,
+        window_seconds=600,
+    )
+    if rate_limit_response:
+        return rate_limit_response
+    state, code_challenge, cookie_value = yandex_oauth.create_flow(config)
+    response = RedirectResponse(
+        url=yandex_oauth.build_authorization_url(
+            config,
+            state=state,
+            code_challenge=code_challenge,
+        ),
+        status_code=302,
+    )
+    _set_yandex_oauth_state_cookie(response, cookie_value, request)
+    return response
+
+
+@app.get("/api/auth/yandex/callback")
+async def auth_yandex_callback(request: Request) -> RedirectResponse:
+    config = yandex_oauth.get_config()
+    if config is None:
+        return _yandex_oauth_error_response(request, "provider_unavailable")
+    rate_limit_response = _yandex_oauth_rate_limit_response(
+        request,
+        "auth-yandex-callback",
+        limit=60,
+        window_seconds=600,
+    )
+    if rate_limit_response:
+        return rate_limit_response
+
+    state = str(request.query_params.get("state") or "").strip()
+    cookie_value = request.cookies.get(YANDEX_OAUTH_STATE_COOKIE_NAME) or ""
+    if not state or not cookie_value:
+        return _yandex_oauth_error_response(request, "flow_expired")
+    try:
+        verifier = yandex_oauth.verify_flow_cookie(
+            config,
+            cookie_value,
+            expected_state=state,
+        )
+    except yandex_oauth.YandexOAuthError:
+        return _yandex_oauth_error_response(request, "flow_expired")
+
+    provider_error = str(request.query_params.get("error") or "").strip()
+    if provider_error:
+        error_code = "cancelled" if provider_error == "access_denied" else "provider_unavailable"
+        return _yandex_oauth_error_response(request, error_code)
+    code = str(request.query_params.get("code") or "").strip()
+    if not code:
+        return _yandex_oauth_error_response(request, "failed")
+
+    try:
+        profile = await yandex_oauth.fetch_profile_for_code(
+            config,
+            code=code,
+            code_verifier=verifier,
+        )
+    except yandex_oauth.YandexOAuthError:
+        return _yandex_oauth_error_response(request, "provider_unavailable")
+    except Exception:
+        return _yandex_oauth_error_response(request, "failed")
+    yandex_user_id = yandex_oauth.get_yandex_user_id(profile)
+    if not yandex_user_id:
+        return _yandex_oauth_error_response(request, "failed")
+    try:
+        linked_crm_user_id = repo.get_yandex_oauth_linked_user_id(yandex_user_id)
+    except Exception:
+        return _yandex_oauth_error_response(request, "failed")
+
+    bootstrap_username: str | None = None
+    if linked_crm_user_id is None:
+        try:
+            bootstrap_username = yandex_oauth.resolve_crm_username(config, profile)
+        except Exception:
+            return _yandex_oauth_error_response(request, "failed")
+        if not bootstrap_username:
+            return _yandex_oauth_error_response(request, "account_not_allowed")
+
+    session_ttl_seconds = _security_env_int(
+        "CRM_SESSION_TTL_SECONDS",
+        14 * 24 * 60 * 60,
+        minimum=1800,
+        maximum=60 * 24 * 60 * 60,
+    )
+    try:
+        authentication = repo.create_session_for_yandex_identity(
+            yandex_user_id,
+            bootstrap_username=bootstrap_username,
+            user_agent=request.headers.get("user-agent"),
+            ip=_client_ip(request),
+            seconds=session_ttl_seconds,
+        )
+    except repo.InactiveUserAuthenticationError:
+        return _yandex_oauth_error_response(request, "account_inactive")
+    except Exception:
+        return _yandex_oauth_error_response(request, "failed")
+    if not authentication:
+        return _yandex_oauth_error_response(request, "account_not_allowed")
+
+    _user, token = authentication
+    response = RedirectResponse(url="/", status_code=303)
+    _set_auth_cookie(response, token, request, max_age=session_ttl_seconds)
+    _delete_yandex_oauth_state_cookie(response, request)
+    _delete_legacy_csrf_cookie(response, request)
+    return response
+
+
+
+
+def _auth_login_impl(payload: LoginCreate, request: Request, response: Response) -> dict[str, Any]:
     # v80: persistent brute-force protection. The previous guard was in-memory and
     # could be bypassed by restart/multiple workers or look like infinite guessing.
     username = (payload.username or "").strip()
@@ -2279,7 +2470,7 @@ def auth_login(payload: LoginCreate, request: Request, response: Response) -> di
         retry_after = int(lockout.get("retry_after_seconds") or lockout_seconds)
         raise HTTPException(
             status_code=429,
-            detail=f"Слишком много неверных попыток входа. Повторите через {max(1, retry_after // 60)} мин.",
+            detail={"code": "login_rate_limited"},
             headers={"Retry-After": str(retry_after)},
         )
 
@@ -2312,16 +2503,34 @@ def auth_login(payload: LoginCreate, request: Request, response: Response) -> di
             retry_after = int(state.get("retry_after_seconds") or lockout_seconds)
             raise HTTPException(
                 status_code=429,
-                detail=f"Слишком много неверных попыток входа. Вход временно заблокирован на {max(1, retry_after // 60)} мин.",
+                detail={"code": "login_rate_limited"},
                 headers={"Retry-After": str(retry_after)},
             )
-        raise HTTPException(status_code=401, detail="Неверный логин или пароль")
+        raise HTTPException(status_code=401, detail={"code": "invalid_credentials"})
 
     user, token = authentication
     repo.record_login_success(username, client_ip, user_agent)
     _set_auth_cookie(response, token, request, max_age=session_ttl_seconds)
     _delete_legacy_csrf_cookie(response, request)
     return {"ok": True, "user": user}
+
+
+@app.post("/api/auth/login")
+def auth_login(payload: LoginCreate, request: Request, response: Response) -> dict[str, Any]:
+    try:
+        return _auth_login_impl(payload, request, response)
+    except repo.InactiveUserAuthenticationError:
+        raise HTTPException(status_code=403, detail={"code": "password_account_inactive"})
+    except HTTPException as exc:
+        if exc.status_code == 429:
+            raise HTTPException(
+                status_code=429,
+                detail={"code": "login_rate_limited"},
+                headers=exc.headers,
+            )
+        raise
+    except Exception:
+        raise HTTPException(status_code=500, detail={"code": "login_failed"})
 
 
 @app.post("/api/auth/logout")
