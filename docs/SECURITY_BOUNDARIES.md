@@ -14,14 +14,39 @@ PKCE verifier are held only in a signed, short-lived, `HttpOnly`, `Secure`,
 localStorage or sessionStorage. The provider access token is used only for the
 immediate profile request and is not persisted, returned, or logged.
 
-`YANDEX_OAUTH_USER_MAP` is used only to bootstrap a provider identity that has no
-stored link yet, in id, login, then email priority. Login and email matching is
-trimmed and case-insensitive. The first successful callback stores the immutable
-Yandex user ID against `users.id` in `yandex_oauth_links`; subsequent callbacks use
-that numeric CRM identity and never rebind it from a changed or reused username.
-Link creation and CRM session creation share one `BEGIN IMMEDIATE` transaction.
-OAuth never creates CRM users and creates a session only while the linked user still
-exists and is active.
+Admins can maintain login/email rules in the technical-settings section
+`Авторизация через Яндекс`. The CRUD API is admin-only and its unsafe methods use
+the shared session-bound CSRF protection. It returns a boolean `confirmed` state,
+never the confirmed Yandex user ID, OAuth client ID/secret, redirect URI, password,
+or environment configuration. Viewer and manager roles cannot read or mutate these
+rules.
+
+Managed rules are matched before legacy behavior: confirmed Yandex user ID first,
+then trimmed case-insensitive provider login, then email. A matching disabled rule
+denies the callback and cannot fall through to the immutable link or environment
+map. An active first match is rechecked under `BEGIN IMMEDIATE`, pinned to the
+provider ID, validated against any existing immutable `yandex_oauth_links` owner,
+and used to create the session in the same transaction. The provider ID is never
+rebound to another CRM user; later CRM username changes do not change ownership.
+
+When no managed rule matches, `yandex_oauth_links` remains the source of truth and
+`YANDEX_OAUTH_USER_MAP` remains the final bootstrap fallback in id, login, then
+email priority. OAuth never creates CRM users and creates a session only while the
+linked user still exists and is active.
+
+The admin `DELETE` contract archives a managed rule by atomically setting
+`is_active=0`; it does not remove the managed row, its pinned provider ID, or the
+immutable `yandex_oauth_links` row. This tombstone always denies future matching
+callbacks and cannot fall through to `YANDEX_OAUTH_USER_MAP`. Admins can re-enable
+the same rule through `PATCH is_active=true`, after which callbacks continue using
+the original `users.id`.
+
+Archiving or disabling a managed rule affects only new Yandex OAuth sessions.
+Existing CRM sessions remain valid until logout or expiry. For immediate complete
+access removal, an admin must deactivate the employee, which revokes their active
+sessions transactionally. The additive table is created idempotently at startup;
+rollback to older code leaves it unused and would therefore stop enforcing managed
+tombstones until this version is restored.
 
 OAuth failures redirect with one short allowlisted code: `cancelled`,
 `account_not_allowed`, `account_inactive`, `flow_expired`, `provider_unavailable`,

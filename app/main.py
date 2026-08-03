@@ -68,7 +68,7 @@ from app.connectors.ozon import OzonConnector
 from app.connectors.wildberries import WildberriesConnector
 from app.connectors.yandex_market import YandexMarketConnector
 from app.db import get_connection, init_db
-from app.schemas import AiReplyCreate, ChatCreate, ChatUpdate, InternalNoteCreate, InternalNoteUpdate, LoginCreate, MessageCreate, ReviewReplyCreate, QuestionAnswerCreate, TaskCreate, TaskUpdate, UserCreate, UserPasswordUpdate, UserUpdate, ProfileUpdate, KnowledgeCategoryCreate, KnowledgeArticleCreate, KnowledgeArticleUpdate
+from app.schemas import AiReplyCreate, ChatCreate, ChatUpdate, InternalNoteCreate, InternalNoteUpdate, LoginCreate, MessageCreate, ReviewReplyCreate, QuestionAnswerCreate, TaskCreate, TaskUpdate, UserCreate, UserPasswordUpdate, UserUpdate, ProfileUpdate, KnowledgeCategoryCreate, KnowledgeArticleCreate, KnowledgeArticleUpdate, YandexOAuthManagedLinkCreate, YandexOAuthManagedLinkUpdate
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -2355,6 +2355,22 @@ def _yandex_oauth_rate_limit_response(
     return None
 
 
+def _yandex_oauth_profile_emails(profile: dict[str, Any]) -> list[str]:
+    emails: list[str] = []
+    default_email = profile.get("default_email")
+    if isinstance(default_email, str):
+        emails.append(default_email)
+    profile_emails = profile.get("emails")
+    if isinstance(profile_emails, list):
+        emails.extend(value for value in profile_emails if isinstance(value, str))
+    normalized: list[str] = []
+    for email in emails:
+        value = email.strip().casefold()
+        if value and value not in normalized:
+            normalized.append(value)
+    return normalized
+
+
 @app.get("/api/auth/yandex/start")
 def auth_yandex_start(request: Request) -> RedirectResponse:
     config = yandex_oauth.get_config()
@@ -2438,23 +2454,33 @@ async def auth_yandex_callback(request: Request) -> RedirectResponse:
     if not yandex_user_id:
         _log_yandex_oauth_failure("profile_validation")
         return _yandex_oauth_error_response(request, "failed")
+    provider_login = str(profile.get("login") or "").strip().casefold()
+    provider_emails = _yandex_oauth_profile_emails(profile)
     try:
-        linked_crm_user_id = repo.get_yandex_oauth_linked_user_id(yandex_user_id)
+        managed_link = repo.find_yandex_oauth_managed_link(
+            yandex_user_id,
+            login=provider_login,
+            emails=provider_emails,
+        )
     except Exception:
         _log_yandex_oauth_failure("database_link")
         return _yandex_oauth_error_response(request, "failed")
 
+    linked_crm_user_id: int | None = None
+    if managed_link is None:
+        try:
+            linked_crm_user_id = repo.get_yandex_oauth_linked_user_id(yandex_user_id)
+        except Exception:
+            _log_yandex_oauth_failure("database_link")
+            return _yandex_oauth_error_response(request, "failed")
+
     bootstrap_username: str | None = None
-    if linked_crm_user_id is None:
+    if managed_link is None and linked_crm_user_id is None:
         try:
             bootstrap_username = yandex_oauth.resolve_crm_username(config, profile)
         except Exception:
             _log_yandex_oauth_failure("user_mapping")
             return _yandex_oauth_error_response(request, "failed")
-        if not bootstrap_username:
-            _log_yandex_oauth_failure("user_mapping")
-            return _yandex_oauth_error_response(request, "account_not_allowed")
-
     session_ttl_seconds = _security_env_int(
         "CRM_SESSION_TTL_SECONDS",
         14 * 24 * 60 * 60,
@@ -2465,6 +2491,8 @@ async def auth_yandex_callback(request: Request) -> RedirectResponse:
         authentication = repo.create_session_for_yandex_identity(
             yandex_user_id,
             bootstrap_username=bootstrap_username,
+            normalized_login=provider_login,
+            normalized_emails=provider_emails,
             user_agent=request.headers.get("user-agent"),
             ip=_client_ip(request),
             seconds=session_ttl_seconds,
@@ -2643,6 +2671,62 @@ def auth_update_profile(payload: ProfileUpdate, request: Request, response: Resp
 def api_list_users(request: Request) -> list[dict[str, Any]]:
     _require_admin(request)
     return repo.list_users()
+
+
+@app.get("/api/admin/yandex-oauth-links")
+def api_list_yandex_oauth_managed_links(request: Request) -> dict[str, Any]:
+    _require_admin(request)
+    users = [
+        {
+            "id": user["id"],
+            "username": user["username"],
+            "display_name": user.get("display_name"),
+            "is_active": bool(user.get("is_active")),
+        }
+        for user in repo.list_users()
+    ]
+    return {"links": repo.list_yandex_oauth_managed_links(), "users": users}
+
+
+@app.post("/api/admin/yandex-oauth-links")
+def api_create_yandex_oauth_managed_link(
+    payload: YandexOAuthManagedLinkCreate,
+    request: Request,
+) -> dict[str, Any]:
+    _require_admin(request)
+    try:
+        return repo.create_yandex_oauth_managed_link(
+            identifier_type=payload.identifier_type,
+            identifier=payload.identifier,
+            crm_user_id=payload.crm_user_id,
+        )
+    except repo.YandexOAuthManagedLinkUserNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Сотрудник не найден") from exc
+    except repo.YandexOAuthManagedLinkConflictError as exc:
+        raise HTTPException(status_code=409, detail="Такой логин или email уже добавлен") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Некорректный логин или email") from exc
+
+
+@app.patch("/api/admin/yandex-oauth-links/{link_id}")
+def api_update_yandex_oauth_managed_link(
+    link_id: int,
+    payload: YandexOAuthManagedLinkUpdate,
+    request: Request,
+) -> dict[str, Any]:
+    _require_admin(request)
+    updated = repo.update_yandex_oauth_managed_link(link_id, is_active=payload.is_active)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Связь не найдена")
+    return updated
+
+
+@app.delete("/api/admin/yandex-oauth-links/{link_id}")
+def api_delete_yandex_oauth_managed_link(link_id: int, request: Request) -> dict[str, bool]:
+    _require_admin(request)
+    if not repo.delete_yandex_oauth_managed_link(link_id):
+        raise HTTPException(status_code=404, detail="Связь не найдена")
+    return {"ok": True}
 
 
 

@@ -898,6 +898,32 @@
             </div>
             <div id="taskTypesSettingsList" class="task-type-settings-list"></div>
           </div>
+
+          <section id="yandexOAuthLinksCard" class="settings-card panel-card admin-only hidden">
+            <div class="settings-card-head">
+              <div>
+                <h3>Авторизация через Яндекс</h3>
+                <p class="muted">Свяжите логин или email Яндекса с существующим сотрудником CRM. Настройки OAuth и пароли здесь не хранятся.</p>
+                <p class="muted">Отключение запрещает только новые входы через Яндекс. Открытая CRM-сессия действует до выхода или истечения срока; для немедленного полного отключения деактивируйте сотрудника.</p>
+              </div>
+            </div>
+            <form id="yandexOAuthLinkForm" class="settings-form">
+              <label>Идентификатор
+                <select id="yandexOAuthIdentifierType">
+                  <option value="login">Логин Яндекса</option>
+                  <option value="email">Email Яндекса</option>
+                </select>
+              </label>
+              <label>Логин или email
+                <input id="yandexOAuthIdentifier" autocomplete="off" maxlength="320" required />
+              </label>
+              <label>Сотрудник CRM
+                <select id="yandexOAuthCrmUser" required></select>
+              </label>
+              <button class="crm-light-btn" type="submit">Добавить связь</button>
+            </form>
+            <div id="yandexOAuthLinksList" class="users-list"></div>
+          </section>
         </section>
       </main>
 
@@ -952,6 +978,6 @@
 
   <div id="notificationToasts" class="notification-toast-stack" aria-live="polite"></div>
 
-  <script src="/static/app.js?v=v85-yandex-oauth-cache-fix-20260803"></script>
+  <script src="/static/app.js?v=v89-yandex-oauth-tombstone-20260803"></script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-const ARTI_CRM_SW_VERSION = 'v85-yandex-oauth-cache-fix-20260803';
+const ARTI_CRM_SW_VERSION = 'v89-yandex-oauth-tombstone-20260803';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();

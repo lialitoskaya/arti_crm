@@ -198,6 +198,23 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_yandex_oauth_links_crm_user_id
             ON yandex_oauth_links(crm_user_id);
 
+            CREATE TABLE IF NOT EXISTS yandex_oauth_managed_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                identifier_type TEXT NOT NULL CHECK(identifier_type IN ('login', 'email')),
+                display_identifier TEXT NOT NULL,
+                normalized_identifier TEXT NOT NULL,
+                crm_user_id INTEGER NOT NULL,
+                yandex_user_id TEXT UNIQUE,
+                is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0, 1)),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(identifier_type, normalized_identifier),
+                FOREIGN KEY(crm_user_id) REFERENCES users(id) ON DELETE RESTRICT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_yandex_oauth_managed_links_crm_user_id
+            ON yandex_oauth_managed_links(crm_user_id);
+
             CREATE TABLE IF NOT EXISTS webhook_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 source TEXT NOT NULL,
