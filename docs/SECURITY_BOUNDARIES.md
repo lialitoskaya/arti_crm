@@ -1,5 +1,25 @@
 # Security boundaries
 
+## Yandex OAuth login
+
+Yandex OAuth is an optional login path for existing CRM users. The password endpoint
+does not load or validate OAuth configuration and remains available when OAuth is
+disabled, incomplete, malformed, or unavailable. OAuth configuration is read lazily;
+an invalid `YANDEX_OAUTH_USER_MAP` disables only the Yandex status/start/callback flow
+and does not fail application startup.
+
+The authorization-code flow uses a random state value and PKCE S256. State and the
+PKCE verifier are held only in a signed, short-lived, `HttpOnly`, `Secure`,
+`SameSite=Lax` cookie scoped to `/api/auth/yandex`; the browser does not store them in
+localStorage or sessionStorage. The provider access token is used only for the
+immediate profile request and is not persisted, returned, or logged.
+
+Provider identities are mapped explicitly through `YANDEX_OAUTH_USER_MAP` in
+id, login, then email priority. Login and email matching is trimmed and
+case-insensitive. A callback creates a new CRM session only for the mapped, already
+existing, active CRM user. OAuth never creates CRM users. Provider, state, mapping,
+and inactive-user failures return a generic login failure and create no session.
+
 ## User deactivation and sessions
 
 User management remains admin-only. An active-to-inactive user transition and

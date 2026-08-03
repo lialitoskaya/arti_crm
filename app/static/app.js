@@ -6499,6 +6499,26 @@ function finishAuthBootstrap() {
   document.body.classList.remove('auth-pending');
 }
 
+async function refreshYandexOAuthStatus() {
+  const button = $('yandexLoginBtn');
+  if (!button) return;
+  button.classList.add('hidden');
+  button.disabled = true;
+  try {
+    const response = await fetch('/api/auth/yandex/status', {
+      cache: 'no-store',
+      credentials: 'same-origin',
+      headers: { 'Accept': 'application/json' },
+    });
+    const payload = response.ok ? await response.json() : {};
+    button.classList.toggle('hidden', payload.enabled !== true);
+  } catch (_) {
+    button.classList.add('hidden');
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function showLogin(errorText = '') {
   finishAuthBootstrap();
   currentUser = null;
@@ -6506,7 +6526,14 @@ function showLogin(errorText = '') {
   $('loginScreen')?.classList.remove('hidden');
   $('appShell')?.classList.add('app-locked');
   $('appShell')?.classList.add('hidden');
-  if ($('loginError')) $('loginError').textContent = errorText;
+  const oauthFailed = new URLSearchParams(window.location.search).get('yandex_oauth') === 'failed';
+  if (oauthFailed) {
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.hash}`);
+  }
+  if ($('loginError')) {
+    $('loginError').textContent = errorText || (oauthFailed ? 'Не удалось войти через Яндекс.' : '');
+  }
+  refreshYandexOAuthStatus().catch(() => {});
 }
 
 function showApp(user) {
@@ -6870,6 +6897,13 @@ function setupAuthUi() {
       } finally {
         if (btn) btn.disabled = false;
       }
+    });
+  }
+  const yandexLoginBtn = $('yandexLoginBtn');
+  if (yandexLoginBtn && !yandexLoginBtn.dataset.bound) {
+    yandexLoginBtn.dataset.bound = '1';
+    yandexLoginBtn.addEventListener('click', () => {
+      window.location.assign('/api/auth/yandex/start');
     });
   }
   const doLogout = async () => {

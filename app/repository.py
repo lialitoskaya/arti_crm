@@ -4085,6 +4085,40 @@ def authenticate_user_and_create_session(
         return user, token
 
 
+def create_session_for_active_username(
+    username: str,
+    *,
+    user_agent: str | None = None,
+    ip: str | None = None,
+    days: int = 14,
+    seconds: int | None = None,
+) -> tuple[dict[str, Any], str] | None:
+    """Create a session only when the mapped CRM user already exists and is active."""
+    token = secrets.token_urlsafe(48)
+    ttl = timedelta(seconds=max(1800, int(seconds))) if seconds is not None else timedelta(days=days)
+    expires_at = (datetime.now(timezone.utc) + ttl).isoformat(timespec='seconds')
+
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT * FROM users WHERE lower(username)=lower(?) AND is_active=1",
+            (username.strip(),),
+        ).fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        conn.execute(
+            "INSERT INTO sessions (session_token, user_id, expires_at, user_agent, ip) VALUES (?, ?, ?, ?, ?)",
+            (token, int(data['id']), expires_at, user_agent, ip),
+        )
+        user = {
+            key: data[key]
+            for key in ('id', 'username', 'display_name', 'role', 'is_active', 'created_at', 'updated_at')
+            if key in data
+        }
+        return user, token
+
+
 def create_session(user_id: int, *, user_agent: str | None = None, ip: str | None = None, days: int = 14, seconds: int | None = None) -> str:
     token = secrets.token_urlsafe(48)
     ttl = timedelta(seconds=max(1800, int(seconds))) if seconds is not None else timedelta(days=days)
