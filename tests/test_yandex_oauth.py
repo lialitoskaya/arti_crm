@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import ast
 import contextlib
 import json
 import os
@@ -230,6 +231,95 @@ class YandexOAuthTests(unittest.TestCase):
         self.assertEqual(200, me.status_code)
         self.assertEqual("oauth-admin", me.json()["user"]["username"])
         self.assertNotIn("local-provider-token", json.dumps(me.json()))
+
+    def test_wsgi_bootstrap_upgrades_old_schema_before_oauth_callback(self) -> None:
+        yandex_user_id = "upgraded-yandex-user"
+        profile = {"id": yandex_user_id}
+        first_environment = _oauth_environment({f"id:{yandex_user_id}": "oauth-admin"})
+        repeated_environment = _oauth_environment({"id:unrelated-user": "unused-user"})
+
+        # The parent schema differs only by the absence of the OAuth link table.
+        with db.get_connection() as connection:
+            connection.execute("DROP TABLE yandex_oauth_links")
+            table_before = connection.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='yandex_oauth_links'"
+            ).fetchone()[0]
+        self.assertEqual(0, int(table_before))
+
+        db.init_db()
+
+        with db.get_connection() as connection:
+            table_after = connection.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='yandex_oauth_links'"
+            ).fetchone()[0]
+            index_after = connection.execute(
+                "SELECT COUNT(*) FROM sqlite_master "
+                "WHERE type='index' AND name='idx_yandex_oauth_links_crm_user_id'"
+            ).fetchone()[0]
+        self.assertEqual(1, int(table_after))
+        self.assertEqual(1, int(index_after))
+
+        async def oauth_login() -> tuple[httpx.Response, httpx.Response]:
+            async with await _client() as client:
+                _start, state = await _start_flow(client)
+                with mock.patch.object(
+                    yandex_oauth,
+                    "_provider_client",
+                    side_effect=lambda: _provider_client(profile),
+                ):
+                    callback = await client.get(
+                        "/api/auth/yandex/callback",
+                        params={"code": "local-code", "state": state},
+                    )
+                return callback, await client.get("/api/auth/me")
+
+        with mock.patch.dict(os.environ, first_environment, clear=False):
+            first_callback, first_me = _run(oauth_login())
+        with mock.patch.dict(os.environ, repeated_environment, clear=False):
+            repeated_callback, repeated_me = _run(oauth_login())
+
+        self.assertEqual((303, "/"), (first_callback.status_code, first_callback.headers["location"]))
+        self.assertEqual((303, "/"), (repeated_callback.status_code, repeated_callback.headers["location"]))
+        self.assertEqual(200, first_me.status_code)
+        self.assertEqual(200, repeated_me.status_code)
+        self.assertEqual(int(self.user["id"]), int(first_me.json()["user"]["id"]))
+        self.assertEqual(int(self.user["id"]), int(repeated_me.json()["user"]["id"]))
+        with db.get_connection() as connection:
+            links = connection.execute(
+                "SELECT crm_user_id FROM yandex_oauth_links WHERE yandex_user_id=?",
+                (yandex_user_id,),
+            ).fetchall()
+            session_user_ids = {
+                int(row["user_id"])
+                for row in connection.execute("SELECT user_id FROM sessions ORDER BY id").fetchall()
+            }
+        self.assertEqual([int(self.user["id"])], [int(row["crm_user_id"]) for row in links])
+        self.assertEqual({int(self.user["id"])}, session_user_ids)
+        self.assertEqual(2, _session_count())
+
+    def test_wsgi_entrypoints_initialize_schema_before_serving(self) -> None:
+        project_root = Path(__file__).resolve().parents[1]
+        for relative_path in ("server.py", "passenger_wsgi.py"):
+            with self.subTest(entrypoint=relative_path):
+                source = (project_root / relative_path).read_text(encoding="utf-8")
+                tree = ast.parse(source, filename=relative_path)
+                init_lines = [
+                    node.lineno
+                    for node in ast.walk(tree)
+                    if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "init_db"
+                ]
+                serve_lines = [
+                    node.lineno
+                    for node in ast.walk(tree)
+                    if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "ASGIMiddleware"
+                ]
+                self.assertTrue(init_lines, f"{relative_path} must initialize the database")
+                self.assertTrue(serve_lines, f"{relative_path} must construct the WSGI adapter")
+                self.assertLess(min(init_lines), min(serve_lines))
 
     def test_persisted_link_survives_username_rename_and_reuse(self) -> None:
         yandex_user_id = "stable-yandex-user"
