@@ -1,0 +1,6 @@
+# Быстрый вход через Яндекс
+YANDEX_OAUTH_ENABLED=1
+YANDEX_OAUTH_CLIENT_ID=
+YANDEX_OAUTH_CLIENT_SECRET=
+YANDEX_OAUTH_REDIRECT_URI=https://perfectservice-crm.ffox.site/api/auth/yandex/callback
+YANDEX_OAUTH_USER_MAP={"login:YANDEX_LOGIN":"CRM_USERNAME"}

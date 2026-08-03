@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app import repository as repo
 from app import totp_auth
+from app import yandex_oauth
 from app.asset_proxy_policy import (
     asset_url_resolves_globally,
     asset_url_allowed,
@@ -76,7 +77,7 @@ KNOWLEDGE_IMAGES_DIR = Path(os.getenv("CRM_KNOWLEDGE_IMAGES_DIR", str(Path.cwd()
 MAX_CHAT_IMAGE_BYTES = int(os.getenv("CRM_MAX_CHAT_IMAGE_MB", "12")) * 1024 * 1024
 ALLOWED_CHAT_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 
-CRM_BUILD_VERSION = "v80-login-bruteforce-lockout-20260708"
+CRM_BUILD_VERSION = "v86-yandex-oauth-login-20260731"
 
 
 class KnowledgeSafeStaticFiles(StaticFiles):
@@ -102,6 +103,7 @@ app.mount("/static", KnowledgeSafeStaticFiles(directory=STATIC_DIR), name="stati
 
 AUTH_COOKIE_NAME = "arti_crm_session"
 TOTP_PENDING_COOKIE_NAME = "arti_crm_totp_pending"
+YANDEX_OAUTH_STATE_COOKIE_NAME = "arti_crm_yandex_oauth"
 _AUTH_DISABLED_CONFIGURATION_ERROR: AuthBootstrapError | None = None
 try:
     AUTH_DISABLED = validate_auth_disabled_config(
@@ -125,7 +127,8 @@ SENSITIVE_PUBLIC_PATH_RE = re.compile(
 SENSITIVE_ENV_NAMES = (
     "OZON_API_KEY", "OZON_CLIENT_ID", "WB_ANALYTICS_TOKEN", "WB_STATISTICS_TOKEN", "WB_API_TOKEN",
     "YANDEX_MARKET_API_KEY", "YANDEX_API_KEY", "WEB_PUSH_VAPID_PRIVATE_KEY", "VAPID_PRIVATE_KEY",
-    "CRM_BACKGROUND_TICK_TOKEN", "CRM_TOTP_ENCRYPTION_KEY", "SECRET_KEY", "DATABASE_URL",
+    "CRM_BACKGROUND_TICK_TOKEN", "CRM_TOTP_ENCRYPTION_KEY", "YANDEX_OAUTH_CLIENT_SECRET",
+    "SECRET_KEY", "DATABASE_URL",
 )
 
 
@@ -297,6 +300,28 @@ def _delete_totp_pending_cookie(
     )
 
 
+def _set_yandex_oauth_state_cookie(response: Response, value: str, request: Request) -> None:
+    response.set_cookie(
+        YANDEX_OAUTH_STATE_COOKIE_NAME,
+        value,
+        httponly=True,
+        samesite="lax",
+        secure=_cookie_secure_enabled(request),
+        max_age=yandex_oauth.FLOW_TTL_SECONDS,
+        path="/api/auth/yandex",
+    )
+
+
+def _delete_yandex_oauth_state_cookie(response: Response, request: Request | None = None) -> None:
+    response.delete_cookie(
+        YANDEX_OAUTH_STATE_COOKIE_NAME,
+        path="/api/auth/yandex",
+        secure=_cookie_secure_enabled(request),
+        httponly=True,
+        samesite="lax",
+    )
+
+
 def _delete_legacy_csrf_cookie(response: Response, request: Request | None = None) -> None:
     # v75-v77 used a browser-readable double-submit CSRF cookie.
     # v78+ switches to a session-bound token returned by /api/security/csrf.
@@ -409,7 +434,15 @@ def _auth_public_path(path: str) -> bool:
         normalized_path == "/"
         or normalized_path == "/health"
         or normalized_path.startswith("/static/")
-        or normalized_path in {"/api/auth/login", "/api/auth/me", "/api/auth/totp/verify", "/api/background/tick"}
+        or normalized_path in {
+            "/api/auth/login",
+            "/api/auth/me",
+            "/api/auth/totp/verify",
+            "/api/auth/yandex/status",
+            "/api/auth/yandex/start",
+            "/api/auth/yandex/callback",
+            "/api/background/tick",
+        }
     )
 
 
@@ -2362,6 +2395,96 @@ def auth_login(payload: LoginCreate, request: Request, response: Response) -> di
     _delete_totp_pending_cookie(response, request)
     _delete_legacy_csrf_cookie(response, request)
     return {"ok": True, "user": user}
+
+
+@app.get("/api/auth/yandex/status")
+def auth_yandex_status() -> dict[str, bool]:
+    return {"enabled": yandex_oauth.get_config() is not None}
+
+
+def _yandex_oauth_error_response(request: Request, code: str) -> RedirectResponse:
+    response = RedirectResponse(url=f"/?yandex_error={code}", status_code=303)
+    _delete_yandex_oauth_state_cookie(response, request)
+    return response
+
+
+@app.get("/api/auth/yandex/start")
+def auth_yandex_start(request: Request) -> RedirectResponse:
+    config = yandex_oauth.get_config()
+    if config is None:
+        raise HTTPException(status_code=503, detail="Вход через Яндекс не настроен")
+    _rate_limit(request, "auth-yandex-start", limit=30, window_seconds=600)
+    state, code_challenge, cookie_value = yandex_oauth.create_flow(config)
+    response = RedirectResponse(
+        url=yandex_oauth.build_authorization_url(config, state=state, code_challenge=code_challenge),
+        status_code=302,
+    )
+    _set_yandex_oauth_state_cookie(response, cookie_value, request)
+    return response
+
+
+@app.get("/api/auth/yandex/callback")
+def auth_yandex_callback(request: Request) -> RedirectResponse:
+    config = yandex_oauth.get_config()
+    if config is None:
+        return _yandex_oauth_error_response(request, "not_configured")
+    _rate_limit(request, "auth-yandex-callback", limit=60, window_seconds=600)
+
+    error = str(request.query_params.get("error") or "").strip()
+    if error:
+        return _yandex_oauth_error_response(request, "cancelled")
+    code = str(request.query_params.get("code") or "").strip()
+    state = str(request.query_params.get("state") or "").strip()
+    cookie_value = request.cookies.get(YANDEX_OAUTH_STATE_COOKIE_NAME) or ""
+    if not code or not state or not cookie_value:
+        return _yandex_oauth_error_response(request, "invalid_state")
+
+    try:
+        verifier = yandex_oauth.verify_flow_cookie(config, cookie_value, expected_state=state)
+        access_token = yandex_oauth.exchange_code(config, code=code, code_verifier=verifier)
+        profile = yandex_oauth.fetch_profile(access_token)
+        crm_username = yandex_oauth.resolve_crm_username(config, profile)
+    except yandex_oauth.YandexOAuthError:
+        return _yandex_oauth_error_response(request, "provider_error")
+
+    if not crm_username:
+        return _yandex_oauth_error_response(request, "account_not_allowed")
+
+    session_ttl_seconds = _security_env_int(
+        "CRM_SESSION_TTL_SECONDS",
+        14 * 24 * 60 * 60,
+        minimum=1800,
+        maximum=60 * 24 * 60 * 60,
+    )
+    authentication = repo.create_session_or_totp_challenge_for_username(
+        crm_username,
+        user_agent=request.headers.get("user-agent"),
+        ip=_client_ip(request),
+        seconds=session_ttl_seconds,
+    )
+    if not authentication:
+        return _yandex_oauth_error_response(request, "account_inactive")
+    if isinstance(authentication, dict) and authentication.get("totp_unavailable"):
+        return _yandex_oauth_error_response(request, "totp_unavailable")
+
+    current_token = request.cookies.get(AUTH_COOKIE_NAME)
+    if current_token:
+        repo.revoke_session(current_token)
+    repo.record_login_success(crm_username, _client_ip(request), request.headers.get("user-agent"))
+
+    if isinstance(authentication, dict) and authentication.get("requires_totp"):
+        response = RedirectResponse(url="/?auth=totp", status_code=303)
+        _delete_cookie_secure(response, AUTH_COOKIE_NAME, request, httponly=True)
+        _set_totp_pending_cookie(response, str(authentication["pending_token"]), request)
+    else:
+        user, token = authentication
+        response = RedirectResponse(url="/", status_code=303)
+        _set_auth_cookie(response, token, request, max_age=session_ttl_seconds)
+        _delete_totp_pending_cookie(response, request, force=True)
+
+    _delete_yandex_oauth_state_cookie(response, request)
+    _delete_legacy_csrf_cookie(response, request)
+    return response
 
 
 @app.post("/api/auth/totp/verify")

@@ -10,7 +10,7 @@
   <meta name="apple-mobile-web-app-title" content="Arti CRM" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <link rel="apple-touch-icon" href="/static/icons/app-icon-180.png?v=v57-mobile-questions-inline-and-dark-analytics-20260701" />
-  <meta name="arti-build-version" content="v83-knowledge-css-clean-theme-20260713" />
+  <meta name="arti-build-version" content="v86-yandex-oauth-login-20260731" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -38,6 +38,7 @@
       <input id="loginUsername" autocomplete="username" placeholder="Логин" required />
       <input id="loginPassword" autocomplete="current-password" type="password" placeholder="Пароль" required />
       <button id="loginSubmitBtn" type="submit">Войти</button>
+      <button id="yandexLoginBtn" class="secondary hidden" type="button">Войти через Яндекс</button>
       <div id="loginTotpStep" class="hidden">
         <p>Введите шестизначный код из приложения Яндекс Ключ.</p>
         <input id="loginTotpCode" autocomplete="one-time-code" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" placeholder="Одноразовый код" />
@@ -980,6 +981,6 @@
 
   <div id="notificationToasts" class="notification-toast-stack" aria-live="polite"></div>
 
-  <script src="/static/app.js?v=v82-login-csrf-public-fix-20260710"></script>
+  <script src="/static/app.js?v=v86-yandex-oauth-login-20260731"></script>
 </body>
 </html>

@@ -40,6 +40,7 @@ const VIEW_ROUTES = {
 const CRM_THEME_STORAGE_KEY = 'artiCrm.uiTheme';
 const CRM_CSRF_HEADER_NAME = 'X-CSRF-Token';
 let csrfToken = '';
+let yandexOAuthEnabled = false;
 // Arti CRM — v82-login-csrf-public-fix-20260710: login is CSRF-exempt; do not request a session CSRF token before the first login.
 
 function readCookieValue(name) {
@@ -6505,6 +6506,7 @@ function setLoginTotpStep(active) {
   $('loginUsername')?.classList.toggle('hidden', enabled);
   $('loginPassword')?.classList.toggle('hidden', enabled);
   $('loginSubmitBtn')?.classList.toggle('hidden', enabled);
+  $('yandexLoginBtn')?.classList.toggle('hidden', enabled || !yandexOAuthEnabled);
   $('loginTotpStep')?.classList.toggle('hidden', !enabled);
   if ($('loginUsername')) $('loginUsername').required = !enabled;
   if ($('loginPassword')) $('loginPassword').required = !enabled;
@@ -6512,6 +6514,44 @@ function setLoginTotpStep(active) {
     $('loginTotpCode').required = enabled;
     if (!enabled) $('loginTotpCode').value = '';
   }
+}
+
+async function refreshYandexOAuthAvailability() {
+  const button = $('yandexLoginBtn');
+  if (!button) return;
+  try {
+    const response = await fetch('/api/auth/yandex/status', { cache: 'no-store' });
+    const data = response.ok ? await response.json() : null;
+    yandexOAuthEnabled = Boolean(data?.enabled);
+  } catch (_) {
+    yandexOAuthEnabled = false;
+  }
+  const totpStep = !$('loginTotpStep')?.classList.contains('hidden');
+  button.classList.toggle('hidden', !yandexOAuthEnabled || totpStep);
+}
+
+function consumeYandexOAuthResult() {
+  const url = new URL(window.location.href);
+  const auth = url.searchParams.get('auth') || '';
+  const error = url.searchParams.get('yandex_error') || '';
+  if (auth || error) {
+    url.searchParams.delete('auth');
+    url.searchParams.delete('yandex_error');
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+  }
+  return { auth, error };
+}
+
+function yandexOAuthErrorMessage(code) {
+  return ({
+    not_configured: 'Вход через Яндекс пока не настроен.',
+    cancelled: 'Вход через Яндекс отменён.',
+    invalid_state: 'Сессия входа через Яндекс истекла. Повторите попытку.',
+    provider_error: 'Не удалось подтвердить вход через Яндекс. Повторите попытку.',
+    account_not_allowed: 'Этот аккаунт Яндекса не привязан к CRM.',
+    account_inactive: 'Связанный аккаунт CRM отключён.',
+    totp_unavailable: 'Двухфакторная аутентификация временно недоступна.',
+  })[String(code || '')] || '';
 }
 
 function resetTotpSensitiveUi() {
@@ -6532,6 +6572,7 @@ function showLogin(errorText = '') {
   currentUser = null;
   csrfToken = '';
   resetTotpSensitiveUi();
+  refreshYandexOAuthAvailability();
   $('loginScreen')?.classList.remove('hidden');
   $('appShell')?.classList.add('app-locked');
   $('appShell')?.classList.add('hidden');
@@ -6550,6 +6591,7 @@ function showApp(user) {
 }
 
 async function checkAuth() {
+  const yandexResult = consumeYandexOAuthResult();
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
   const timeoutId = controller ? setTimeout(() => controller.abort(), 8000) : null;
   try {
@@ -6559,7 +6601,12 @@ async function checkAuth() {
       ...(controller ? { signal: controller.signal } : {}),
     });
     if (!response.ok) {
-      showLogin();
+      showLogin(yandexOAuthErrorMessage(yandexResult.error));
+      if (yandexResult.auth === 'totp') {
+        setLoginTotpStep(true);
+        if ($('loginError')) $('loginError').textContent = 'Подтвердите вход одноразовым кодом.';
+        $('loginTotpCode')?.focus();
+      }
       return false;
     }
     const data = await response.json();
@@ -7009,6 +7056,13 @@ function setupAuthUi() {
       } finally {
         if (btn) btn.disabled = false;
       }
+    });
+  }
+  const yandexLoginBtn = $('yandexLoginBtn');
+  if (yandexLoginBtn && !yandexLoginBtn.dataset.bound) {
+    yandexLoginBtn.dataset.bound = '1';
+    yandexLoginBtn.addEventListener('click', () => {
+      window.location.assign('/api/auth/yandex/start');
     });
   }
   const totpBackBtn = $('loginTotpBackBtn');

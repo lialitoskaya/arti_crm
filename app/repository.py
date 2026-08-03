@@ -4062,6 +4062,54 @@ def authenticate_user(username: str, password: str) -> dict[str, Any] | None:
         return {k: data[k] for k in ('id', 'username', 'display_name', 'role', 'is_active', 'created_at', 'updated_at') if k in data}
 
 
+def _create_session_or_totp_challenge(
+    conn,
+    user_data: dict[str, Any],
+    *,
+    user_agent: str | None,
+    ip: str | None,
+    days: int,
+    seconds: int | None,
+) -> tuple[dict[str, Any], str] | dict[str, Any]:
+    if user_data.get("totp_enabled_at"):
+        try:
+            totp_auth.decrypt_secret(user_data.get("totp_secret_ciphertext") or "")
+        except ValueError:
+            return {"totp_unavailable": True}
+        challenge_token = secrets.token_urlsafe(48)
+        challenge_hash = hashlib.sha256(challenge_token.encode("utf-8")).hexdigest()
+        challenge_created_at = datetime.now(timezone.utc)
+        challenge_expires_at = challenge_created_at + timedelta(minutes=5)
+        conn.execute(
+            """
+            INSERT INTO pending_auth_challenges
+                (challenge_hash, user_id, created_at, expires_at, attempts_remaining, consumed_at)
+            VALUES (?, ?, ?, ?, 5, NULL)
+            """,
+            (
+                challenge_hash,
+                int(user_data["id"]),
+                challenge_created_at.isoformat(timespec="seconds"),
+                challenge_expires_at.isoformat(timespec="seconds"),
+            ),
+        )
+        return {"requires_totp": True, "pending_token": challenge_token}
+
+    token = secrets.token_urlsafe(48)
+    ttl = timedelta(seconds=max(1800, int(seconds))) if seconds is not None else timedelta(days=days)
+    expires_at = (datetime.now(timezone.utc) + ttl).isoformat(timespec="seconds")
+    conn.execute(
+        "INSERT INTO sessions (session_token, user_id, expires_at, user_agent, ip) VALUES (?, ?, ?, ?, ?)",
+        (token, int(user_data["id"]), expires_at, user_agent, ip),
+    )
+    user = {
+        key: user_data[key]
+        for key in ("id", "username", "display_name", "role", "is_active", "created_at", "updated_at")
+        if key in user_data
+    }
+    return user, token
+
+
 def authenticate_user_and_create_session(
     username: str,
     password: str,
@@ -4071,10 +4119,6 @@ def authenticate_user_and_create_session(
     days: int = 14,
     seconds: int | None = None,
 ) -> tuple[dict[str, Any], str] | dict[str, Any] | None:
-    token = secrets.token_urlsafe(48)
-    ttl = timedelta(seconds=max(1800, int(seconds))) if seconds is not None else timedelta(days=days)
-    expires_at = (datetime.now(timezone.utc) + ttl).isoformat(timespec='seconds')
-
     with get_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
@@ -4090,41 +4134,48 @@ def authenticate_user_and_create_session(
         if not row:
             return None
         data = dict(row)
-        if not _verify_password(password, data.get('password_hash') or ''):
+        if not _verify_password(password, data.get("password_hash") or ""):
             return None
-        if data.get('totp_enabled_at'):
-            try:
-                totp_auth.decrypt_secret(data.get('totp_secret_ciphertext') or '')
-            except ValueError:
-                return {"totp_unavailable": True}
-            challenge_token = secrets.token_urlsafe(48)
-            challenge_hash = hashlib.sha256(challenge_token.encode('utf-8')).hexdigest()
-            challenge_created_at = datetime.now(timezone.utc)
-            challenge_expires_at = challenge_created_at + timedelta(minutes=5)
-            conn.execute(
-                """
-                INSERT INTO pending_auth_challenges
-                    (challenge_hash, user_id, created_at, expires_at, attempts_remaining, consumed_at)
-                VALUES (?, ?, ?, ?, 5, NULL)
-                """,
-                (
-                    challenge_hash,
-                    int(data['id']),
-                    challenge_created_at.isoformat(timespec='seconds'),
-                    challenge_expires_at.isoformat(timespec='seconds'),
-                ),
-            )
-            return {"requires_totp": True, "pending_token": challenge_token}
-        conn.execute(
-            "INSERT INTO sessions (session_token, user_id, expires_at, user_agent, ip) VALUES (?, ?, ?, ?, ?)",
-            (token, int(data['id']), expires_at, user_agent, ip),
+        return _create_session_or_totp_challenge(
+            conn,
+            data,
+            user_agent=user_agent,
+            ip=ip,
+            days=days,
+            seconds=seconds,
         )
-        user = {
-            key: data[key]
-            for key in ('id', 'username', 'display_name', 'role', 'is_active', 'created_at', 'updated_at')
-            if key in data
-        }
-        return user, token
+
+
+def create_session_or_totp_challenge_for_username(
+    username: str,
+    *,
+    user_agent: str | None = None,
+    ip: str | None = None,
+    days: int = 14,
+    seconds: int | None = None,
+) -> tuple[dict[str, Any], str] | dict[str, Any] | None:
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            """
+            SELECT u.*, tc.secret_ciphertext AS totp_secret_ciphertext,
+                   tc.enabled_at AS totp_enabled_at
+            FROM users u
+            LEFT JOIN user_totp_credentials tc ON tc.user_id=u.id
+            WHERE lower(u.username)=lower(?) AND u.is_active=1
+            """,
+            (username.strip(),),
+        ).fetchone()
+        if not row:
+            return None
+        return _create_session_or_totp_challenge(
+            conn,
+            dict(row),
+            user_agent=user_agent,
+            ip=ip,
+            days=days,
+            seconds=seconds,
+        )
 
 
 def create_session(user_id: int, *, user_agent: str | None = None, ip: str | None = None, days: int = 14, seconds: int | None = None) -> str:
