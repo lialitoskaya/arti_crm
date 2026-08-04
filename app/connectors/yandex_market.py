@@ -8,6 +8,18 @@ import httpx
 from app.connectors.base import MarketplaceConnector, UnifiedChat, UnifiedMessage
 
 
+class YandexChatHistoryError(RuntimeError):
+    """Safe base error for a failed Yandex chat-history request."""
+
+
+class YandexChatHistoryFetchError(YandexChatHistoryError):
+    """The provider history request did not complete successfully."""
+
+
+class YandexChatHistoryContractError(YandexChatHistoryError):
+    """The provider returned a response without a valid messages list."""
+
+
 class YandexMarketConnector(MarketplaceConnector):
     """Yandex Market Partner API chats connector.
 
@@ -131,21 +143,26 @@ class YandexMarketConnector(MarketplaceConnector):
 
     async def get_messages(self, external_chat_id: str) -> list[UnifiedMessage]:
         if not self.token or not self.business_id:
-            return []
-        data = await self._post(
-            "/chats/history",
-            params={"chatId": external_chat_id, "limit": 100},
-            json_body={},
-        )
+            raise YandexChatHistoryFetchError("Yandex chat history is not configured")
+        try:
+            data = await self._post(
+                "/chats/history",
+                params={"chatId": external_chat_id, "limit": 100},
+                json_body={},
+            )
+        except Exception:
+            raise YandexChatHistoryFetchError("Yandex chat history request failed") from None
         result = self._result(data)
-        raw_messages = result.get("messages") or []
+        if "messages" not in result:
+            raise YandexChatHistoryContractError("Yandex returned an invalid chat history response")
+        raw_messages = result.get("messages")
         if not isinstance(raw_messages, list):
-            raw_messages = []
+            raise YandexChatHistoryContractError("Yandex returned an invalid chat history response")
+        if any(not isinstance(item, dict) for item in raw_messages):
+            raise YandexChatHistoryContractError("Yandex returned an invalid chat history response")
 
         messages: list[UnifiedMessage] = []
         for item in raw_messages:
-            if not isinstance(item, dict):
-                continue
             sender = str(item.get("sender") or "").upper()
             if sender == "PARTNER":
                 direction = "outbound"
