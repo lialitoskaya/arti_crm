@@ -5,6 +5,7 @@ import sqlite3
 
 import json
 import re
+from contextlib import nullcontext
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
@@ -219,6 +220,29 @@ def _decorate_chat_sla(chat: dict[str, Any]) -> dict[str, Any]:
         chat["funnel_id"] = chat.get("funnel_id")
     if chat.get("funnel_title"):
         chat["funnel_title"] = chat.get("funnel_title")
+    if chat.get("marketplace") == "yandex":
+        metadata = dict(chat.get("metadata") or {})
+        sync_hint = dict(metadata.get("_sync_hint") or {})
+        provider_status = str(
+            sync_hint.get("yandex_chat_status")
+            or sync_hint.get("chat_status")
+            or metadata.get("status")
+            or metadata.get("chatStatus")
+            or ""
+        ).strip().upper()
+        provider_requires_partner = provider_status in {
+            "NEW",
+            "WAITING_FOR_PARTNER",
+            "WAITING_FOR_PARTNER_RESPONSE",
+            "PARTNER_REQUIRED",
+        }
+        if not provider_status:
+            provider_requires_partner = _truthy_marketplace_flag(sync_hint.get("yandex_needs_partner_reply"))
+        actionable = bool(provider_requires_partner and direction == "inbound")
+        sync_hint["yandex_needs_partner_reply"] = actionable
+        metadata["_sync_hint"] = sync_hint
+        chat["metadata"] = metadata
+        chat["yandex_needs_partner_reply"] = actionable
     return chat
 
 
@@ -761,7 +785,11 @@ def upsert_chat(chat: ChatCreate) -> int:
     with get_connection() as conn:
         incoming_metadata = dict(chat.metadata or {})
         existing = conn.execute(
-            "SELECT status, metadata_json FROM chats WHERE marketplace=? AND external_chat_id=?",
+            """
+            SELECT customer_name, customer_public_id, order_id, status, assigned_to,
+                   metadata_json, updated_at
+            FROM chats WHERE marketplace=? AND external_chat_id=?
+            """,
             (chat.marketplace, chat.external_chat_id),
         ).fetchone()
         if existing:
@@ -835,10 +863,103 @@ def upsert_chat(chat: ChatCreate) -> int:
             ),
         )
         row = conn.execute(
-            "SELECT id FROM chats WHERE marketplace=? AND external_chat_id=?",
+            """
+            SELECT id, customer_name, customer_public_id, order_id, status,
+                   assigned_to, metadata_json
+            FROM chats WHERE marketplace=? AND external_chat_id=?
+            """,
             (chat.marketplace, chat.external_chat_id),
         ).fetchone()
+        if existing and all(
+            row[key] == existing[key]
+            for key in ("customer_name", "customer_public_id", "order_id", "status", "assigned_to", "metadata_json")
+        ):
+            conn.execute("UPDATE chats SET updated_at=? WHERE id=?", (existing["updated_at"], row["id"]))
         return int(row["id"])
+
+
+def materialize_yandex_chat_with_messages(chat: ChatCreate, messages: list[Any]) -> int:
+    """Create a new Yandex chat (or fill a legacy shell) with history atomically."""
+    if not messages:
+        raise ValueError("Yandex chat materialization requires at least one message")
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute(
+            "SELECT id, customer_name, customer_public_id, order_id, metadata_json FROM chats WHERE marketplace=? AND external_chat_id=?",
+            (chat.marketplace, chat.external_chat_id),
+        ).fetchone()
+        if existing:
+            chat_id = int(existing["id"])
+            try:
+                existing_metadata = json.loads(existing["metadata_json"] or "{}")
+            except Exception:
+                existing_metadata = {}
+            incoming_metadata = dict(chat.metadata or {})
+            for key, value in existing_metadata.items():
+                if str(key).startswith("_crm_"):
+                    incoming_metadata[key] = value
+            metadata_json = json.dumps(incoming_metadata, ensure_ascii=False)
+            customer_name = existing["customer_name"]
+            if chat.customer_name and not _chat_has_manual_customer_name(existing_metadata):
+                customer_name = chat.customer_name
+            customer_public_id = chat.customer_public_id or existing["customer_public_id"]
+            order_id = chat.order_id or existing["order_id"]
+            conn.execute(
+                """
+                UPDATE chats
+                SET customer_name=?, customer_public_id=?, order_id=?, metadata_json=?,
+                    updated_at=CASE
+                        WHEN customer_name IS NOT ? OR customer_public_id IS NOT ?
+                          OR order_id IS NOT ? OR metadata_json IS NOT ?
+                        THEN CURRENT_TIMESTAMP ELSE updated_at
+                    END
+                WHERE id=?
+                """,
+                (
+                    customer_name,
+                    customer_public_id,
+                    order_id,
+                    metadata_json,
+                    customer_name,
+                    customer_public_id,
+                    order_id,
+                    metadata_json,
+                    chat_id,
+                ),
+            )
+        else:
+            cur = conn.execute(
+                """
+                INSERT INTO chats (
+                    marketplace, external_chat_id, customer_name, customer_public_id,
+                    order_id, status, assigned_to, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    chat.marketplace,
+                    chat.external_chat_id,
+                    chat.customer_name,
+                    chat.customer_public_id,
+                    chat.order_id,
+                    chat.status,
+                    chat.assigned_to,
+                    json.dumps(chat.metadata or {}, ensure_ascii=False),
+                ),
+            )
+            chat_id = int(cur.lastrowid)
+        for message in messages:
+            _add_message_conn(
+                conn,
+                chat_id=chat_id,
+                direction=message.direction,
+                text=message.text,
+                author=message.author,
+                external_message_id=message.external_message_id,
+                raw=message.raw,
+                created_at=message.created_at,
+            )
+        refresh_chat_last_message(conn, chat_id)
+        return chat_id
 
 
 def _chat_has_manual_customer_name(metadata: dict[str, Any] | None) -> bool:
@@ -1055,7 +1176,7 @@ def _latest_message_row_conn(conn, chat_id: int):
         SELECT id, direction, created_at
         FROM messages
         WHERE chat_id=?
-        ORDER BY datetime(created_at) DESC, id DESC
+        ORDER BY julianday(created_at) DESC, id DESC
         LIMIT 1
         """,
         (int(chat_id),),
@@ -1134,7 +1255,7 @@ def refresh_chat_last_message(conn, chat_id: int) -> None:
         SELECT id, direction, text, created_at
         FROM messages
         WHERE chat_id=?
-        ORDER BY datetime(created_at) DESC, id DESC
+        ORDER BY julianday(created_at) DESC, id DESC
         LIMIT 1
         """,
         (chat_id,),
@@ -1145,8 +1266,15 @@ def refresh_chat_last_message(conn, chat_id: int) -> None:
             UPDATE chats
             SET last_message_at=?, last_message_preview=?, updated_at=CURRENT_TIMESTAMP
             WHERE id=?
+              AND (last_message_at IS NOT ? OR last_message_preview IS NOT ?)
             """,
-            (row["created_at"], _message_preview(row["text"]), chat_id),
+            (
+                row["created_at"],
+                _message_preview(row["text"]),
+                chat_id,
+                row["created_at"],
+                _message_preview(row["text"]),
+            ),
         )
     else:
         conn.execute(
@@ -1154,6 +1282,7 @@ def refresh_chat_last_message(conn, chat_id: int) -> None:
             UPDATE chats
             SET last_message_at=NULL, last_message_preview=NULL, updated_at=CURRENT_TIMESTAMP
             WHERE id=?
+              AND (last_message_at IS NOT NULL OR last_message_preview IS NOT NULL)
             """,
             (chat_id,),
         )
@@ -2062,7 +2191,8 @@ def mark_push_subscription_result(endpoint: str, *, ok: bool, error: str | None 
             )
 
 
-def add_message(
+def _add_message_conn(
+    conn,
     chat_id: int,
     direction: str,
     text: str,
@@ -2077,7 +2207,7 @@ def add_message(
     if not created_at:
         created_at = _utc_now_iso()
 
-    with get_connection() as conn:
+    with nullcontext(conn):
         message_id: int
 
         # v104: hard idempotency guard for marketplace sync. The app may run
@@ -2347,6 +2477,29 @@ def add_message(
         return message_id
 
 
+def add_message(
+    chat_id: int,
+    direction: str,
+    text: str,
+    author: str | None = None,
+    external_message_id: str | None = None,
+    raw: dict[str, Any] | None = None,
+    created_at: str | None = None,
+) -> int:
+    """Persist through the canonical reconciliation path in one repository transaction."""
+    with get_connection() as conn:
+        return _add_message_conn(
+            conn,
+            chat_id=chat_id,
+            direction=direction,
+            text=text,
+            author=author,
+            external_message_id=external_message_id,
+            raw=raw,
+            created_at=created_at,
+        )
+
+
 
 def update_internal_note(chat_id: int, message_id: int, text: str) -> dict[str, Any] | None:
     """Update an internal chat note only; marketplace messages are never affected."""
@@ -2408,28 +2561,28 @@ def _chats_select_sql(where: str) -> str:
                 SELECT m.direction
                 FROM messages m
                 WHERE m.chat_id = c.id
-                ORDER BY datetime(m.created_at) DESC, m.id DESC
+                ORDER BY julianday(m.created_at) DESC, m.id DESC
                 LIMIT 1
             ) AS last_message_direction,
             (
                 SELECT m.author
                 FROM messages m
                 WHERE m.chat_id = c.id
-                ORDER BY datetime(m.created_at) DESC, m.id DESC
+                ORDER BY julianday(m.created_at) DESC, m.id DESC
                 LIMIT 1
             ) AS last_message_author,
             (
                 SELECT m.text
                 FROM messages m
                 WHERE m.chat_id = c.id
-                ORDER BY datetime(m.created_at) DESC, m.id DESC
+                ORDER BY julianday(m.created_at) DESC, m.id DESC
                 LIMIT 1
             ) AS actual_last_message_text,
             (
                 SELECT m.created_at
                 FROM messages m
                 WHERE m.chat_id = c.id
-                ORDER BY datetime(m.created_at) DESC, m.id DESC
+                ORDER BY julianday(m.created_at) DESC, m.id DESC
                 LIMIT 1
             ) AS actual_last_message_at,
             s.title AS status_title,
@@ -2440,7 +2593,7 @@ def _chats_select_sql(where: str) -> str:
         LEFT JOIN chat_statuses s ON s.key = c.status
         LEFT JOIN chat_funnels f ON f.id = s.funnel_id
         {where}
-        ORDER BY COALESCE(actual_last_message_at, c.last_message_at, c.updated_at, c.created_at) DESC
+        ORDER BY julianday(actual_last_message_at) DESC, c.id DESC
     """
 
 
@@ -2476,7 +2629,11 @@ def list_chats(
     funnel_id: int | None = None,
     q: str | None = None,
 ) -> list[dict[str, Any]]:
-    clauses = ["c.marketplace NOT IN ('mock', 'internal_tasks')", f"NOT ({_system_excluded_condition_sql('c')})"]
+    clauses = [
+        "c.marketplace NOT IN ('mock', 'internal_tasks')",
+        f"NOT ({_system_excluded_condition_sql('c')})",
+        "(c.marketplace != 'yandex' OR EXISTS (SELECT 1 FROM messages ym WHERE ym.chat_id=c.id))",
+    ]
     params: list[Any] = []
     closed_condition = _closed_status_condition_sql()
 

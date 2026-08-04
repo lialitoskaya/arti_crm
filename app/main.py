@@ -1682,13 +1682,22 @@ async def _sync_marketplace_unlocked(marketplace: str, *, background: bool = Fal
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    chat_refs: list[tuple[int, Any, dict[str, Any] | None]] = []
+    chat_refs: list[tuple[int | None, Any, dict[str, Any] | None, bool]] = []
     for unified_chat in unified_chats:
         existing_chat = repo.get_chat_by_external(unified_chat.marketplace, unified_chat.external_chat_id)
         if repo.chat_is_excluded_as_system(existing_chat):
             histories_skipped += 1
             continue
         should_fetch = _should_fetch_messages(marketplace, existing_chat, unified_chat, background=background)
+        defer_yandex_materialization = marketplace == "yandex" and (
+            not existing_chat or not repo.chat_has_messages(int(existing_chat["id"]))
+        )
+        if defer_yandex_materialization:
+            if should_fetch:
+                chat_refs.append(((int(existing_chat["id"]) if existing_chat else None), unified_chat, existing_chat, True))
+            else:
+                histories_skipped += 1
+            continue
         chat_id = repo.upsert_chat(
             ChatCreate(
                 marketplace=unified_chat.marketplace,  # type: ignore[arg-type]
@@ -1712,7 +1721,7 @@ async def _sync_marketplace_unlocked(marketplace: str, *, background: bool = Fal
             except Exception:
                 pass
         if should_fetch:
-            chat_refs.append((chat_id, unified_chat, existing_chat))
+            chat_refs.append((chat_id, unified_chat, existing_chat, False))
         else:
             histories_skipped += 1
 
@@ -1734,18 +1743,25 @@ async def _sync_marketplace_unlocked(marketplace: str, *, background: bool = Fal
         )
     semaphore = asyncio.Semaphore(concurrency)
 
-    async def fetch_messages(chat_id: int, unified_chat: Any, existing_chat: dict[str, Any] | None) -> tuple[int, Any, dict[str, Any] | None, list[Any] | None, str | None]:
+    async def fetch_messages(
+        chat_id: int | None,
+        unified_chat: Any,
+        existing_chat: dict[str, Any] | None,
+        deferred_materialization: bool,
+    ) -> tuple[int | None, Any, dict[str, Any] | None, bool, list[Any] | None, str | None]:
         try:
             async with semaphore:
                 messages = await connector.get_messages(unified_chat.external_chat_id)
-            return chat_id, unified_chat, existing_chat, messages, None
+            return chat_id, unified_chat, existing_chat, deferred_materialization, messages, None
         except Exception as exc:
-            return chat_id, unified_chat, existing_chat, None, str(exc)
+            return chat_id, unified_chat, existing_chat, deferred_materialization, None, str(exc)
 
-    fetch_results = await asyncio.gather(*(fetch_messages(chat_id, unified_chat, existing_chat) for chat_id, unified_chat, existing_chat in chat_refs))
+    fetch_results = await asyncio.gather(
+        *(fetch_messages(chat_id, unified_chat, existing_chat, deferred) for chat_id, unified_chat, existing_chat, deferred in chat_refs)
+    )
 
     reopened_count = 0
-    for chat_id, unified_chat, existing_chat, messages, error in fetch_results:
+    for chat_id, unified_chat, existing_chat, deferred_materialization, messages, error in fetch_results:
         if error:
             errors.append(
                 {
@@ -1757,6 +1773,35 @@ async def _sync_marketplace_unlocked(marketplace: str, *, background: bool = Fal
             continue
 
         messages = messages or []
+        if deferred_materialization:
+            if not messages:
+                continue
+            try:
+                chat_id = repo.materialize_yandex_chat_with_messages(
+                    ChatCreate(
+                        marketplace=unified_chat.marketplace,  # type: ignore[arg-type]
+                        external_chat_id=unified_chat.external_chat_id,
+                        customer_name=unified_chat.customer_name,
+                        customer_public_id=unified_chat.customer_public_id,
+                        order_id=unified_chat.order_id,
+                        status=unified_chat.status,  # type: ignore[arg-type]
+                        metadata=unified_chat.metadata,
+                    ),
+                    messages,
+                )
+            except Exception as exc:
+                errors.append(
+                    {
+                        "chat_id": chat_id,
+                        "external_chat_id": unified_chat.external_chat_id,
+                        "error": str(exc),
+                    }
+                )
+                continue
+            synced.append(chat_id)
+            messages_total += len(messages)
+            continue
+
         if marketplace == "ozon" and _messages_are_ozon_system_dialog(messages):
             # Explicit system dialogs are not customer chats. Hide and remember them
             # instead of deleting by default; otherwise the next chat-list sync can
