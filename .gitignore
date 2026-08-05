@@ -5,6 +5,12 @@ __pycache__/
 *.pyo
 *.pyd
 .Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
 
 # Virtual environment
 .venv/
@@ -17,6 +23,7 @@ env/
 *.sqlite3
 *.sqlite3-*
 *.db
+crm.sqlite3*
 
 # Chat attachments and other runtime uploads
 chat_attachments/
@@ -27,6 +34,7 @@ ozon_chat_history_probe.json
 # Secrets
 .env
 .env.*
+!.env.example
 .env.txt
 
 # Marketplace sync state
@@ -34,9 +42,11 @@ ozon_chat_history_probe.json
 .wb_events_cursor.json
 .wb_events_auto_import.json
 .ozon_*.json
+*cursor*.json
 
 # Local files / uploads / logs
 uploads/
+data/
 logs/
 *.log
 
