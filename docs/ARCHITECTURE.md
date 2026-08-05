@@ -90,3 +90,35 @@ app/
 ```
 
 Переход лучше делать постепенно, без изменения поведения: сначала перенос функций, потом тесты, потом чистка старых маршрутов.
+
+## Personal chat read state
+
+`chat_user_states` is the personal source of truth for read/unread state. Its
+primary key is `(user_id, chat_id)`; it stores `last_read_message_id`,
+`last_read_at`, and `is_marked_unread`. The table is additive, created with
+`CREATE TABLE IF NOT EXISTS`, and uses cascading user/chat foreign keys.
+
+The execution flow is:
+
+```text
+PATCH /api/chats/{chat_id}/read-state
+  -> authenticated current user + shared CSRF middleware
+    -> repository.set_chat_read_state()
+      -> chat_user_states
+```
+
+`repository.add_message()` creates missing personal boundaries in the same SQLite
+transaction only for a recent inbound message that is the newest dialog message.
+Outbound messages do not touch the table. Chat list/summary queries left-join the
+current user's row and compute canonical `is_unread` without loading history or
+calling a marketplace connector.
+
+The frontend applies PATCH optimistically to one in-memory chat and one rendered
+row. A per-chat single-flight operation version plus GET request snapshot prevents
+responses started before or during the mutation from restoring stale state. The
+chat list uses one delegated click/keyboard handler; no per-row listeners are
+created.
+
+Rollback to older application code leaves the additive table and index unused.
+Restoring this version resumes the same personal state; no destructive down
+migration is required.

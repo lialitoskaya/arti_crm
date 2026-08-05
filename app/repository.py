@@ -2191,6 +2191,195 @@ def mark_push_subscription_result(endpoint: str, *, ok: bool, error: str | None 
             )
 
 
+def _chat_read_state_row_conn(conn: Any, chat_id: int, user_id: int) -> Any:
+    return conn.execute(
+        """
+        SELECT
+            c.id AS chat_id,
+            cus.user_id AS state_user_id,
+            cus.last_read_message_id,
+            cus.last_read_at,
+            COALESCE(cus.is_marked_unread, 0) AS is_marked_unread,
+            (
+                SELECT MAX(all_messages.id)
+                FROM messages all_messages
+                WHERE all_messages.chat_id=c.id
+            ) AS latest_message_id,
+            (
+                SELECT MAX(unread_messages.id)
+                FROM messages unread_messages
+                WHERE unread_messages.chat_id=c.id
+                  AND unread_messages.direction='inbound'
+                  AND cus.user_id IS NOT NULL
+                  AND unread_messages.id > COALESCE(cus.last_read_message_id, 0)
+            ) AS unread_message_id
+        FROM chats c
+        LEFT JOIN chat_user_states cus
+          ON cus.chat_id=c.id AND cus.user_id=?
+        WHERE c.id=?
+        """,
+        (int(user_id), int(chat_id)),
+    ).fetchone()
+
+
+def _serialize_chat_read_state(row: Any) -> dict[str, Any] | None:
+    if not row:
+        return None
+    marked_unread = bool(row["is_marked_unread"])
+    unread_message_id = row["unread_message_id"]
+    return {
+        "chat_id": int(row["chat_id"]),
+        "is_unread": bool(marked_unread or unread_message_id is not None),
+        "is_marked_unread": marked_unread,
+        "last_read_message_id": (
+            int(row["last_read_message_id"])
+            if row["last_read_message_id"] is not None
+            else None
+        ),
+        "last_read_at": row["last_read_at"],
+        "unread_message_id": (
+            int(unread_message_id)
+            if unread_message_id is not None
+            else None
+        ),
+    }
+
+
+def get_chat_read_state(chat_id: int, user_id: int) -> dict[str, Any] | None:
+    with get_connection() as conn:
+        return _serialize_chat_read_state(
+            _chat_read_state_row_conn(conn, int(chat_id), int(user_id))
+        )
+
+
+def set_chat_read_state(
+    chat_id: int,
+    user_id: int,
+    *,
+    is_unread: bool,
+) -> dict[str, Any] | None:
+    """Set canonical read state for one CRM user without loading chat history."""
+    with get_connection() as conn:
+        current = _chat_read_state_row_conn(conn, int(chat_id), int(user_id))
+        if not current:
+            return None
+
+        latest_message_id = current["latest_message_id"]
+        if is_unread:
+            conn.execute(
+                """
+                INSERT INTO chat_user_states (
+                    user_id, chat_id, last_read_message_id, last_read_at,
+                    is_marked_unread, updated_at
+                )
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP, 1, CURRENT_TIMESTAMP)
+                ON CONFLICT(user_id, chat_id) DO UPDATE SET
+                    is_marked_unread=1,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE chat_user_states.is_marked_unread<>1
+                """,
+                (int(user_id), int(chat_id), latest_message_id),
+            )
+        elif current["state_user_id"] is not None:
+            conn.execute(
+                """
+                UPDATE chat_user_states
+                SET last_read_message_id=?,
+                    last_read_at=CURRENT_TIMESTAMP,
+                    is_marked_unread=0,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE user_id=? AND chat_id=?
+                  AND (
+                      is_marked_unread<>0
+                      OR last_read_message_id IS NOT ?
+                  )
+                """,
+                (
+                    latest_message_id,
+                    int(user_id),
+                    int(chat_id),
+                    latest_message_id,
+                ),
+            )
+
+        return _serialize_chat_read_state(
+            _chat_read_state_row_conn(conn, int(chat_id), int(user_id))
+        )
+
+
+def _preserve_read_users_for_replayed_inbound_conn(
+    conn: Any,
+    *,
+    chat_id: int,
+    message_id: int,
+) -> None:
+    """Keep a delayed/replayed inbound from reopening chats that were read."""
+    conn.execute(
+        """
+        UPDATE chat_user_states
+        SET last_read_message_id=?,
+            updated_at=CURRENT_TIMESTAMP
+        WHERE chat_id=?
+          AND is_marked_unread=0
+          AND (last_read_message_id IS NULL OR last_read_message_id < ?)
+          AND NOT EXISTS (
+              SELECT 1
+              FROM messages unread_messages
+              WHERE unread_messages.chat_id=chat_user_states.chat_id
+                AND unread_messages.direction='inbound'
+                AND unread_messages.id > COALESCE(chat_user_states.last_read_message_id, 0)
+                AND unread_messages.id<>?
+          )
+        """,
+        (int(message_id), int(chat_id), int(message_id), int(message_id)),
+    )
+
+
+def _mark_chat_unread_for_active_users_conn(
+    conn: Any,
+    *,
+    chat_id: int,
+    message_id: int,
+    previous_latest_message_id: int | None,
+    created_at: str | None,
+) -> None:
+    """Create personal unread boundaries only for a genuinely new latest inbound."""
+    is_recent = _message_recent_enough_for_notification(created_at)
+    latest = conn.execute(
+        """
+        SELECT id
+        FROM messages
+        WHERE chat_id=?
+        ORDER BY julianday(created_at) DESC, id DESC
+        LIMIT 1
+        """,
+        (int(chat_id),),
+    ).fetchone()
+    is_new_latest = bool(
+        is_recent and latest and int(latest["id"]) == int(message_id)
+    )
+    if not is_new_latest:
+        _preserve_read_users_for_replayed_inbound_conn(
+            conn, chat_id=chat_id, message_id=message_id
+        )
+        return
+
+    conn.execute(
+        """
+        INSERT INTO chat_user_states (
+            user_id, chat_id, last_read_message_id, last_read_at,
+            is_marked_unread, updated_at
+        )
+        SELECT
+            users.id, ?, ?, CURRENT_TIMESTAMP, 0, CURRENT_TIMESTAMP
+        FROM users
+        WHERE users.is_active=1
+        ON CONFLICT(user_id, chat_id) DO NOTHING
+        """,
+        (int(chat_id), previous_latest_message_id),
+    )
+
+
 def _add_message_conn(
     conn,
     chat_id: int,
@@ -2206,6 +2395,15 @@ def _add_message_conn(
     raw_json = json.dumps(raw or {}, ensure_ascii=False)
     if not created_at:
         created_at = _utc_now_iso()
+    previous_latest_message_id: int | None = None
+    if direction == "inbound":
+        previous_latest = conn.execute(
+            "SELECT MAX(id) AS id FROM messages WHERE chat_id=?",
+            (int(chat_id),),
+        ).fetchone()
+        if previous_latest and previous_latest["id"] is not None:
+            previous_latest_message_id = int(previous_latest["id"])
+
 
     with nullcontext(conn):
         message_id: int
@@ -2467,6 +2665,13 @@ def _add_message_conn(
         message_id = int(cur.lastrowid)
         refresh_chat_last_message(conn, chat_id)
         if direction == "inbound":
+            _mark_chat_unread_for_active_users_conn(
+                conn,
+                chat_id=chat_id,
+                message_id=message_id,
+                previous_latest_message_id=previous_latest_message_id,
+                created_at=created_at,
+            )
             _notify_new_inbound_message_conn(
                 conn,
                 chat_id=chat_id,
@@ -2551,7 +2756,8 @@ def delete_internal_note(chat_id: int, message_id: int) -> bool:
         refresh_chat_last_message(conn, int(chat_id))
         return True
 
-def _chats_select_sql(where: str) -> str:
+def _chats_select_sql(where: str, current_user_id: int | None = None) -> str:
+    read_user_id = int(current_user_id) if current_user_id is not None else -1
     return f"""
         SELECT
             c.*,
@@ -2585,6 +2791,28 @@ def _chats_select_sql(where: str) -> str:
                 ORDER BY julianday(m.created_at) DESC, m.id DESC
                 LIMIT 1
             ) AS actual_last_message_at,
+            cus.last_read_message_id AS last_read_message_id,
+            cus.last_read_at AS last_read_at,
+            COALESCE(cus.is_marked_unread, 0) AS is_marked_unread,
+            CASE
+                WHEN COALESCE(cus.is_marked_unread, 0)=1 THEN 1
+                WHEN cus.user_id IS NOT NULL AND EXISTS (
+                    SELECT 1
+                    FROM messages unread_messages
+                    WHERE unread_messages.chat_id=c.id
+                      AND unread_messages.direction='inbound'
+                      AND unread_messages.id > COALESCE(cus.last_read_message_id, 0)
+                ) THEN 1
+                ELSE 0
+            END AS is_unread,
+            (
+                SELECT MAX(unread_messages.id)
+                FROM messages unread_messages
+                WHERE unread_messages.chat_id=c.id
+                  AND unread_messages.direction='inbound'
+                  AND cus.user_id IS NOT NULL
+                  AND unread_messages.id > COALESCE(cus.last_read_message_id, 0)
+            ) AS unread_message_id,
             s.title AS status_title,
             s.color AS status_color,
             s.funnel_id AS funnel_id,
@@ -2592,6 +2820,7 @@ def _chats_select_sql(where: str) -> str:
         FROM chats c
         LEFT JOIN chat_statuses s ON s.key = c.status
         LEFT JOIN chat_funnels f ON f.id = s.funnel_id
+        LEFT JOIN chat_user_states cus ON cus.chat_id=c.id AND cus.user_id={read_user_id}
         {where}
         ORDER BY julianday(actual_last_message_at) DESC, c.id DESC
     """
@@ -2628,6 +2857,7 @@ def list_chats(
     assigned_user_id: int | None = None,
     funnel_id: int | None = None,
     q: str | None = None,
+    current_user_id: int | None = None,
 ) -> list[dict[str, Any]]:
     clauses = [
         "c.marketplace NOT IN ('mock', 'internal_tasks')",
@@ -2674,7 +2904,7 @@ def list_chats(
 
     where = f"WHERE {' AND '.join(clauses)}"
     with get_connection() as conn:
-        rows = conn.execute(_chats_select_sql(where), params).fetchall()
+        rows = conn.execute(_chats_select_sql(where, current_user_id), params).fetchall()
         result: list[dict[str, Any]] = []
         for row in rows:
             item = _decorate_chat_sla(row_to_dict(row))
@@ -2714,7 +2944,7 @@ def get_chat_by_external(marketplace: str, external_chat_id: str) -> dict[str, A
         return _decorate_chat_sla(row_to_dict(row)) if row else None
 
 
-def get_chat_summary(chat_id: int) -> dict[str, Any] | None:
+def get_chat_summary(chat_id: int, current_user_id: int | None = None) -> dict[str, Any] | None:
     """Return a chat row without loading full message history.
 
     Used by quick UI updates such as status/assignee changes. Loading the whole
@@ -2722,7 +2952,7 @@ def get_chat_summary(chat_id: int) -> dict[str, Any] | None:
     """
     with get_connection() as conn:
         row = conn.execute(
-            _chats_select_sql("WHERE c.id=? AND c.marketplace NOT IN ('mock', 'internal_tasks')"),
+            _chats_select_sql("WHERE c.id=? AND c.marketplace NOT IN ('mock', 'internal_tasks')", current_user_id),
             (int(chat_id),),
         ).fetchone()
         return _decorate_chat_sla(row_to_dict(row)) if row else None
@@ -2734,9 +2964,16 @@ def chat_has_messages(chat_id: int) -> bool:
         return bool(row)
 
 
-def get_chat(chat_id: int, messages_limit: int | None = None) -> dict[str, Any] | None:
+def get_chat(
+    chat_id: int,
+    messages_limit: int | None = None,
+    current_user_id: int | None = None,
+) -> dict[str, Any] | None:
     with get_connection() as conn:
-        chat = conn.execute(_chats_select_sql("WHERE c.id=? AND c.marketplace NOT IN ('mock', 'internal_tasks')"), (chat_id,)).fetchone()
+        chat = conn.execute(
+            _chats_select_sql("WHERE c.id=? AND c.marketplace NOT IN ('mock', 'internal_tasks')", current_user_id),
+            (chat_id,),
+        ).fetchone()
         if not chat:
             return None
         chat_dict = row_to_dict(chat)

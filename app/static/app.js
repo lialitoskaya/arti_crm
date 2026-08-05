@@ -279,6 +279,134 @@ let taskSearchTimer = null;
 let chatMetaControlsHydratedForChatId = null;
 let chatMetaControlsSignatureValue = '';
 let chatMetaControlBusyUntil = 0;
+function createChatReadStateController(options) {
+  const operations = new Map();
+  let operationVersion = 0;
+
+  function snapshot(chat) {
+    return {
+      is_unread: Boolean(chat?.is_unread),
+      is_marked_unread: Boolean(chat?.is_marked_unread),
+      last_read_message_id: chat?.last_read_message_id ?? null,
+      last_read_at: chat?.last_read_at ?? null,
+      unread_message_id: chat?.unread_message_id ?? null,
+    };
+  }
+
+  function captureRequestContext() {
+    return {
+      version: operationVersion,
+      pendingChatIds: new Set(
+        [...operations.entries()]
+          .filter(([, operation]) => operation.pending)
+          .map(([chatId]) => Number(chatId)),
+      ),
+    };
+  }
+
+  function reconcile(serverChat, context = {}) {
+    const chatId = Number(serverChat?.id ?? serverChat?.chat_id ?? 0);
+    if (!chatId) return serverChat;
+
+    const operation = operations.get(chatId);
+    const localChat = options.read(chatId);
+    if (!operation || !localChat) return serverChat;
+
+    const requestVersion = Number(context.version || 0);
+    const pendingAtStart = Boolean(context.pendingChatIds?.has?.(chatId));
+    if (operation.pending || operation.version > requestVersion || pendingAtStart) {
+      return { ...serverChat, ...snapshot(localChat) };
+    }
+    return serverChat;
+  }
+
+  function set(chatId, isUnread) {
+    const normalizedChatId = Number(chatId || 0);
+    const desiredUnread = Boolean(isUnread);
+    if (!normalizedChatId) return Promise.resolve(null);
+
+    const existingOperation = operations.get(normalizedChatId);
+    if (existingOperation?.pending) {
+      if (existingOperation.desiredUnread === desiredUnread) {
+        return existingOperation.promise;
+      }
+      return existingOperation.promise
+        .catch(() => null)
+        .then(() => set(normalizedChatId, desiredUnread));
+    }
+
+    const current = options.read(normalizedChatId);
+    if (!current) return Promise.resolve(null);
+    if (Boolean(current.is_unread) === desiredUnread) {
+      return Promise.resolve(snapshot(current));
+    }
+
+    const previous = snapshot(current);
+    const version = ++operationVersion;
+    const operation = {
+      version,
+      desiredUnread,
+      pending: true,
+      promise: null,
+    };
+    operations.set(normalizedChatId, operation);
+
+    options.apply(normalizedChatId, {
+      ...previous,
+      is_unread: desiredUnread,
+      is_marked_unread: desiredUnread,
+      unread_message_id: desiredUnread ? previous.unread_message_id : null,
+    });
+
+    let requestResult;
+    try {
+      requestResult = options.request(normalizedChatId, desiredUnread);
+    } catch (error) {
+      requestResult = Promise.reject(error);
+    }
+
+    operation.promise = Promise.resolve(requestResult)
+      .then((canonical) => {
+        if (Number(canonical?.chat_id || 0) !== normalizedChatId) {
+          throw new Error('Read-state response chat ID mismatch');
+        }
+        const activeOperation = operations.get(normalizedChatId);
+        if (!activeOperation || activeOperation.version !== version) return canonical;
+        activeOperation.pending = false;
+        options.apply(normalizedChatId, canonical);
+        return canonical;
+      })
+      .catch((error) => {
+        const activeOperation = operations.get(normalizedChatId);
+        if (activeOperation?.version === version) {
+          activeOperation.pending = false;
+          options.apply(normalizedChatId, previous);
+        }
+        throw error;
+      });
+    return operation.promise;
+  }
+
+  return { captureRequestContext, reconcile, set };
+}
+
+function readChatReadStateModel(chatId) {
+  const normalizedChatId = Number(chatId || 0);
+  return (chats || []).find((chat) => Number(chat.id) === normalizedChatId)
+    || (Number(currentChat?.id) === normalizedChatId ? currentChat : null);
+}
+
+const chatReadStateController = createChatReadStateController({
+  request(chatId, isUnread) {
+    return api(`/api/chats/${chatId}/read-state`, {
+      method: 'PATCH',
+      body: JSON.stringify({ is_unread: Boolean(isUnread) }),
+    });
+  },
+  read: readChatReadStateModel,
+  apply: applyChatReadStateLocally,
+});
+
 
 function mergeChatSummary(updated) {
   if (!updated || !updated.id) return;
@@ -2592,6 +2720,8 @@ function bindChatListInfiniteScroll() {
   const list = $('chatList');
   if (!list || chatListInfiniteScrollBound) return;
   chatListInfiniteScrollBound = true;
+  list.addEventListener('click', handleChatListClick);
+  list.addEventListener('keydown', handleChatListKeydown);
 
   list.addEventListener('scroll', () => {
     if (!isMobileChatLayout() || isMobileChatOpen()) return;
@@ -2610,8 +2740,7 @@ function bindChatListInfiniteScroll() {
 }
 
 function renderLoadedChats() {
-  const chatCountLabel = $('chatCountLabel');
-  if (chatCountLabel) chatCountLabel.textContent = String((chats || []).length);
+  updateChatCountLabel();
   renderChatList();
   renderScopeTabs();
   updateChatSearchUi();
@@ -2658,7 +2787,9 @@ async function loadChats(options = {}) {
 
     if (searchQuery.length >= 2) params.set('q', searchQuery);
 
-    chats = await api(`/api/chats?${params.toString()}`, { timeoutMs: 15000 });
+    const readStateRequestContext = chatReadStateController.captureRequestContext();
+    const serverChats = await api(`/api/chats?${params.toString()}`, { timeoutMs: 15000 });
+    chats = (serverChats || []).map((chat) => chatReadStateController.reconcile(chat, readStateRequestContext));
     trackChatMessageSounds(chats || []);
 
     if (render) renderLoadedChats();
@@ -2801,6 +2932,101 @@ function getChatSummaryById(chatId) {
   return (chats || []).find((chat) => Number(chat.id) === id) || null;
 }
 
+function updateChatCountLabel() {
+  const counter = $('chatCountLabel');
+  if (!counter) return;
+  const total = (chats || []).length;
+  const unread = (chats || []).reduce(
+    (count, chat) => count + (chat?.is_unread ? 1 : 0),
+    0,
+  );
+  counter.textContent = unread > 0 ? `${unread} / ${total}` : String(total);
+  counter.dataset.unreadCount = String(unread);
+  counter.title = `\u041d\u0435\u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043e: ${unread} \u00b7 \u0412\u0441\u0435\u0433\u043e: ${total}`;
+  counter.setAttribute('aria-label', counter.title);
+}
+
+function paintChatRowReadState(item, chat) {
+  if (!item || !chat) return;
+  const isUnread = Boolean(chat.is_unread);
+  item.classList.toggle('is-unread', isUnread);
+  item.dataset.unread = isUnread ? '1' : '0';
+
+  const control = item.querySelector('[data-chat-read-state]');
+  if (!control) return;
+  control.tabIndex = isUnread ? -1 : 0;
+  control.setAttribute('aria-label', isUnread ? '\u041d\u0435\u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043d\u044b\u0439 \u0447\u0430\u0442' : '\u041e\u0442\u043c\u0435\u0442\u0438\u0442\u044c \u0447\u0430\u0442 \u043d\u0435\u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043d\u044b\u043c');
+  control.setAttribute('aria-pressed', isUnread ? 'true' : 'false');
+  control.title = isUnread ? '\u041d\u0435\u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043d\u044b\u0439 \u0447\u0430\u0442' : '\u041e\u0442\u043c\u0435\u0442\u0438\u0442\u044c \u043d\u0435\u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043d\u044b\u043c';
+}
+
+function updateChatRowReadState(chatId) {
+  const normalizedChatId = Number(chatId || 0);
+  const list = $('chatList');
+  const chat = readChatReadStateModel(normalizedChatId);
+  if (!list || !chat || !normalizedChatId) return;
+  const item = list.querySelector(`[data-chat-id="${normalizedChatId}"]`);
+  paintChatRowReadState(item, chat);
+}
+
+function applyChatReadStateLocally(chatId, state) {
+  const normalizedChatId = Number(chatId || 0);
+  if (!normalizedChatId || !state) return;
+
+  chats = (chats || []).map((chat) => (
+    Number(chat.id) === normalizedChatId ? { ...chat, ...state } : chat
+  ));
+  if (Number(currentChat?.id) === normalizedChatId) {
+    currentChat = { ...currentChat, ...state };
+  }
+  updateChatRowReadState(normalizedChatId);
+  updateChatCountLabel();
+}
+
+function markChatReadOnOpen(chatId) {
+  const chat = readChatReadStateModel(chatId);
+  if (!chat?.is_unread) return Promise.resolve(null);
+  return chatReadStateController.set(chatId, false).catch((error) => {
+    notify('\u0421\u0442\u0430\u0442\u0443\u0441 \u0447\u0430\u0442\u0430', `\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0442\u043c\u0435\u0442\u0438\u0442\u044c \u0447\u0430\u0442 \u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043d\u044b\u043c: ${String(error.message || error)}`);
+    return null;
+  });
+}
+
+function handleChatListClick(event) {
+  const list = $('chatList');
+  const target = event.target;
+  const item = target?.closest?.('.chat-item[data-chat-id]');
+  if (!list || !item || !list.contains(item)) return;
+
+  const chatId = Number(item.dataset.chatId || 0);
+  if (!chatId) return;
+
+  const readStateControl = target.closest?.('[data-chat-read-state]');
+  if (readStateControl) {
+    event.preventDefault();
+    event.stopPropagation();
+    const chat = readChatReadStateModel(chatId);
+    if (chat?.is_unread) {
+      openChat(chatId);
+      return;
+    }
+    chatReadStateController.set(chatId, true).catch((error) => {
+      notify('\u0421\u0442\u0430\u0442\u0443\u0441 \u0447\u0430\u0442\u0430', `\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0442\u043c\u0435\u0442\u0438\u0442\u044c \u0447\u0430\u0442 \u043d\u0435\u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043d\u044b\u043c: ${String(error.message || error)}`);
+    });
+    return;
+  }
+
+  openChat(chatId);
+}
+
+function handleChatListKeydown(event) {
+  if (!['Enter', ' '].includes(event.key)) return;
+  const item = event.target?.closest?.('.chat-item[data-chat-id]');
+  if (!item || event.target !== item) return;
+  event.preventDefault();
+  openChat(Number(item.dataset.chatId || 0));
+}
+
 function paintChatHeader(chat, options = {}) {
   if (!chat) return;
 
@@ -2895,7 +3121,10 @@ async function refreshCurrentChatMessagesOnly(options = {}) {
   const messagesLimit = mobileLayout ? 35 : 120;
 
   try {
-    const chat = await api(`/api/chats/${chatId}?messages_limit=${messagesLimit}`, { timeoutMs: 15000 });
+    const readStateRequestContext = chatReadStateController.captureRequestContext();
+    const serverChat = await api(`/api/chats/${chatId}?messages_limit=${messagesLimit}`, { timeoutMs: 15000 });
+    if (Number(serverChat?.id || 0) !== chatId) return null;
+    const chat = chatReadStateController.reconcile(serverChat, readStateRequestContext);
 
     if (Number(currentChatId) !== chatId) return null;
 
@@ -2935,8 +3164,7 @@ function renderChatList(options = {}) {
   if (!list) return;
   bindChatListInfiniteScroll();
 
-  const chatCountLabel = $('chatCountLabel');
-  if (chatCountLabel) chatCountLabel.textContent = String((chats || []).length);
+  updateChatCountLabel();
 
   // Critical mobile performance fix:
   // while the fullscreen dialog is open the list is not visible. Rendering it
@@ -2967,8 +3195,9 @@ function renderChatList(options = {}) {
   for (const chat of chatsToRender) {
     const item = document.createElement('div');
     const showWaitingMarker = shouldShowWaitingMarker(chat);
-    item.className = `chat-item ${chat.id === currentChatId ? 'active' : ''} ${showWaitingMarker ? 'needs-response' : ''}`;
-    item.onclick = () => openChat(chat.id);
+    item.className = `chat-item ${chat.id === currentChatId ? 'active' : ''} ${showWaitingMarker ? 'needs-response' : ''} ${chat.is_unread ? 'is-unread' : ''}`;
+    item.dataset.chatId = String(chat.id);
+    item.dataset.unread = chat.is_unread ? '1' : '0';
     const slaBadge = waitingResponseBadge(chat);
     const assigneeBadge = chat.assigned_user_id ? `<span class="assignee-chip">${escapeHtml(chat.assigned_user_display_name || chat.assigned_user_username || chat.assigned_to || 'назначен')}</span>` : '';
     const time = formatChatTime(chat.last_message_at || chat.updated_at || chat.created_at);
@@ -2979,13 +3208,18 @@ function renderChatList(options = {}) {
       <div class="chat-item-topline">
         <div class="chat-item-title">
           <strong title="${escapeHtml(customerLabel(chat))}">${escapeHtml(customerLabel(chat))}</strong>
-          <span class="chat-time">${escapeHtml(time)}</span>
         </div>
         <span class="badge ${chat.marketplace}">${marketplaceNames[chat.marketplace] || chat.marketplace}</span>
       </div>
       <p class="preview ${chat.search_match_text ? 'chat-search-match-preview' : ''}">${escapeHtml(searchMatch)}</p>
       <div class="chat-item-footer">
         <div class="chat-badges">${statusBadge(chat.status, chat.status_label, chat.status_color)}${slaBadge}${assigneeBadge}</div>
+        <div class="chat-item-read-meta">
+          <button class="chat-read-state-control" type="button" data-chat-read-state data-chat-id="${chat.id}" tabindex="${chat.is_unread ? '-1' : '0'}" aria-label="${chat.is_unread ? '\u041d\u0435\u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043d\u044b\u0439 \u0447\u0430\u0442' : '\u041e\u0442\u043c\u0435\u0442\u0438\u0442\u044c \u0447\u0430\u0442 \u043d\u0435\u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043d\u044b\u043c'}" aria-pressed="${chat.is_unread ? 'true' : 'false'}" title="${chat.is_unread ? '\u041d\u0435\u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043d\u044b\u0439 \u0447\u0430\u0442' : '\u041e\u0442\u043c\u0435\u0442\u0438\u0442\u044c \u043d\u0435\u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043d\u044b\u043c'}">
+            <span class="chat-read-state-dot" aria-hidden="true"></span>
+          </button>
+          <span class="chat-time">${escapeHtml(time)}</span>
+        </div>
       </div>
     `;
     fragment.appendChild(item);
@@ -3030,6 +3264,7 @@ async function openChat(chatId, options = {}) {
   // Make the tap feel instant: show the chat screen before the API responds.
   $('emptyState')?.classList.add('hidden');
   $('chatPanel')?.classList.remove('hidden');
+  markChatReadOnOpen(chatId);
   setMobileChatOpen(true);
   paintChatShellFromSummary(chatId, previousChatId);
   requestAnimationFrame(() => setMobileChatOpen(true));
@@ -3041,9 +3276,14 @@ async function openChat(chatId, options = {}) {
   const messagesLimit = mobileLayout ? 35 : 120;
 
   let chat;
+  const readStateRequestContext = chatReadStateController.captureRequestContext();
   chatOpenInFlight = true;
   try {
-    chat = await api(`/api/chats/${chatId}?messages_limit=${messagesLimit}`);
+    const serverChat = await api(`/api/chats/${chatId}?messages_limit=${messagesLimit}`);
+    if (Number(serverChat?.id || 0) !== Number(chatId)) {
+      throw new Error('Read-state response chat ID mismatch');
+    }
+    chat = chatReadStateController.reconcile(serverChat, readStateRequestContext);
   } catch (err) {
     if (requestSeq === openChatRequestSeq) {
       notify('Не удалось открыть чат', String(err.message || err));
@@ -3066,6 +3306,7 @@ async function openChat(chatId, options = {}) {
   if (selectedAiMessageId && !(chat.messages || []).some(m => Number(m.id) === Number(selectedAiMessageId))) {
     selectedAiMessageId = null;
   }
+  markChatReadOnOpen(chatId);
 
   paintChatHeader(chat, { forceControls: true });
 

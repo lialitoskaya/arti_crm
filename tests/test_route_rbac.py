@@ -31,6 +31,7 @@ _VIEWER_SELF_SERVICE_ROUTES = (
     ("POST", "/api/push/subscribe"),
     ("POST", "/api/push/unsubscribe"),
     ("POST", "/api/notifications/91/read"),
+    ("PATCH", "/api/chats/91/read-state"),
     ("POST", "/api/notifications/read-all"),
 )
 _ADMIN_ONLY_ROUTES = (
@@ -212,6 +213,7 @@ class RouteRbacTests(unittest.TestCase):
                         ("POST", "/api/push/subscribe"),
                         ("POST", "/api/push/unsubscribe"),
                         ("POST", "/api/notifications/{notification_id}/read"),
+                        ("PATCH", "/api/chats/{chat_id}/read-state"),
                         ("POST", "/api/notifications/read-all"),
                         ("POST", "/api/background/tick"),
                         ("POST", "/api/webhooks/yandex"),
@@ -222,6 +224,7 @@ class RouteRbacTests(unittest.TestCase):
         expected_special_routes = {
             ("GET", "/api/chat-settings"): "authenticated_read",
             ("POST", "/api/notifications/{notification_id}/read"): "viewer_self_service",
+            ("PATCH", "/api/chats/{chat_id}/read-state"): "viewer_self_service",
             ("POST", "/api/notifications/read-all"): "viewer_self_service",
             ("POST", "/api/background/tick"): "token_only",
             ("POST", "/api/webhooks/yandex"): "webhook_unchanged",

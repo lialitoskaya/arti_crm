@@ -187,6 +187,18 @@ def init_db() -> None:
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS chat_user_states (
+                user_id INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL,
+                last_read_message_id INTEGER,
+                last_read_at TEXT,
+                is_marked_unread INTEGER NOT NULL DEFAULT 0 CHECK(is_marked_unread IN (0, 1)),
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(user_id, chat_id),
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY(chat_id) REFERENCES chats(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS yandex_oauth_links (
                 yandex_user_id TEXT PRIMARY KEY,
                 crm_user_id INTEGER NOT NULL,
@@ -557,6 +569,10 @@ def init_db() -> None:
                 ON messages(chat_id, direction, created_at);
             CREATE INDEX IF NOT EXISTS idx_messages_chat_created_id
                 ON messages(chat_id, created_at DESC, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_messages_chat_direction_id
+                ON messages(chat_id, direction, id);
+            CREATE INDEX IF NOT EXISTS idx_chat_user_states_chat_user
+                ON chat_user_states(chat_id, user_id);
             CREATE INDEX IF NOT EXISTS idx_tasks_chat_created_id
                 ON tasks(chat_id, created_at DESC, id DESC);
             CREATE INDEX IF NOT EXISTS idx_chats_marketplace_status_last_message

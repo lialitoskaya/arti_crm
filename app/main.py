@@ -68,7 +68,7 @@ from app.connectors.ozon import OzonConnector
 from app.connectors.wildberries import WildberriesConnector
 from app.connectors.yandex_market import YandexMarketConnector
 from app.db import get_connection, init_db
-from app.schemas import AiReplyCreate, ChatCreate, ChatUpdate, InternalNoteCreate, InternalNoteUpdate, LoginCreate, MessageCreate, ReviewReplyCreate, QuestionAnswerCreate, TaskCreate, TaskUpdate, UserCreate, UserPasswordUpdate, UserUpdate, ProfileUpdate, KnowledgeCategoryCreate, KnowledgeArticleCreate, KnowledgeArticleUpdate, YandexOAuthManagedLinkCreate, YandexOAuthManagedLinkUpdate
+from app.schemas import AiReplyCreate, ChatCreate, ChatReadStateUpdate, ChatUpdate, InternalNoteCreate, InternalNoteUpdate, LoginCreate, MessageCreate, ReviewReplyCreate, QuestionAnswerCreate, TaskCreate, TaskUpdate, UserCreate, UserPasswordUpdate, UserUpdate, ProfileUpdate, KnowledgeCategoryCreate, KnowledgeArticleCreate, KnowledgeArticleUpdate, YandexOAuthManagedLinkCreate, YandexOAuthManagedLinkUpdate
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -5043,16 +5043,39 @@ def list_chats(
         assigned_user_id=assigned_user_id,
         funnel_id=funnel_id,
         q=q,
+        current_user_id=int(user["id"]),
     )
 
 
 @app.get("/api/chats/{chat_id}")
-def get_chat(chat_id: int, messages_limit: int = 120) -> dict[str, Any]:
+def get_chat(chat_id: int, request: Request, messages_limit: int = 120) -> dict[str, Any]:
+    user = _current_user(request)
     safe_limit = max(20, min(int(messages_limit or 120), 500))
-    chat = repo.get_chat(chat_id, messages_limit=safe_limit)
+    chat = repo.get_chat(
+        chat_id,
+        messages_limit=safe_limit,
+        current_user_id=int(user["id"]),
+    )
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
     return chat
+
+
+@app.patch("/api/chats/{chat_id}/read-state")
+def update_chat_read_state(
+    chat_id: int,
+    payload: ChatReadStateUpdate,
+    request: Request,
+) -> dict[str, Any]:
+    user = _current_user(request)
+    state = repo.set_chat_read_state(
+        chat_id,
+        int(user["id"]),
+        is_unread=payload.is_unread,
+    )
+    if not state:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    return state
 
 
 

@@ -1314,13 +1314,11 @@ textarea {
 }
 
 #chatsView .chat-time {
-  position: absolute;
-  right: 12px;
-  bottom: 12px;
   color: #777777;
   font-size: 10px;
   line-height: 1;
   font-weight: 400;
+  white-space: nowrap;
 }
 
 #chatsView .chat-item-topline > .badge {
@@ -1347,6 +1345,69 @@ textarea {
 
 #chatsView .chat-badges {
   padding-right: 0;
+}
+#chatsView .chat-item-title {
+  padding-right: 94px;
+}
+
+#chatsView .chat-item-footer {
+  flex-wrap: nowrap;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+#chatsView .chat-badges {
+  flex: 1 1 auto;
+}
+
+#chatsView .chat-item-read-meta {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-end;
+  gap: 4px;
+  min-height: 18px;
+  margin-left: auto;
+}
+
+#chatsView .chat-read-state-control {
+  width: 18px;
+  height: 18px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+#chatsView .chat-read-state-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ef4444;
+  opacity: 0;
+}
+
+#chatsView .chat-item.is-unread .chat-read-state-dot {
+  opacity: 1;
+}
+
+#chatsView .chat-item:not(.is-unread) .chat-read-state-control:hover,
+#chatsView .chat-item:not(.is-unread) .chat-read-state-control:focus-visible {
+  border-color: var(--crm-line-strong);
+  outline: none;
+}
+
+#chatsView .chat-item.is-unread .chat-item-title strong {
+  font-weight: 650;
+}
+
+#chatsView .chat-item.is-unread .preview {
+  font-weight: 500;
 }
 
 #chatsView .status-badge,
@@ -1442,7 +1503,7 @@ textarea {
 
 #chatsView .chat-item,
 #chatsView .empty-chat-item {
-  padding-right: 108px;
+  padding-right: 12px;
   overflow: hidden;
 }
 
@@ -1486,7 +1547,7 @@ textarea {
 @media (max-width: 900px) {
   #chatsView .chat-item,
   #chatsView .empty-chat-item {
-    padding-right: 102px;
+    padding-right: 12px;
   }
 }
 
