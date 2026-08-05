@@ -5026,3 +5026,10 @@ def update_reply_template(template_id: int, *, title: str | None = None, content
             return None
         conn.execute(f"UPDATE reply_templates SET {', '.join(fields)} WHERE id=?", params)
     return get_reply_template(template_id)
+
+
+def delete_reply_template(template_id: int) -> bool:
+    with get_connection() as conn:
+        _ensure_reply_templates_table(conn)
+        cursor = conn.execute("DELETE FROM reply_templates WHERE id=?", (template_id,))
+        return cursor.rowcount > 0

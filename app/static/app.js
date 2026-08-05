@@ -266,6 +266,7 @@ let taskTypes = [];
 let replyTemplatesLoaded = false;
 let replyTemplatesPanelOpen = false;
 let replyTemplateSaving = false;
+let replyTemplateEditingId = null;
 const REPLY_TEMPLATES_LOCAL_STORAGE_KEY = 'artiCrm.replyTemplates.fallback';
 // Mobile navigation: when an operator taps 'back to chat list', keep the selected
 // chat in memory but do not auto-open it again during background refresh.
@@ -1315,6 +1316,19 @@ function formatChatTime(value) {
   return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
 }
 
+function formatMessageTime(value) {
+  const d = parseDate(value);
+  if (!d) return '';
+  const time = d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  if (d.toDateString() === new Date().toDateString()) return time;
+  const date = d.toLocaleDateString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+  return `${date}, ${time}`;
+}
+
 
 function isImagePlaceholderText(value) {
   const text = String(value || '').trim();
@@ -1617,7 +1631,11 @@ function bindTaskCardActions(item, options = {}) {
       }
       btn.disabled = true;
       try {
-        await patchTask(taskId, body, options);
+        if (action === 'save') {
+          await saveTaskChatEditor(taskId, body, card, options);
+        } else {
+          await patchTask(taskId, body, options);
+        }
       } catch (err) {
         notify('Не удалось обновить задачу', String(err.message || err));
       } finally {
@@ -3268,7 +3286,7 @@ function renderMessages(messages) {
 
       const timeEl = document.createElement('span');
       timeEl.className = 'message-time';
-      timeEl.textContent = formatChatTime(message.created_at || message.updated_at || '');
+      timeEl.textContent = formatMessageTime(message.created_at || message.updated_at || '');
       footer.appendChild(timeEl);
 
       const receipt = messageReceiptInfo(message, receiptContext);
@@ -4427,9 +4445,31 @@ async function submitQuestionAnswer(event) {
 }
 
 
+function shouldPreserveTaskChatEditor(box, chatId = currentChatId) {
+  const renderedChatId = Number(box?.dataset?.chatId || 0);
+  if (!renderedChatId || renderedChatId !== Number(chatId || 0)) return false;
+  return Boolean(box.querySelector('[data-task-edit-panel]:not(.hidden)'));
+}
+
+function closeTaskChatEditor(card) {
+  const panel = card?.querySelector('[data-task-edit-panel]');
+  const toggle = card?.querySelector('[data-task-edit-toggle]');
+  panel?.classList.add('hidden');
+  if (toggle) toggle.textContent = 'Изменить';
+}
+
+async function saveTaskChatEditor(taskId, body, card, options = {}) {
+  const task = await patchTask(taskId, body, { ...options, refreshChat: false });
+  closeTaskChatEditor(card);
+  if (currentChatId && options.refreshChat !== false) await openChat(currentChatId);
+  return task;
+}
+
 function renderTasks(tasks) {
   const box = $('taskList');
   if (!box) return;
+  if (shouldPreserveTaskChatEditor(box)) return;
+  box.dataset.chatId = currentChatId ? String(currentChatId) : '';
   box.innerHTML = '';
   if (!currentChatId) {
     box.innerHTML = '<p class="muted">Выберите чат.</p>';
@@ -4450,6 +4490,7 @@ function renderTasks(tasks) {
     const dueLabel = formatDateTime(task.due_at) || 'Без даты';
     item.className = `task-card task-chat-card task-chat-status-${escapeHtml(statusClass)}`;
     item.dataset.taskCard = '1';
+    item.dataset.taskId = String(task.id);
     item.innerHTML = `
       <div class="task-chat-card-head">
         <div class="task-chat-card-badges">
@@ -4513,8 +4554,7 @@ function bindTaskChatEditToggle(item) {
   });
   if (cancel) {
     cancel.addEventListener('click', () => {
-      panel.classList.add('hidden');
-      toggle.textContent = 'Изменить';
+      closeTaskChatEditor(item);
     });
   }
 }
@@ -6393,11 +6433,21 @@ function renderReplyTemplates() {
     if (template.updated_by || template.created_by) metaParts.push(escapeHtml(template.updated_by || template.created_by));
     if (updated) metaParts.push(`обновлён ${escapeHtml(updated)}`);
     const meta = metaParts.join(' · ');
-    return `<button class="reply-template-item" type="button" data-reply-template-id="${template.id}">
-      <span class="reply-template-item-title">${escapeHtml(template.title || 'Без названия')}</span>
-      <span class="reply-template-item-preview">${escapeHtml(summarizeReplyTemplate(template.content || ''))}</span>
-      ${meta ? `<span class="reply-template-item-meta">${meta}</span>` : ''}
-    </button>`;
+    const templateId = escapeHtml(String(template.id ?? ''));
+    const actions = currentUser?.role === 'admin'
+      ? `<span class="reply-template-actions">
+          <button class="reply-template-action icon-btn" type="button" data-reply-template-edit="${templateId}" aria-label="Редактировать шаблон" title="Редактировать">✎</button>
+          <button class="reply-template-action icon-btn" type="button" data-reply-template-delete="${templateId}" aria-label="Удалить шаблон" title="Удалить">×</button>
+        </span>`
+      : '';
+    return `<div class="reply-template-row">
+      <button class="reply-template-item" type="button" data-reply-template-apply="${templateId}">
+        <span class="reply-template-item-title">${escapeHtml(template.title || 'Без названия')}</span>
+        <span class="reply-template-item-preview">${escapeHtml(summarizeReplyTemplate(template.content || ''))}</span>
+        ${meta ? `<span class="reply-template-item-meta">${meta}</span>` : ''}
+      </button>
+      ${actions}
+    </div>`;
   }).join('');
 }
 
@@ -6420,6 +6470,7 @@ async function loadReplyTemplates(force = false) {
 }
 
 function openReplyTemplateCreateBox() {
+  resetReplyTemplateCreateBox();
   setReplyTemplatesPanel(true);
   fillReplyTemplateFormFromComposer();
   $('replyTemplateCreateBox')?.classList.remove('hidden');
@@ -6427,13 +6478,32 @@ function openReplyTemplateCreateBox() {
 }
 
 function resetReplyTemplateCreateBox() {
+  replyTemplateEditingId = null;
   if ($('replyTemplateTitle')) $('replyTemplateTitle').value = '';
   if ($('replyTemplateContent')) $('replyTemplateContent').value = '';
+  if ($('replyTemplateSaveBtn')) $('replyTemplateSaveBtn').textContent = 'Сохранить';
   $('replyTemplateCreateBox')?.classList.add('hidden');
 }
 
+function replyTemplateById(templateId) {
+  return (replyTemplates || []).find((item) => String(item.id) === String(templateId)) || null;
+}
+
+function openReplyTemplateEditBox(templateId) {
+  if (currentUser?.role !== 'admin') return;
+  const template = replyTemplateById(templateId);
+  if (!template) return;
+  replyTemplateEditingId = String(template.id);
+  if ($('replyTemplateTitle')) $('replyTemplateTitle').value = String(template.title || '');
+  if ($('replyTemplateContent')) $('replyTemplateContent').value = String(template.content || '');
+  if ($('replyTemplateSaveBtn')) $('replyTemplateSaveBtn').textContent = 'Обновить';
+  setReplyTemplatesPanel(true);
+  $('replyTemplateCreateBox')?.classList.remove('hidden');
+  setTimeout(() => $('replyTemplateTitle')?.focus(), 30);
+}
+
 function applyReplyTemplate(templateId) {
-  const template = (replyTemplates || []).find((item) => Number(item.id) === Number(templateId));
+  const template = replyTemplateById(templateId);
   if (!template) return;
   const field = $('messageText');
   if (!field) return;
@@ -6446,6 +6516,25 @@ ${chunk}` : chunk;
   field.focus();
   field.selectionStart = field.selectionEnd = field.value.length;
   setReplyTemplatesPanel(false);
+}
+
+async function deleteReplyTemplate(templateId) {
+  if (currentUser?.role !== 'admin') return;
+  const template = replyTemplateById(templateId);
+  if (!template) return;
+  if (!window.confirm(`Удалить шаблон «${String(template.title || 'Без названия')}»?`)) return;
+
+  if (template._local) {
+    const localTemplates = readLocalReplyTemplates().filter((item) => String(item.id) !== String(template.id));
+    writeLocalReplyTemplates(localTemplates);
+    replyTemplates = (replyTemplates || []).filter((item) => String(item.id) !== String(template.id));
+    renderReplyTemplates();
+  } else {
+    await api(`/api/reply-templates/${encodeURIComponent(String(template.id))}`, { method: 'DELETE' });
+    replyTemplatesLoaded = false;
+    await loadReplyTemplates(true);
+  }
+  if (String(replyTemplateEditingId || '') === String(template.id)) resetReplyTemplateCreateBox();
 }
 
 async function saveReplyTemplateFromComposer() {
@@ -6466,21 +6555,47 @@ async function saveReplyTemplateFromComposer() {
   const saveBtn = $('replyTemplateSaveBtn');
   if (saveBtn) saveBtn.disabled = true;
   try {
-    try {
-      await api('/api/reply-templates', {
-        method: 'POST',
-        body: JSON.stringify({ title, content, sort_order: 0 }),
+    const editingTemplate = replyTemplateEditingId ? replyTemplateById(replyTemplateEditingId) : null;
+    if (replyTemplateEditingId && !editingTemplate) throw new Error('Шаблон больше не существует');
+    if (editingTemplate?._local) {
+      const updatedTemplate = {
+        ...editingTemplate,
+        title,
+        content,
+        updated_at: new Date().toISOString(),
+      };
+      const localTemplates = readLocalReplyTemplates().map((item) => (
+        String(item.id) === String(editingTemplate.id) ? updatedTemplate : item
+      ));
+      writeLocalReplyTemplates(localTemplates);
+      replyTemplates = (replyTemplates || []).map((item) => (
+        String(item.id) === String(editingTemplate.id) ? updatedTemplate : item
+      ));
+      renderReplyTemplates();
+    } else if (editingTemplate) {
+      await api(`/api/reply-templates/${encodeURIComponent(String(editingTemplate.id))}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ title, content }),
       });
       replyTemplatesLoaded = false;
       await loadReplyTemplates(true);
-    } catch (backendErr) {
-      console.warn('reply templates backend save failed, saving locally', backendErr);
-      const localTemplates = readLocalReplyTemplates();
-      const localItem = makeLocalReplyTemplate(title, content);
-      localTemplates.unshift(localItem);
-      writeLocalReplyTemplates(localTemplates);
-      replyTemplates = [localItem, ...(replyTemplates || [])];
-      renderReplyTemplates();
+    } else {
+      try {
+        await api('/api/reply-templates', {
+          method: 'POST',
+          body: JSON.stringify({ title, content, sort_order: 0 }),
+        });
+        replyTemplatesLoaded = false;
+        await loadReplyTemplates(true);
+      } catch (backendErr) {
+        console.warn('reply templates backend save failed, saving locally', backendErr);
+        const localTemplates = readLocalReplyTemplates();
+        const localItem = makeLocalReplyTemplate(title, content);
+        localTemplates.unshift(localItem);
+        writeLocalReplyTemplates(localTemplates);
+        replyTemplates = [localItem, ...(replyTemplates || [])];
+        renderReplyTemplates();
+      }
     }
     resetReplyTemplateCreateBox();
     setReplyTemplatesPanel(true);
@@ -7452,10 +7567,26 @@ function init() {
   bind('replyTemplatesCloseBtn', 'click', () => setReplyTemplatesPanel(false));
   bind('replyTemplateCancelBtn', 'click', resetReplyTemplateCreateBox);
   bind('replyTemplateSaveBtn', 'click', saveReplyTemplateFromComposer);
-  $('replyTemplatesList')?.addEventListener('click', (event) => {
-    const button = event.target?.closest?.('[data-reply-template-id]');
-    if (!button) return;
-    applyReplyTemplate(button.dataset.replyTemplateId);
+  $('replyTemplatesList')?.addEventListener('click', async (event) => {
+    const editButton = event.target?.closest?.('[data-reply-template-edit]');
+    if (editButton) {
+      openReplyTemplateEditBox(editButton.dataset.replyTemplateEdit);
+      return;
+    }
+    const deleteButton = event.target?.closest?.('[data-reply-template-delete]');
+    if (deleteButton) {
+      deleteButton.disabled = true;
+      try {
+        await deleteReplyTemplate(deleteButton.dataset.replyTemplateDelete);
+      } catch (err) {
+        notify('Шаблоны', `Не удалось удалить шаблон: ${String(err.message || err)}`);
+      } finally {
+        deleteButton.disabled = false;
+      }
+      return;
+    }
+    const applyButton = event.target?.closest?.('[data-reply-template-apply]');
+    if (applyButton) applyReplyTemplate(applyButton.dataset.replyTemplateApply);
   });
   bind('attachImageBtn', 'click', () => $('chatImageInput')?.click());
   bind('chatImageInput', 'change', handleChatImageSelection);
