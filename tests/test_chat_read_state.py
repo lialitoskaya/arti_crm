@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -13,7 +14,6 @@ from app.schemas import ChatCreate  # noqa: E402
 
 
 main = foundation.main
-_TEST_EVENT_LOOP = foundation._TEST_EVENT_LOOP
 
 
 async def _client_for_user(user: dict[str, object]) -> httpx.AsyncClient:
@@ -183,7 +183,7 @@ class ChatReadStateTests(unittest.TestCase):
             mock.patch.object(main, "_sync_ozon_fast_inbox_locked") as fast_sync,
             mock.patch.object(main, "_run_background_tick_once") as background_tick,
         ):
-            first, second = _TEST_EVENT_LOOP.run_until_complete(exercise())
+            first, second = asyncio.run(exercise())
 
         self.assertEqual(200, first.status_code)
         self.assertEqual(200, second.status_code)
@@ -206,7 +206,7 @@ class ChatReadStateTests(unittest.TestCase):
                     json={"is_unread": False},
                 )
 
-        response = _TEST_EVENT_LOOP.run_until_complete(exercise())
+        response = asyncio.run(exercise())
         self.assertEqual(401, response.status_code)
 
     def test_authenticated_patch_without_csrf_is_rejected(self) -> None:
@@ -217,7 +217,7 @@ class ChatReadStateTests(unittest.TestCase):
                     json={"is_unread": False},
                 )
 
-        response = _TEST_EVENT_LOOP.run_until_complete(exercise())
+        response = asyncio.run(exercise())
         self.assertEqual(403, response.status_code)
         self.assertIn("CSRF", response.json()["detail"])
 

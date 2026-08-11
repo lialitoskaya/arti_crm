@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -13,7 +14,6 @@ from app.schemas import ChatCreate  # noqa: E402
 
 
 main = foundation.main
-_TEST_EVENT_LOOP = foundation._TEST_EVENT_LOOP
 
 
 class ChatListPaginationTests(unittest.TestCase):
@@ -107,7 +107,7 @@ class ChatListPaginationTests(unittest.TestCase):
                 )
                 return legacy, paginated
 
-        legacy, paginated = _TEST_EVENT_LOOP.run_until_complete(exercise())
+        legacy, paginated = asyncio.run(exercise())
 
         self.assertEqual(200, legacy.status_code)
         self.assertIsInstance(legacy.json(), list)

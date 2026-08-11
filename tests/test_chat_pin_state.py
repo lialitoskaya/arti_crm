@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest import mock
@@ -13,7 +14,6 @@ from app.schemas import ChatCreate  # noqa: E402
 
 
 main = foundation.main
-_TEST_EVENT_LOOP = foundation._TEST_EVENT_LOOP
 
 
 async def _client_for_user(user: dict[str, object]) -> httpx.AsyncClient:
@@ -190,7 +190,7 @@ class ChatPinStateTests(unittest.TestCase):
             mock.patch.object(main, "_sync_ozon_fast_inbox_locked") as fast_sync,
             mock.patch.object(main, "_run_background_tick_once") as background_tick,
         ):
-            first, second = _TEST_EVENT_LOOP.run_until_complete(exercise())
+            first, second = asyncio.run(exercise())
 
         self.assertEqual(200, first.status_code)
         self.assertEqual(first.json(), second.json())
@@ -219,7 +219,7 @@ class ChatPinStateTests(unittest.TestCase):
                 )
             return unauthenticated, without_csrf
 
-        unauthenticated, without_csrf = _TEST_EVENT_LOOP.run_until_complete(exercise())
+        unauthenticated, without_csrf = asyncio.run(exercise())
         self.assertEqual(401, unauthenticated.status_code)
         self.assertEqual(403, without_csrf.status_code)
 
