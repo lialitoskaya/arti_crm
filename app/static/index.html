@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <script src="/static/theme-init.js?v=v79-strict-csp-secure-cookie-20260708"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=v94-3-crm-message-author-20260805" />
+  <link rel="stylesheet" href="/static/styles.css?v=v94-4-chat-infinite-scroll-20260806" />
 
 </head>
 <body class="auth-pending">
@@ -154,11 +154,10 @@
           </div>
           <div id="stats" class="stats"></div>
           <div id="chatList" class="chat-list"></div>
-          <nav id="chatListPager" class="chat-list-pager hidden" aria-label="Страницы списка чатов">
-            <button id="chatListPrevBtn" class="chat-list-page-btn" type="button" aria-label="Предыдущая страница">←</button>
-            <span id="chatListPageLabel" class="chat-list-page-label" aria-live="polite">1 / 1</span>
-            <button id="chatListNextBtn" class="chat-list-page-btn" type="button" aria-label="Следующая страница">→</button>
-          </nav>
+          <div id="chatListLoadState" class="chat-list-load-state hidden" aria-live="polite" aria-atomic="true">
+            <span class="chat-list-load-spinner" aria-hidden="true"></span>
+            <span id="chatListLoadLabel"></span>
+          </div>
         </aside>
 
         <section class="conversation panel-card">
@@ -983,6 +982,6 @@
 
   <div id="notificationToasts" class="notification-toast-stack" aria-live="polite"></div>
 
-  <script src="/static/app.js?v=v94-3-crm-message-author-20260805"></script>
+  <script src="/static/app.js?v=v94-4-chat-infinite-scroll-20260806"></script>
 </body>
 </html>

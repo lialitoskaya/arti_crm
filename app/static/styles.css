@@ -1314,47 +1314,29 @@ textarea {
   padding: 0 0 8px;
 }
 
-#chatsView .chat-list-pager {
+#chatsView .chat-list-load-state {
   flex: none;
+  min-height: 30px;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  min-height: 38px;
-  padding: 4px 0 0;
-}
-
-#chatsView .chat-list-page-btn {
-  width: 34px;
-  height: 30px;
-  display: inline-grid;
-  place-items: center;
-  padding: 0;
-  border: 1px solid var(--crm-line);
-  border-radius: 6px;
-  background: var(--crm-panel-soft);
-  color: var(--crm-text);
-  cursor: pointer;
-}
-
-#chatsView .chat-list-page-btn:hover:not(:disabled),
-#chatsView .chat-list-page-btn:focus-visible {
-  border-color: var(--crm-line-strong);
-  background: var(--crm-panel);
-  outline: none;
-}
-
-#chatsView .chat-list-page-btn:disabled {
-  opacity: .38;
-  cursor: default;
-}
-
-#chatsView .chat-list-page-label {
-  min-width: 64px;
-  text-align: center;
+  gap: 8px;
+  padding: 3px 0 0;
   color: var(--crm-muted);
   font-size: 12px;
-  font-variant-numeric: tabular-nums;
+}
+
+#chatsView .chat-list-load-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--crm-line);
+  border-top-color: var(--crm-muted);
+  border-radius: 50%;
+  animation: chat-list-load-spin .75s linear infinite;
+}
+
+@keyframes chat-list-load-spin {
+  to { transform: rotate(360deg); }
 }
 
 #chatsView .chat-item,

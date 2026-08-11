@@ -42,15 +42,21 @@ unread metadata and the global CRM workflow status are not personal read state.
 7. The pin control is placed in the top-right action group before the marketplace
    badge. It uses delegated events and does not open the chat.
 
-## Chat-list pagination
+## Chat-list lazy loading
 
-1. The interactive CRM list loads at most 100 chats per page.
+1. The interactive CRM list initially loads 30 chats and requests the next 30
+   only when the operator scrolls near the end of the loaded list.
 2. Marketplace, workflow, owner, archive, and message-search filters are applied
-   by SQLite before pagination.
+   by SQLite before each bounded batch.
 3. The displayed total and unread counters describe the complete filtered result,
-   not only the current page.
-4. Page navigation does not load message history or call marketplace APIs.
-5. The legacy non-paginated repository/API behavior remains available for existing
+   not only the loaded batches.
+4. A batch append must be single-flight, deduplicate chat ids, preserve scroll
+   position, and never load message history or call marketplace APIs.
+5. Changing a filter, search, owner scope, or archive scope resets the feed to the
+   first batch; stale responses from the previous query must be ignored.
+6. Passive refreshes update the loaded prefix and must not discard already loaded
+   older dialogs or force the operator back to the top.
+7. The legacy non-paginated repository/API behavior remains available for existing
    non-UI consumers until they are migrated explicitly.
 
 ## CRM outbound message author

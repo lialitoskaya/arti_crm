@@ -5038,7 +5038,7 @@ def list_chats(
     funnel_id: int | None = None,
     q: str | None = None,
     paginated: bool = False,
-    limit: int = 100,
+    limit: int = 30,
     offset: int = 0,
 ) -> list[dict[str, Any]] | dict[str, Any]:
     user = _current_user(request)

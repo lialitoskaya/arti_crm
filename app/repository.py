@@ -3303,11 +3303,11 @@ def list_chats_page(
     funnel_id: int | None = None,
     q: str | None = None,
     current_user_id: int | None = None,
-    limit: int = 100,
+    limit: int = 30,
     offset: int = 0,
 ) -> dict[str, Any]:
-    """Return one bounded chat page plus canonical total/unread counters."""
-    safe_limit = max(20, min(int(limit or 100), 200))
+    """Return one bounded chat batch plus canonical total/unread counters."""
+    safe_limit = max(20, min(int(limit or 30), 200))
     safe_offset = max(0, int(offset or 0))
     where, params, search_variants, search_params = _chat_list_query_parts(
         status=status,

@@ -141,18 +141,23 @@ PATCH /api/chats/{chat_id}/pin-state
 
 Chat list SQL sorts the current user's pinned chats first and preserves descending
 message activity order inside pinned and ordinary groups. The frontend applies a
-per-chat optimistic update with rollback and stale-GET protection, then reloads
-only the bounded current page to reconcile global ordering. A single delegated
-list handler owns the control; clicking the pin never opens the chat.
+per-chat optimistic update with rollback and stale-GET protection, then refreshes
+the bounded loaded prefix to reconcile global ordering. A single delegated list
+handler owns the control; clicking the pin never opens the chat.
 
-## Bounded chat-list pagination
+## Bounded chat-list lazy loading
 
-The browser uses the opt-in paginated form of `GET /api/chats` with a fixed
-page size of 100. The repository applies `LIMIT/OFFSET` in SQLite and returns
-canonical `total` and personal `unread_total` counters separately from the page
-items. The legacy list response remains available when `paginated` is omitted,
-so existing internal consumers are not broken.
+The browser uses the opt-in paginated form of `GET /api/chats` as a transport
+contract, but presents it as infinite scroll rather than numbered pages. The
+first request loads 30 chats and each near-end scroll requests the next 30.
+SQLite applies `LIMIT/OFFSET` before serialization and returns canonical `total`
+and personal `unread_total` counters separately from each batch. The legacy list
+response remains available when `paginated` is omitted, so existing internal
+consumers are not broken.
 
-Only the current page is rendered in the DOM. Filters, search, owner scope, and
-archive scope reset the offset to the first page; passive refreshes reload only
-the current page. This bounds the normal chat-row DOM to at most 100 items.
+Filters, search, owner scope, and archive scope reset the feed to the first
+30-item batch. Passive refreshes update the already loaded prefix instead of
+resetting the operator to page one. Duplicate ids are rejected when a later
+batch is merged, only one list request may be in flight, and stale filter/search
+responses are ignored. The DOM therefore starts with 30 rows and grows only as
+the operator actually scrolls through older dialogs.
