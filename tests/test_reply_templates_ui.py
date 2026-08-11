@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -41,10 +42,11 @@ class ReplyTemplatesUiTests(unittest.TestCase):
         self.assertIn("-webkit-line-clamp: 3", STYLES)
 
     def test_frontend_cache_version_is_consistent(self) -> None:
-        version = "v94-2-reply-template-cards-20260805"
+        match = re.search(r"ARTI_CRM_SW_VERSION = '([^']+)'", SERVICE_WORKER)
+        self.assertIsNotNone(match)
+        version = match.group(1)
         self.assertIn(f"styles.css?v={version}", INDEX)
         self.assertIn(f"app.js?v={version}", INDEX)
-        self.assertIn(f"ARTI_CRM_SW_VERSION = '{version}'", SERVICE_WORKER)
 
 
 if __name__ == "__main__":

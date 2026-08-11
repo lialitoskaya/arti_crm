@@ -90,6 +90,105 @@ def _get_user_label(conn, user_id: int | None) -> str | None:
     row = conn.execute("SELECT id, username, display_name FROM users WHERE id=? AND is_active=1", (user_id,)).fetchone()
     return _user_label_from_row(row_to_dict(row)) if row else None
 
+
+_TECHNICAL_MESSAGE_AUTHOR_LABELS = {
+    "seller",
+    "manager",
+    "operator",
+    "admin",
+    "support",
+    "employee",
+    "staff",
+    "merchant",
+    "supplier",
+    "vendor",
+    "customer",
+    "buyer",
+    "client",
+    "outbound",
+    "продавец",
+    "менеджер",
+    "оператор",
+    "администратор",
+    "покупатель",
+    "клиент",
+    "мы",
+}
+
+
+def _clean_crm_message_author_label(value: Any) -> str | None:
+    label = str(value or "").strip()
+    if not label or label.casefold() in _TECHNICAL_MESSAGE_AUTHOR_LABELS:
+        return None
+    return label
+
+
+def _message_was_sent_via_crm(message: dict[str, Any]) -> bool:
+    if str(message.get("direction") or "").strip().lower() != "outbound":
+        return False
+    raw = message.get("raw") if isinstance(message.get("raw"), dict) else {}
+    return bool(
+        raw.get("_crm_sent_from_crm")
+        or raw.get("_crm_sent_by_label")
+        or raw.get("_crm_sent_by_user_id")
+        or raw.get("_crm_marketplace_attachment_sent")
+        or raw.get("_crm_local_attachment")
+    )
+
+
+def _decorate_crm_message_author_labels(
+    conn: sqlite3.Connection,
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Expose a stable employee label only for messages sent from this CRM.
+
+    Marketplace-origin outbound messages may use generic authors such as
+    ``seller`` or ``operator``. Those values are not employee identities and
+    must never be rendered as such. CRM markers are therefore the boundary,
+    and user IDs are resolved in one bulk query to avoid an N+1 lookup.
+    """
+
+    sender_user_ids: set[int] = set()
+    for message in messages:
+        if not _message_was_sent_via_crm(message):
+            continue
+        raw = message.get("raw") if isinstance(message.get("raw"), dict) else {}
+        try:
+            sender_user_id = int(raw.get("_crm_sent_by_user_id") or 0)
+        except (TypeError, ValueError):
+            sender_user_id = 0
+        if sender_user_id > 0:
+            sender_user_ids.add(sender_user_id)
+
+    labels_by_user_id: dict[int, str] = {}
+    if sender_user_ids:
+        placeholders = ",".join("?" for _ in sender_user_ids)
+        rows = conn.execute(
+            f"SELECT id, username, display_name FROM users WHERE id IN ({placeholders})",
+            tuple(sorted(sender_user_ids)),
+        ).fetchall()
+        for row in rows:
+            label = _clean_crm_message_author_label(row["display_name"] or row["username"])
+            if label:
+                labels_by_user_id[int(row["id"])] = label
+
+    for message in messages:
+        if not _message_was_sent_via_crm(message):
+            continue
+        raw = message.get("raw") if isinstance(message.get("raw"), dict) else {}
+        try:
+            sender_user_id = int(raw.get("_crm_sent_by_user_id") or 0)
+        except (TypeError, ValueError):
+            sender_user_id = 0
+        label = (
+            _clean_crm_message_author_label(raw.get("_crm_sent_by_label"))
+            or labels_by_user_id.get(sender_user_id)
+            or _clean_crm_message_author_label(message.get("author"))
+        )
+        if label:
+            message["crm_author_label"] = label
+    return messages
+
 def row_to_dict(row) -> dict[str, Any]:
     data = dict(row)
     if "metadata_json" in data:
@@ -3348,7 +3447,8 @@ def get_chat(
             (chat_id,),
         ).fetchall()
         result = _decorate_chat_sla(chat_dict)
-        result["messages"] = [row_to_dict(r) for r in messages]
+        message_items = [row_to_dict(r) for r in messages]
+        result["messages"] = _decorate_crm_message_author_labels(conn, message_items)
         result["tasks"] = [row_to_dict(r) for r in tasks]
         return result
 

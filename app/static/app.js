@@ -3591,6 +3591,11 @@ function buildMessageReceiptContext(messages) {
   };
 }
 
+function crmMessageAuthorLabel(message) {
+  if (!message || message.direction !== 'outbound') return '';
+  return String(message.crm_author_label || '').trim();
+}
+
 function renderMessages(messages) {
   const box = $('messages');
   if (!box) return;
@@ -3726,6 +3731,15 @@ function renderMessages(messages) {
     if (message.direction !== 'internal') {
       const footer = document.createElement('div');
       footer.className = 'message-footer';
+
+      const crmAuthorLabel = crmMessageAuthorLabel(message);
+      if (crmAuthorLabel) {
+        const authorEl = document.createElement('span');
+        authorEl.className = 'message-crm-author';
+        authorEl.textContent = crmAuthorLabel;
+        authorEl.title = `Отправлено через CRM: ${crmAuthorLabel}`;
+        footer.appendChild(authorEl);
+      }
 
       const timeEl = document.createElement('span');
       timeEl.className = 'message-time';

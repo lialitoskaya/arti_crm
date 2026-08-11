@@ -2553,6 +2553,24 @@ textarea {
   line-height: 1;
 }
 
+.message-crm-author {
+  min-width: 0;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--crm-muted);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.message-crm-author::after {
+  content: '·';
+  margin-left: 8px;
+  color: var(--crm-muted-2);
+  font-weight: 400;
+}
+
 .message-actions-menu-wrap {
   position: absolute;
   top: 8px;
@@ -3478,6 +3496,11 @@ html[data-theme="light"] .message-time {
   color: #8490a3 !important;
 }
 
+html:not([data-theme="dark"]) .message-crm-author,
+html[data-theme="light"] .message-crm-author {
+  color: #66758a !important;
+}
+
 html:not([data-theme="dark"]) .message-actions-btn,
 html[data-theme="light"] .message-actions-btn {
   background: rgba(255, 255, 255, .92) !important;
@@ -3587,6 +3610,10 @@ html[data-theme="dark"] .message-bubble .message-text {
 html[data-theme="dark"] .message-footer,
 html[data-theme="dark"] .message-time {
   color: #a8b3c2 !important;
+}
+
+html[data-theme="dark"] .message-crm-author {
+  color: #c3cfdf !important;
 }
 
 html[data-theme="dark"] .message-actions-btn {

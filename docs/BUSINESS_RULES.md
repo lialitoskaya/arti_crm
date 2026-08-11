@@ -52,3 +52,19 @@ unread metadata and the global CRM workflow status are not personal read state.
 4. Page navigation does not load message history or call marketplace APIs.
 5. The legacy non-paginated repository/API behavior remains available for existing
    non-UI consumers until they are migrated explicitly.
+
+## CRM outbound message author
+
+1. Every outbound message sent through the CRM carries CRM-origin markers and the
+   authenticated employee identity at send time.
+2. Chat history exposes `crm_author_label` only for messages proven to have been
+   sent through the CRM. Marketplace-origin outbound messages do not receive a
+   synthetic employee name.
+3. The label resolution order is the saved CRM label, the saved CRM user ID, and
+   finally a non-technical stored author value.
+4. Generic transport roles such as `seller`, `manager`, `operator`, `customer`,
+   and `мы` are never displayed as employee names.
+5. User-ID fallback is resolved in one bulk query per opened chat, not one query
+   per message.
+6. The frontend shows the employee label in the outbound message footer next to
+   the timestamp. Inbound and internal messages are unchanged.
