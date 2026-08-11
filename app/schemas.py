@@ -68,6 +68,7 @@ class ChatStatusUpdate(BaseModel):
 class MessageCreate(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
     author: str | None = "manager"
+    operation_id: str | None = Field(default=None, min_length=8, max_length=120)
 
 
 class AiReplyCreate(BaseModel):

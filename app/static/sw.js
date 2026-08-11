@@ -1,4 +1,4 @@
-const ARTI_CRM_SW_VERSION = 'v94-4-chat-infinite-scroll-20260806';
+const ARTI_CRM_SW_VERSION = 'v94-5-crm-message-identity-20260806';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();

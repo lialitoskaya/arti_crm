@@ -83,7 +83,9 @@ class CrmMessageAuthorLabelTests(unittest.TestCase):
         )
 
         message = self._messages()[0]
-        self.assertNotIn("crm_author_label", message)
+        self.assertIsNone(message["crm_author_label"])
+        self.assertEqual(0, message["is_crm_sent"])
+        self.assertIsNone(message["crm_author_user_id"])
 
     def test_inbound_message_never_gets_crm_employee_label(self) -> None:
         # Bypass add_message's outbound-direction repair so this test can prove
@@ -104,19 +106,35 @@ class CrmMessageAuthorLabelTests(unittest.TestCase):
             )
 
         message = self._messages()[0]
-        self.assertNotIn("crm_author_label", message)
+        self.assertIsNone(message["crm_author_label"])
+        self.assertEqual(0, message["is_crm_sent"])
+        self.assertIsNone(message["crm_author_user_id"])
 
-    def test_local_crm_attachment_uses_nontechnical_author_fallback(self) -> None:
-        repo.add_message(
+    def test_local_crm_attachment_uses_structured_identity(self) -> None:
+        message_id = repo.add_message(
             self.chat_id,
             "outbound",
             "local attachment",
             author="Лия",
             external_message_id="local-attachment",
-            raw={"_crm_local_attachment": True},
+            raw={"attachments": [{"type": "image", "url": "/synthetic/local-image.jpg"}]},
+            is_crm_sent=True,
+            crm_author_user_id=int(self.employee["id"]),
+            crm_author_label=str(self.employee["display_name"]),
+            client_operation_id="operation-local-attachment",
         )
 
         message = self._messages()[0]
+        self.assertEqual(message_id, message["id"])
+        self.assertEqual("outbound", message["direction"])
+        self.assertEqual(1, message["is_crm_sent"])
+        self.assertEqual(int(self.employee["id"]), message["crm_author_user_id"])
+        self.assertEqual("operation-local-attachment", message["client_operation_id"])
+        self.assertEqual(
+            [{"type": "image", "url": "/synthetic/local-image.jpg"}],
+            message["raw"]["attachments"],
+        )
+        self.assertNotIn("_crm_local_attachment", message["raw"])
         self.assertEqual("Лия", message["crm_author_label"])
 
 

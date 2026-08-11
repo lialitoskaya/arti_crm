@@ -77,6 +77,7 @@ class CrmMessageAuthorLabelUiTests(unittest.TestCase):
             {self.helper}
             const crm = crmMessageAuthorLabel({{
               direction: 'outbound',
+              is_crm_sent: 1,
               crm_author_label: 'Лия',
               raw: {{ _crm_sent_from_crm: true }},
             }});
@@ -90,6 +91,7 @@ class CrmMessageAuthorLabelUiTests(unittest.TestCase):
 
             const inbound = crmMessageAuthorLabel({{
               direction: 'inbound',
+              is_crm_sent: 1,
               crm_author_label: 'Лия',
               raw: {{ _crm_sent_from_crm: true }},
             }});

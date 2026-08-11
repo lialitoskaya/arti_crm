@@ -162,11 +162,13 @@ class ChatReadStateTests(unittest.TestCase):
         self.assertEqual("outbound", row["direction"])
         self.assertFalse(self._state(self.manager_a)["is_unread"])
 
-    def test_startup_repair_removes_false_unread_from_crm_sent_row(self) -> None:
+    def test_message_identity_migration_repairs_legacy_row_once(self) -> None:
+        migration_name = "20260806_message_identity"
         self._add_message("inbound", "customer message")
         repo.set_chat_read_state(self.chat_id, int(self.manager_a["id"]), is_unread=False)
 
         with db.get_connection() as conn:
+            conn.execute("DELETE FROM schema_migrations WHERE name=?", (migration_name,))
             cur = conn.execute(
                 """
                 INSERT INTO messages (
@@ -185,14 +187,60 @@ class ChatReadStateTests(unittest.TestCase):
             wrong_message_id = int(cur.lastrowid)
 
         self.assertTrue(self._state(self.manager_a)["is_unread"])
-        self.assertEqual(1, repo.repair_crm_sent_message_directions())
-        self.assertFalse(self._state(self.manager_a)["is_unread"])
+        row_sql = """
+            SELECT direction, is_crm_sent, crm_author_user_id, crm_author_label,
+                   client_operation_id, raw_json
+            FROM messages
+            WHERE id=?
+        """
+
+        db.init_db()
+
         with db.get_connection() as conn:
-            repaired = conn.execute(
-                "SELECT direction FROM messages WHERE id=?",
-                (wrong_message_id,),
-            ).fetchone()
-        self.assertEqual("outbound", repaired["direction"])
+            first = dict(conn.execute(row_sql, (wrong_message_id,)).fetchone())
+            first_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) AS count FROM messages WHERE external_message_id=?",
+                    ("legacy-wrong-direction",),
+                ).fetchone()["count"]
+            )
+            first_marker_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) AS count FROM schema_migrations WHERE name=?",
+                    (migration_name,),
+                ).fetchone()["count"]
+            )
+
+        self.assertFalse(self._state(self.manager_a)["is_unread"])
+        self.assertEqual("outbound", first["direction"])
+        self.assertEqual(1, first["is_crm_sent"])
+        self.assertIsNone(first["crm_author_user_id"])
+        self.assertEqual("Manager A", first["crm_author_label"])
+        self.assertIsNone(first["client_operation_id"])
+        self.assertEqual(1, first_count)
+        self.assertEqual(1, first_marker_count)
+
+        db.init_db()
+
+        with db.get_connection() as conn:
+            second = dict(conn.execute(row_sql, (wrong_message_id,)).fetchone())
+            second_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) AS count FROM messages WHERE external_message_id=?",
+                    ("legacy-wrong-direction",),
+                ).fetchone()["count"]
+            )
+            second_marker_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) AS count FROM schema_migrations WHERE name=?",
+                    (migration_name,),
+                ).fetchone()["count"]
+            )
+
+        self.assertEqual(first, second)
+        self.assertEqual(1, second_count)
+        self.assertEqual(1, second_marker_count)
+        self.assertFalse(self._state(self.manager_a)["is_unread"])
 
     def test_replayed_historical_inbound_does_not_reopen_a_read_chat(self) -> None:
         self._add_message("inbound", "current inbound")

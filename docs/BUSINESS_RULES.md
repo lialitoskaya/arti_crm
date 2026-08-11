@@ -59,6 +59,33 @@ unread metadata and the global CRM workflow status are not personal read state.
 7. The legacy non-paginated repository/API behavior remains available for existing
    non-UI consumers until they are migrated explicitly.
 
+## CRM-sent message identity and employee attribution
+
+1. Every message sent through CRM has one stable `client_operation_id` for the
+   logical send, including all frontend retries.
+2. A repeated request with the same `(chat_id, client_operation_id)` must not call
+   the marketplace connector again after the operation has been persisted.
+3. Marketplace send acknowledgement ids are not treated as canonical history ids;
+   the later provider history record enriches the same local row.
+4. Employee attribution is displayed only when `is_crm_sent=1`. Generic
+   marketplace authors such as `seller`, `manager`, `operator`, or `customer` are
+   not employee identities.
+5. `crm_author_user_id` is the stable employee reference and
+   `crm_author_label` is the historical display label saved with the message.
+6. Marketplace synchronization may enrich raw provider data and the canonical
+   external id, but it must not remove CRM provenance, change the message to
+   inbound, or overwrite the employee label.
+7. Exact provider ids and client operation ids are protected by database unique
+   indexes. Concurrent retries and synchronization reconcile into one row.
+8. Text/time matching is only a fallback when a provider does not expose a common
+   send/history id. It is allowed only for one unambiguous opposite-origin
+   candidate; repeated identical replies remain separate rather than being merged
+   heuristically.
+9. Reconciliation of an outbound marketplace echo must not create personal unread
+   state or a second notification.
+10. Existing duplicate rows are repaired once by an idempotent schema migration;
+    the application does not run recurring legacy repair passes at startup.
+
 ## CRM outbound message author
 
 1. Every outbound message sent through the CRM carries CRM-origin markers and the

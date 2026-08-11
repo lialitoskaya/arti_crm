@@ -1492,17 +1492,23 @@ class SerialQueue {
 
 const outboundMessageQueue = new SerialQueue();
 
-async function sendCurrentChatMessageRequest(chatId, { text, imageFiles }) {
+function createClientOperationId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `crm-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+async function sendCurrentChatMessageRequest(chatId, { text, imageFiles, operationId }) {
   if (imageFiles?.length) {
     const formData = new FormData();
     imageFiles.forEach((file) => formData.append('images', file));
     formData.append('caption', text || '');
+    formData.append('operation_id', operationId);
     return apiForm(`/api/chats/${chatId}/attachments`, formData);
   }
 
   return api(`/api/chats/${chatId}/messages`, {
     method: 'POST',
-    body: JSON.stringify({ text, author: 'manager' }),
+    body: JSON.stringify({ text, author: 'manager', operation_id: operationId }),
   });
 }
 
@@ -3690,6 +3696,8 @@ function buildMessageReceiptContext(messages) {
 
 function crmMessageAuthorLabel(message) {
   if (!message || message.direction !== 'outbound') return '';
+  const isCrmSent = message.is_crm_sent === true || message.is_crm_sent === 1;
+  if (!isCrmSent) return '';
   return String(message.crm_author_label || '').trim();
 }
 
@@ -8180,7 +8188,8 @@ function init() {
 
       try {
         const chatIdForSend = Number(currentChatId);
-        await sendCurrentChatMessageWithRetry(chatIdForSend, { text, imageFiles });
+        const operationId = createClientOperationId();
+        await sendCurrentChatMessageWithRetry(chatIdForSend, { text, imageFiles, operationId });
 
         $('messageText').value = '';
         clearComposerAttachments();

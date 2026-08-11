@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import os
 import sqlite3
-
 import json
 import re
-from contextlib import nullcontext
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
@@ -90,104 +88,6 @@ def _get_user_label(conn, user_id: int | None) -> str | None:
     row = conn.execute("SELECT id, username, display_name FROM users WHERE id=? AND is_active=1", (user_id,)).fetchone()
     return _user_label_from_row(row_to_dict(row)) if row else None
 
-
-_TECHNICAL_MESSAGE_AUTHOR_LABELS = {
-    "seller",
-    "manager",
-    "operator",
-    "admin",
-    "support",
-    "employee",
-    "staff",
-    "merchant",
-    "supplier",
-    "vendor",
-    "customer",
-    "buyer",
-    "client",
-    "outbound",
-    "продавец",
-    "менеджер",
-    "оператор",
-    "администратор",
-    "покупатель",
-    "клиент",
-    "мы",
-}
-
-
-def _clean_crm_message_author_label(value: Any) -> str | None:
-    label = str(value or "").strip()
-    if not label or label.casefold() in _TECHNICAL_MESSAGE_AUTHOR_LABELS:
-        return None
-    return label
-
-
-def _message_was_sent_via_crm(message: dict[str, Any]) -> bool:
-    if str(message.get("direction") or "").strip().lower() != "outbound":
-        return False
-    raw = message.get("raw") if isinstance(message.get("raw"), dict) else {}
-    return bool(
-        raw.get("_crm_sent_from_crm")
-        or raw.get("_crm_sent_by_label")
-        or raw.get("_crm_sent_by_user_id")
-        or raw.get("_crm_marketplace_attachment_sent")
-        or raw.get("_crm_local_attachment")
-    )
-
-
-def _decorate_crm_message_author_labels(
-    conn: sqlite3.Connection,
-    messages: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Expose a stable employee label only for messages sent from this CRM.
-
-    Marketplace-origin outbound messages may use generic authors such as
-    ``seller`` or ``operator``. Those values are not employee identities and
-    must never be rendered as such. CRM markers are therefore the boundary,
-    and user IDs are resolved in one bulk query to avoid an N+1 lookup.
-    """
-
-    sender_user_ids: set[int] = set()
-    for message in messages:
-        if not _message_was_sent_via_crm(message):
-            continue
-        raw = message.get("raw") if isinstance(message.get("raw"), dict) else {}
-        try:
-            sender_user_id = int(raw.get("_crm_sent_by_user_id") or 0)
-        except (TypeError, ValueError):
-            sender_user_id = 0
-        if sender_user_id > 0:
-            sender_user_ids.add(sender_user_id)
-
-    labels_by_user_id: dict[int, str] = {}
-    if sender_user_ids:
-        placeholders = ",".join("?" for _ in sender_user_ids)
-        rows = conn.execute(
-            f"SELECT id, username, display_name FROM users WHERE id IN ({placeholders})",
-            tuple(sorted(sender_user_ids)),
-        ).fetchall()
-        for row in rows:
-            label = _clean_crm_message_author_label(row["display_name"] or row["username"])
-            if label:
-                labels_by_user_id[int(row["id"])] = label
-
-    for message in messages:
-        if not _message_was_sent_via_crm(message):
-            continue
-        raw = message.get("raw") if isinstance(message.get("raw"), dict) else {}
-        try:
-            sender_user_id = int(raw.get("_crm_sent_by_user_id") or 0)
-        except (TypeError, ValueError):
-            sender_user_id = 0
-        label = (
-            _clean_crm_message_author_label(raw.get("_crm_sent_by_label"))
-            or labels_by_user_id.get(sender_user_id)
-            or _clean_crm_message_author_label(message.get("author"))
-        )
-        if label:
-            message["crm_author_label"] = label
-    return messages
 
 def row_to_dict(row) -> dict[str, Any]:
     data = dict(row)
@@ -413,233 +313,228 @@ def find_recent_matching_outbound_message(
 
 
 
-def _is_provisional_outbound_external_id(value: Any) -> bool:
-    """Return True for local send placeholders that are not real marketplace ids."""
-    if value in (None, ""):
-        return True
-    text = str(value).strip()
-    if not text:
-        return True
-    lowered = text.lower()
-    if lowered in {"true", "false", "none", "null", "ok", "success"}:
-        return True
-    # Older send handlers could stringify an object returned in `result`.
-    if text.startswith("{") or text.startswith("["):
-        return True
-    if text.startswith("local:") or text.startswith("crm:"):
-        return True
-    return False
-
-
-def _raw_marks_crm_sent(raw_json: str | None) -> bool:
-    return bool(raw_json and "_crm_sent_from_crm" in raw_json)
+def _message_raw_dict(value: str | None) -> dict[str, Any]:
+    try:
+        payload = json.loads(value or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _merge_message_raw_payload(
     existing_raw_json: str | None,
     incoming_raw: dict[str, Any] | None,
 ) -> str:
-    """Merge sync payload without losing CRM-origin markers from a local send."""
-    try:
-        existing_payload = json.loads(existing_raw_json or "{}")
-    except Exception:
-        existing_payload = {}
-    if not isinstance(existing_payload, dict):
-        existing_payload = {}
-    merged_payload = {**existing_payload, **(incoming_raw or {})}
-    if _truthy_marketplace_flag(existing_payload.get("_crm_sent_from_crm")):
-        merged_payload["_crm_sent_from_crm"] = True
+    """Merge provider data while preserving CRM audit fields."""
+    existing_payload = _message_raw_dict(existing_raw_json)
+    incoming_payload = incoming_raw if isinstance(incoming_raw, dict) else {}
+    merged_payload = {**existing_payload, **incoming_payload}
+    for key in (
+        "_crm_sent_from_crm",
+        "_crm_sent_by_label",
+        "_crm_sent_by_user_id",
+        "_crm_client_operation_id",
+        "_crm_send_ack_message_id",
+        "_crm_marketplace_attachment_sent",
+        "_crm_local_attachment",
+    ):
+        if key in existing_payload:
+            merged_payload[key] = existing_payload[key]
     return json.dumps(merged_payload, ensure_ascii=False)
 
 
-def _find_outbound_echo_candidate_conn(conn, *, chat_id: int, text: str, created_at: str | None, window_seconds: int = 900, exclude_id: int | None = None):
-    """Find a local CRM outbound row that should be upgraded by a marketplace echo.
+def _find_outbound_counterpart_conn(
+    conn: sqlite3.Connection,
+    *,
+    chat_id: int,
+    text: str,
+    created_at: str,
+    incoming_is_crm_sent: bool,
+    window_seconds: int = 180,
+) -> sqlite3.Row | None:
+    """Find one unambiguous opposite-origin row for the same outbound message.
 
-    Some marketplace send endpoints (notably Ozon/WB variants) acknowledge a send
-    without returning the final message id that later appears in history. The CRM
-    creates a local outbound row immediately, then sync imports the marketplace
-    echo as a second outbound row. Match the echo to the local row by chat/text/time
-    and upgrade that row instead of inserting a duplicate.
+    Provider send acknowledgements and history records do not always expose the
+    same message id. The only safe fallback is a close-in-time text match where
+    exactly one side is CRM-origin. Ambiguous matches are deliberately ignored.
     """
-    needle = (text or "").strip()
+    needle = str(text or "").strip()
     if not needle or needle == "[сообщение без текста / вложение]":
         return None
-    safe_window = max(30, min(int(window_seconds or 900), 86400))
-    sql = """
-        SELECT id, external_message_id, author, raw_json, created_at
-        FROM messages
-        WHERE chat_id=?
-          AND direction='outbound'
-          AND TRIM(text)=TRIM(?)
-          AND ABS(strftime('%s', COALESCE(?, created_at)) - strftime('%s', created_at)) <= ?
-    """
-    params: list[Any] = [int(chat_id), needle, created_at, safe_window]
-    if exclude_id is not None:
-        sql += " AND id<>?"
-        params.append(int(exclude_id))
-    sql += " ORDER BY id DESC LIMIT 20"
-    rows = conn.execute(sql, params).fetchall()
-    for row in rows:
-        external_id = row["external_message_id"]
-        raw_json = row["raw_json"] or "{}"
-        if _is_provisional_outbound_external_id(external_id) or _raw_marks_crm_sent(raw_json):
-            return row
-    return None
-
-
-
-def _find_existing_marketplace_echo_for_crm_send_conn(conn, *, chat_id: int, text: str, created_at: str | None, window_seconds: int = 900):
-    """Find a marketplace echo that arrived before the CRM local-send row.
-
-    Race this fixes:
-    1. The operator sends a message from CRM.
-    2. Browser autosync / marketplace sync imports the just-sent seller message first.
-    3. The send endpoint then saves the local CRM row with no final marketplace id.
-
-    Without this reverse lookup the UI briefly shows two outbound bubbles until the
-    repair job removes one. Returning the existing echo lets add_message update it
-    immediately, so the duplicate is filtered before it appears.
-    """
-    needle = (text or "").strip()
-    if not needle or needle == "[сообщение без текста / вложение]":
-        return None
-    safe_window = max(30, min(int(window_seconds or 900), 86400))
+    safe_window = max(10, min(int(window_seconds or 180), 900))
     rows = conn.execute(
         """
-        SELECT id, external_message_id, author, raw_json, created_at
+        SELECT *, ABS(strftime('%s', created_at) - strftime('%s', ?)) AS time_delta
         FROM messages
         WHERE chat_id=?
           AND direction='outbound'
+          AND is_crm_sent=?
           AND TRIM(text)=TRIM(?)
-          AND ABS(strftime('%s', COALESCE(?, created_at)) - strftime('%s', created_at)) <= ?
-        ORDER BY id DESC
-        LIMIT 20
+          AND ABS(strftime('%s', created_at) - strftime('%s', ?)) <= ?
+        ORDER BY time_delta ASC, id ASC
+        LIMIT 2
         """,
-        (int(chat_id), needle, created_at, safe_window),
+        (
+            created_at,
+            int(chat_id),
+            0 if incoming_is_crm_sent else 1,
+            needle,
+            created_at,
+            safe_window,
+        ),
     ).fetchall()
-    for row in rows:
-        raw_json = row["raw_json"] or "{}"
-        # Existing echo must look like marketplace data, not another CRM local row.
-        if _raw_marks_crm_sent(raw_json):
-            continue
-        if _is_provisional_outbound_external_id(row["external_message_id"]):
-            continue
-        return row
+    # Text/time is only a fallback for providers that do not expose the same
+    # id in the send acknowledgement and history. Never guess when more than
+    # one opposite-origin candidate exists: repeated identical replies are
+    # valid user actions and must remain separate messages.
+    if len(rows) != 1:
+        return None
+    return rows[0]
+
+
+def _merge_message_identity_conn(
+    conn: sqlite3.Connection,
+    *,
+    existing: sqlite3.Row,
+    direction: str,
+    author: str | None,
+    text: str,
+    external_message_id: str | None,
+    raw: dict[str, Any] | None,
+    created_at: str,
+    is_crm_sent: bool,
+    crm_author_user_id: int | None,
+    crm_author_label: str | None,
+    client_operation_id: str | None,
+) -> int:
+    existing_is_crm = bool(existing["is_crm_sent"])
+    canonical_is_crm = bool(existing_is_crm or is_crm_sent)
+    canonical_direction = "outbound" if canonical_is_crm else direction
+    canonical_label = (
+        str(existing["crm_author_label"] or "").strip()
+        or str(crm_author_label or "").strip()
+        or None
+    )
+    canonical_user_id = existing["crm_author_user_id"] or crm_author_user_id
+    canonical_operation_id = (
+        str(existing["client_operation_id"] or "").strip()
+        or str(client_operation_id or "").strip()
+        or None
+    )
+    existing_external_id = str(existing["external_message_id"] or "").strip()
+    incoming_external_id = str(external_message_id or "").strip()
+    canonical_external_id = existing_external_id or incoming_external_id or None
+
+    merged_raw = _message_raw_dict(
+        _merge_message_raw_payload(existing["raw_json"], raw)
+    )
+    if is_crm_sent and incoming_external_id:
+        # A send endpoint acknowledgement is audit data, not the canonical
+        # history identity. The provider history id wins when it arrives.
+        merged_raw.setdefault("_crm_send_ack_message_id", incoming_external_id)
+    elif not is_crm_sent and incoming_external_id:
+        if existing_external_id and existing_external_id != incoming_external_id and existing_is_crm:
+            merged_raw.setdefault("_crm_send_ack_message_id", existing_external_id)
+        canonical_external_id = incoming_external_id
+
+    canonical_author = canonical_label or existing["author"] or author
+    canonical_created_at = existing["created_at"] if is_crm_sent else created_at
+    conn.execute(
+        """
+        UPDATE messages
+        SET external_message_id=?, direction=?, author=?, text=?, created_at=?, raw_json=?,
+            is_crm_sent=?, crm_author_user_id=?, crm_author_label=?, client_operation_id=?
+        WHERE id=?
+        """,
+        (
+            canonical_external_id,
+            canonical_direction,
+            canonical_author,
+            text,
+            canonical_created_at,
+            json.dumps(merged_raw, ensure_ascii=False),
+            int(canonical_is_crm),
+            canonical_user_id,
+            canonical_label,
+            canonical_operation_id,
+            int(existing["id"]),
+        ),
+    )
+    return int(existing["id"])
+
+
+def _find_existing_message_identity_conn(
+    conn: sqlite3.Connection,
+    *,
+    chat_id: int,
+    direction: str,
+    text: str,
+    external_message_id: str | None,
+    raw: dict[str, Any] | None,
+    created_at: str,
+    is_crm_sent: bool,
+    client_operation_id: str | None,
+) -> sqlite3.Row | None:
+    operation_id = str(client_operation_id or "").strip()
+    if operation_id:
+        row = conn.execute(
+            "SELECT * FROM messages WHERE chat_id=? AND client_operation_id=?",
+            (int(chat_id), operation_id),
+        ).fetchone()
+        if row:
+            return row
+
+    clean_external_id = str(external_message_id or "").strip()
+    if clean_external_id:
+        row = conn.execute(
+            "SELECT * FROM messages WHERE chat_id=? AND external_message_id=?",
+            (int(chat_id), clean_external_id),
+        ).fetchone()
+        if row:
+            return row
+
+    raw_payload = raw if isinstance(raw, dict) else {}
+    raw_source = str(raw_payload.get("_crm_source") or "")
+    if clean_external_id.startswith("wb:last:") or raw_source == "wb_lastMessage":
+        row = conn.execute(
+            """
+            SELECT * FROM messages
+            WHERE chat_id=? AND TRIM(text)=TRIM(?)
+              AND raw_json LIKE '%wb_lastMessage%'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (int(chat_id), text),
+        ).fetchone()
+        if row:
+            return row
+
+    if clean_external_id.startswith("wb:") and "_crm_wb_msg_obj" in raw_payload:
+        row = conn.execute(
+            """
+            SELECT * FROM messages
+            WHERE chat_id=? AND TRIM(text)=TRIM(?)
+              AND raw_json LIKE '%_crm_wb_msg_obj%'
+              AND ABS(strftime('%s', created_at) - strftime('%s', ?)) <= 5
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (int(chat_id), text, created_at),
+        ).fetchone()
+        if row:
+            return row
+
+    if direction == "outbound":
+        return _find_outbound_counterpart_conn(
+            conn,
+            chat_id=int(chat_id),
+            text=text,
+            created_at=created_at,
+            incoming_is_crm_sent=is_crm_sent,
+            window_seconds=int(__import__("os").getenv("CRM_OUTBOUND_ECHO_MATCH_WINDOW_SECONDS", "180") or "180"),
+        )
     return None
 
-def repair_outbound_marketplace_echo_duplicates(limit: int = 1000, window_seconds: int = 900) -> int:
-    """Merge already-created duplicate outbound echoes back into the CRM local row.
-
-    This is a repair for rows created before the echo-upgrade logic existed. It is
-    intentionally conservative: only same chat + same text + close timestamps +
-    outbound direction, and only when one candidate looks like a local/provisional
-    CRM send.
-    """
-    safe_limit = max(1, min(int(limit or 1000), 10000))
-    safe_window = max(30, min(int(window_seconds or 900), 86400))
-    repaired = 0
-    with get_connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT id, chat_id, external_message_id, author, text, created_at, raw_json
-            FROM messages
-            WHERE direction='outbound'
-              AND TRIM(text)<>''
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (safe_limit,),
-        ).fetchall()
-        for row in rows:
-            row_id = int(row["id"])
-            external_id = row["external_message_id"]
-            raw_json = row["raw_json"] or "{}"
-            # We treat a non-provisional, non-CRM-marked row as the marketplace echo.
-            if _is_provisional_outbound_external_id(external_id) or _raw_marks_crm_sent(raw_json):
-                continue
-            local = _find_outbound_echo_candidate_conn(
-                conn,
-                chat_id=int(row["chat_id"]),
-                text=row["text"] or "",
-                created_at=row["created_at"],
-                window_seconds=safe_window,
-                exclude_id=row_id,
-            )
-            if not local:
-                continue
-            local_id = int(local["id"])
-            conn.execute(
-                """
-                UPDATE messages
-                SET external_message_id=?,
-                    author=COALESCE(NULLIF(author, ''), ?),
-                    raw_json=?,
-                    created_at=COALESCE(?, created_at)
-                WHERE id=?
-                """,
-                (external_id, row["author"], raw_json, row["created_at"], local_id),
-            )
-            conn.execute("DELETE FROM messages WHERE id=?", (row_id,))
-            refresh_chat_last_message(conn, int(row["chat_id"]))
-            repaired += 1
-    return repaired
-
-
-def repair_crm_sent_message_directions() -> int:
-    """Restore outbound direction for CRM-sent rows saved as inbound by sync.
-
-    Older sync passes could overwrite a local CRM outbound row with an ambiguous
-    marketplace echo and change its direction to ``inbound``. Personal unread
-    state then treated the employee reply as a new customer message. CRM-origin
-    markers are authoritative for this narrow repair.
-    """
-    affected_chat_ids: set[int] = set()
-    repaired = 0
-    with get_connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT id, chat_id, raw_json
-            FROM messages
-            WHERE direction='inbound'
-              AND (
-                    raw_json LIKE '%_crm_sent_from_crm%'
-                 OR raw_json LIKE '%_crm_wb_client_name_direction_marker%'
-                 OR LOWER(raw_json) LIKE '%is_seller%'
-                 OR LOWER(raw_json) LIKE '%from_seller%'
-                 OR LOWER(raw_json) LIKE '%is_supplier%'
-                 OR LOWER(raw_json) LIKE '%from_supplier%'
-                 OR LOWER(raw_json) LIKE '%is_operator%'
-                 OR LOWER(raw_json) LIKE '%"seller"%'
-                 OR LOWER(raw_json) LIKE '%"operator"%'
-                 OR LOWER(raw_json) LIKE '%"manager"%'
-                 OR LOWER(raw_json) LIKE '%"supplier"%'
-                 OR LOWER(raw_json) LIKE '%"merchant"%'
-              )
-            """
-        ).fetchall()
-        for row in rows:
-            try:
-                raw_payload = json.loads(row["raw_json"] or "{}")
-            except Exception:
-                raw_payload = {}
-            is_crm_sent = _raw_marks_crm_sent(row["raw_json"])
-            is_seller_side = _message_raw_looks_seller_side(raw_payload)
-            wb_marker = raw_payload.get("_crm_wb_client_name_direction_marker") if isinstance(raw_payload, dict) else None
-            is_wb_outbound = bool(
-                isinstance(wb_marker, dict)
-                and str(wb_marker.get("resolved_direction") or "").strip().lower() == "outbound"
-            )
-            if not (is_crm_sent or is_seller_side or is_wb_outbound):
-                continue
-            conn.execute(
-                "UPDATE messages SET direction='outbound' WHERE id=?",
-                (int(row["id"]),),
-            )
-            affected_chat_ids.add(int(row["chat_id"]))
-            repaired += 1
-        for chat_id in affected_chat_ids:
-            refresh_chat_last_message(conn, chat_id)
-        return repaired
 
 def delete_mock_chats() -> int:
     """Remove historical demo/mock chats from local databases.
@@ -2641,7 +2536,7 @@ def _mark_chat_unread_for_active_users_conn(
 
 
 def _add_message_conn(
-    conn,
+    conn: sqlite3.Connection,
     chat_id: int,
     direction: str,
     text: str,
@@ -2649,17 +2544,49 @@ def _add_message_conn(
     external_message_id: str | None = None,
     raw: dict[str, Any] | None = None,
     created_at: str | None = None,
+    *,
+    is_crm_sent: bool = False,
+    crm_author_user_id: int | None = None,
+    crm_author_label: str | None = None,
+    client_operation_id: str | None = None,
 ) -> int:
-    """Insert or update a marketplace message and rebuild chat preview safely."""
-    clean_external_id = external_message_id or None
-    raw_json = json.dumps(raw or {}, ensure_ascii=False)
-    if direction == "inbound" and (
-        _raw_marks_crm_sent(raw_json)
-        or _message_raw_looks_seller_side(raw)
-    ):
+    """Persist one logical message through a single identity reconciliation path."""
+    created_at = created_at or _utc_now_iso()
+    raw_payload = dict(raw) if isinstance(raw, dict) else {}
+    crm_label = str(
+        crm_author_label or raw_payload.get("_crm_sent_by_label") or ""
+    ).strip() or None
+    operation_id = str(
+        client_operation_id or raw_payload.get("_crm_client_operation_id") or ""
+    ).strip() or None
+    try:
+        raw_crm_author_user_id = int(raw_payload.get("_crm_sent_by_user_id") or 0) or None
+    except (TypeError, ValueError):
+        raw_crm_author_user_id = None
+    crm_author_user_id = crm_author_user_id or raw_crm_author_user_id
+    if crm_author_user_id and not crm_label:
+        crm_label = _get_user_label(conn, int(crm_author_user_id))
+    incoming_is_crm_sent = bool(
+        is_crm_sent
+        or raw_payload.get("_crm_sent_from_crm") is True
+        or crm_label
+        or crm_author_user_id
+        or operation_id
+    )
+
+    if incoming_is_crm_sent:
         direction = "outbound"
-    if not created_at:
-        created_at = _utc_now_iso()
+        raw_payload["_crm_sent_from_crm"] = True
+        if crm_label:
+            raw_payload["_crm_sent_by_label"] = crm_label
+        if crm_author_user_id:
+            raw_payload["_crm_sent_by_user_id"] = int(crm_author_user_id)
+        if operation_id:
+            raw_payload["_crm_client_operation_id"] = operation_id
+    elif direction == "inbound" and _message_raw_looks_seller_side(raw_payload):
+        direction = "outbound"
+
+    clean_external_id = str(external_message_id or "").strip() or None
     previous_latest_message_id: int | None = None
     if direction == "inbound":
         previous_latest = conn.execute(
@@ -2669,328 +2596,109 @@ def _add_message_conn(
         if previous_latest and previous_latest["id"] is not None:
             previous_latest_message_id = int(previous_latest["id"])
 
+    existing = _find_existing_message_identity_conn(
+        conn,
+        chat_id=int(chat_id),
+        direction=direction,
+        text=text,
+        external_message_id=clean_external_id,
+        raw=raw_payload,
+        created_at=created_at,
+        is_crm_sent=incoming_is_crm_sent,
+        client_operation_id=operation_id,
+    )
+    if existing:
+        message_id = _merge_message_identity_conn(
+            conn,
+            existing=existing,
+            direction=direction,
+            author=author,
+            text=text,
+            external_message_id=clean_external_id,
+            raw=raw_payload,
+            created_at=created_at,
+            is_crm_sent=incoming_is_crm_sent,
+            crm_author_user_id=crm_author_user_id,
+            crm_author_label=crm_label,
+            client_operation_id=operation_id,
+        )
+        refresh_chat_last_message(conn, int(chat_id))
+        return message_id
 
-    with nullcontext(conn):
-        message_id: int
-
-        # v104: hard idempotency guard for marketplace sync. The app may run
-        # background sync and operator-triggered sync close to each other. If a
-        # message with the same marketplace id is already in the local DB, update
-        # it and return instead of allowing a UNIQUE constraint failure to abort
-        # the whole Ozon/Yandex/WB synchronization pass.
-        if clean_external_id:
-            existing_by_external_id = conn.execute(
-                """
-                SELECT id, direction, author, raw_json
-                FROM messages
-                WHERE chat_id=? AND external_message_id=?
-                """,
-                (int(chat_id), clean_external_id),
-            ).fetchone()
-            if existing_by_external_id:
-                merged_raw_json = _merge_message_raw_payload(
-                    existing_by_external_id["raw_json"],
-                    raw,
-                )
-                resolved_direction = direction
-                resolved_author = author
-                if (
-                    existing_by_external_id["direction"] == "outbound"
-                    and _raw_marks_crm_sent(existing_by_external_id["raw_json"])
-                ):
-                    resolved_direction = "outbound"
-                    resolved_author = existing_by_external_id["author"] or author
-                conn.execute(
-                    """
-                    UPDATE messages
-                    SET direction=?, author=COALESCE(NULLIF(?, ''), author),
-                        text=?, raw_json=?, created_at=COALESCE(?, created_at)
-                    WHERE id=?
-                    """,
-                    (
-                        resolved_direction,
-                        resolved_author,
-                        text,
-                        merged_raw_json,
-                        created_at,
-                        existing_by_external_id["id"],
-                    ),
-                )
-                message_id = int(existing_by_external_id["id"])
-                refresh_chat_last_message(conn, chat_id)
-                return message_id
-
-        if direction == "outbound" and not clean_external_id and _raw_marks_crm_sent(raw_json):
-            # Reverse race guard: if autosync already imported the marketplace
-            # echo before this send request saved its local row, update that echo
-            # in place instead of inserting a second CRM bubble.
-            existing_echo = _find_existing_marketplace_echo_for_crm_send_conn(
-                conn,
-                chat_id=int(chat_id),
-                text=text,
-                created_at=created_at,
-                window_seconds=int(__import__("os").getenv("CRM_OUTBOUND_ECHO_MATCH_WINDOW_SECONDS", "900") or "900"),
-            )
-            if existing_echo:
-                merged_raw = raw or {}
-                try:
-                    echo_raw = json.loads(existing_echo["raw_json"] or "{}")
-                    if isinstance(echo_raw, dict):
-                        merged_raw = {**echo_raw, **(raw or {})}
-                except Exception:
-                    pass
-                conn.execute(
-                    """
-                    UPDATE messages
-                    SET author=COALESCE(NULLIF(?, ''), author),
-                        raw_json=?,
-                        created_at=COALESCE(created_at, ?)
-                    WHERE id=?
-                    """,
-                    (author, json.dumps(merged_raw, ensure_ascii=False), created_at, existing_echo["id"]),
-                )
-                message_id = int(existing_echo["id"])
-                refresh_chat_last_message(conn, chat_id)
-                return message_id
-
-        if clean_external_id and direction == "outbound":
-            # Root-cause fix for duplicate seller replies: if the marketplace
-            # returns the same CRM-sent message later with its real id, upgrade
-            # the local/provisional outbound row instead of inserting a second
-            # seller bubble. This runs before exact external-id lookup because
-            # old local rows may have placeholder ids like "True" from send ACKs.
-            outbound_echo_duplicate = _find_outbound_echo_candidate_conn(
-                conn,
-                chat_id=int(chat_id),
-                text=text,
-                created_at=created_at,
-                window_seconds=int(__import__("os").getenv("CRM_OUTBOUND_ECHO_MATCH_WINDOW_SECONDS", "900") or "900"),
-            )
-            if outbound_echo_duplicate:
-                conn.execute(
-                    """
-                    UPDATE messages
-                    SET external_message_id=?,
-                        author=COALESCE(NULLIF(author, ''), ?),
-                        raw_json=?,
-                        created_at=COALESCE(?, created_at)
-                    WHERE id=?
-                    """,
-                    (clean_external_id, author, raw_json, created_at, outbound_echo_duplicate["id"]),
-                )
-                message_id = int(outbound_echo_duplicate["id"])
-                refresh_chat_last_message(conn, chat_id)
-                return message_id
-
-        if clean_external_id:
-            existing = conn.execute(
-                "SELECT id, text FROM messages WHERE chat_id=? AND external_message_id=?",
-                (chat_id, clean_external_id),
-            ).fetchone()
-            if existing:
-                conn.execute(
-                    """
-                    UPDATE messages
-                    SET direction=?, author=?, text=?, raw_json=?,
-                        created_at=COALESCE(?, created_at)
-                    WHERE id=?
-                    """,
-                    (direction, author, text, raw_json, created_at, existing["id"]),
-                )
-                message_id = int(existing["id"])
-                refresh_chat_last_message(conn, chat_id)
-                return message_id
-
-            # v64: older WB local repair builds saved lastMessage with a fallback
-            # external id based on a missing/wrong timestamp. If we now parse
-            # addTimestamp correctly, update the existing wb_lastMessage row
-            # instead of inserting a duplicate.
-            if str(clean_external_id).startswith("wb:last:") or '"_crm_source": "wb_lastMessage"' in raw_json:
-                wb_last_duplicate = conn.execute(
-                    """
-                    SELECT id
-                    FROM messages
-                    WHERE chat_id=?
-                      AND TRIM(text)=TRIM(?)
-                      AND raw_json LIKE '%wb_lastMessage%'
-                    ORDER BY id DESC
-                    LIMIT 1
-                    """,
-                    (chat_id, text),
-                ).fetchone()
-                if wb_last_duplicate:
-                    conn.execute(
-                        """
-                        UPDATE messages
-                        SET external_message_id=?, direction=?, author=COALESCE(?, author), raw_json=?,
-                            created_at=COALESCE(?, created_at)
-                        WHERE id=?
-                        """,
-                        (clean_external_id, direction, author, raw_json, created_at, wb_last_duplicate["id"]),
-                    )
-                    message_id = int(wb_last_duplicate["id"])
-                    refresh_chat_last_message(conn, chat_id)
-                    return message_id
-
-            # If WB direction detection is improved later, a fallback external id
-            # that included the old direction can change. Update the same WB event
-            # row by text/time instead of leaving an old inbound duplicate that keeps
-            # the chat in "ждёт ответа".
-            if str(clean_external_id).startswith("wb:") and "_crm_wb_msg_obj" in raw_json:
-                wb_event_duplicate = conn.execute(
-                    """
-                    SELECT id
-                    FROM messages
-                    WHERE chat_id=?
-                      AND TRIM(text)=TRIM(?)
-                      AND raw_json LIKE '%_crm_wb_msg_obj%'
-                      AND ABS(strftime('%s', COALESCE(?, created_at)) - strftime('%s', created_at)) <= 5
-                    ORDER BY id DESC
-                    LIMIT 1
-                    """,
-                    (chat_id, text, created_at),
-                ).fetchone()
-                if wb_event_duplicate:
-                    conn.execute(
-                        """
-                        UPDATE messages
-                        SET external_message_id=?, direction=?, author=COALESCE(?, author), raw_json=?,
-                            created_at=COALESCE(?, created_at)
-                        WHERE id=?
-                        """,
-                        (clean_external_id, direction, author, raw_json, created_at, wb_event_duplicate["id"]),
-                    )
-                    message_id = int(wb_event_duplicate["id"])
-                    refresh_chat_last_message(conn, chat_id)
-                    return message_id
-
-            # v50: de-duplicate seller replies. Some marketplace send endpoints
-            # return no message id, so CRM first saved a local outbound message
-            # with an empty external id. On the next sync the same seller reply
-            # came back with a marketplace id and was inserted again. If the text
-            # and direction match a recent local no-id message, upgrade that row
-            # instead of creating a duplicate.
-            local_duplicate = conn.execute(
-                """
-                SELECT id
-                FROM messages
-                WHERE chat_id=?
-                  AND direction=?
-                  AND COALESCE(external_message_id, '')=''
-                  AND TRIM(text)=TRIM(?)
-                  AND ABS(strftime('%s', COALESCE(?, created_at)) - strftime('%s', created_at)) <= 900
-                ORDER BY id DESC
-                LIMIT 1
-                """,
-                (chat_id, direction, text, created_at),
-            ).fetchone()
-            if local_duplicate:
-                conn.execute(
-                    """
-                    UPDATE messages
-                    SET external_message_id=?, author=COALESCE(?, author), raw_json=?,
-                        created_at=COALESCE(?, created_at)
-                    WHERE id=?
-                    """,
-                    (clean_external_id, author, raw_json, created_at, local_duplicate["id"]),
-                )
-                message_id = int(local_duplicate["id"])
-                refresh_chat_last_message(conn, chat_id)
-                return message_id
-
-        # Also protect against double-clicks/retries when the marketplace response
-        # still has no external id. Keep one local copy per same text/direction in
-        # a short time window.
-        if not clean_external_id:
-            existing_local = conn.execute(
-                """
-                SELECT id
-                FROM messages
-                WHERE chat_id=?
-                  AND direction=?
-                  AND COALESCE(external_message_id, '')=''
-                  AND TRIM(text)=TRIM(?)
-                  AND ABS(strftime('%s', COALESCE(?, created_at)) - strftime('%s', created_at)) <= 30
-                ORDER BY id DESC
-                LIMIT 1
-                """,
-                (chat_id, direction, text, created_at),
-            ).fetchone()
-            if existing_local:
-                refresh_chat_last_message(conn, chat_id)
-                return int(existing_local["id"])
-
+    raw_json = json.dumps(raw_payload, ensure_ascii=False)
+    try:
         cur = conn.execute(
             """
-            INSERT OR IGNORE INTO messages (chat_id, external_message_id, direction, author, text, created_at, raw_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO messages (
+                chat_id, external_message_id, direction, author, text, created_at,
+                raw_json, is_crm_sent, crm_author_user_id, crm_author_label,
+                client_operation_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (chat_id, clean_external_id, direction, author, text, created_at, raw_json),
+            (
+                int(chat_id),
+                clean_external_id,
+                direction,
+                crm_label or author,
+                text,
+                created_at,
+                raw_json,
+                int(incoming_is_crm_sent),
+                int(crm_author_user_id) if crm_author_user_id else None,
+                crm_label,
+                operation_id,
+            ),
+        )
+        message_id = int(cur.lastrowid)
+    except sqlite3.IntegrityError:
+        # A concurrent sync or repeated client operation won the unique identity
+        # race. Resolve the canonical row and enrich it instead of inserting again.
+        existing = _find_existing_message_identity_conn(
+            conn,
+            chat_id=int(chat_id),
+            direction=direction,
+            text=text,
+            external_message_id=clean_external_id,
+            raw=raw_payload,
+            created_at=created_at,
+            is_crm_sent=incoming_is_crm_sent,
+            client_operation_id=operation_id,
+        )
+        if not existing:
+            raise
+        message_id = _merge_message_identity_conn(
+            conn,
+            existing=existing,
+            direction=direction,
+            author=author,
+            text=text,
+            external_message_id=clean_external_id,
+            raw=raw_payload,
+            created_at=created_at,
+            is_crm_sent=incoming_is_crm_sent,
+            crm_author_user_id=crm_author_user_id,
+            crm_author_label=crm_label,
+            client_operation_id=operation_id,
         )
 
-        # If another sync worker inserted the same marketplace message between
-        # our SELECT and INSERT, SQLite ignores the insert. Update and return the
-        # existing row instead of raising UNIQUE constraint failed.
-        if clean_external_id and int(cur.rowcount or 0) == 0:
-            existing_after_insert = conn.execute(
-                """
-                SELECT id, direction, author, raw_json
-                FROM messages
-                WHERE chat_id=? AND external_message_id=?
-                """,
-                (int(chat_id), clean_external_id),
-            ).fetchone()
-            if existing_after_insert:
-                merged_raw_json = _merge_message_raw_payload(
-                    existing_after_insert["raw_json"],
-                    raw,
-                )
-                resolved_direction = direction
-                resolved_author = author
-                if (
-                    existing_after_insert["direction"] == "outbound"
-                    and _raw_marks_crm_sent(existing_after_insert["raw_json"])
-                ):
-                    resolved_direction = "outbound"
-                    resolved_author = existing_after_insert["author"] or author
-                conn.execute(
-                    """
-                    UPDATE messages
-                    SET direction=?, author=COALESCE(NULLIF(?, ''), author),
-                        text=?, raw_json=?, created_at=COALESCE(?, created_at)
-                    WHERE id=?
-                    """,
-                    (
-                        resolved_direction,
-                        resolved_author,
-                        text,
-                        merged_raw_json,
-                        created_at,
-                        existing_after_insert["id"],
-                    ),
-                )
-                message_id = int(existing_after_insert["id"])
-                refresh_chat_last_message(conn, chat_id)
-                return message_id
-
-        message_id = int(cur.lastrowid)
-        refresh_chat_last_message(conn, chat_id)
-        if direction == "inbound":
-            _mark_chat_unread_for_active_users_conn(
-                conn,
-                chat_id=chat_id,
-                message_id=message_id,
-                previous_latest_message_id=previous_latest_message_id,
-                created_at=created_at,
-            )
-            _notify_new_inbound_message_conn(
-                conn,
-                chat_id=chat_id,
-                message_id=message_id,
-                text=text,
-                created_at=created_at,
-            )
-        return message_id
+    refresh_chat_last_message(conn, int(chat_id))
+    if direction == "inbound":
+        _mark_chat_unread_for_active_users_conn(
+            conn,
+            chat_id=int(chat_id),
+            message_id=message_id,
+            previous_latest_message_id=previous_latest_message_id,
+            created_at=created_at,
+        )
+        _notify_new_inbound_message_conn(
+            conn,
+            chat_id=int(chat_id),
+            message_id=message_id,
+            text=text,
+            created_at=created_at,
+        )
+    return message_id
 
 
 def add_message(
@@ -3001,8 +2709,13 @@ def add_message(
     external_message_id: str | None = None,
     raw: dict[str, Any] | None = None,
     created_at: str | None = None,
+    *,
+    is_crm_sent: bool = False,
+    crm_author_user_id: int | None = None,
+    crm_author_label: str | None = None,
+    client_operation_id: str | None = None,
 ) -> int:
-    """Persist through the canonical reconciliation path in one repository transaction."""
+    """Persist through the canonical reconciliation path in one transaction."""
     with get_connection() as conn:
         return _add_message_conn(
             conn,
@@ -3013,8 +2726,30 @@ def add_message(
             external_message_id=external_message_id,
             raw=raw,
             created_at=created_at,
+            is_crm_sent=is_crm_sent,
+            crm_author_user_id=crm_author_user_id,
+            crm_author_label=crm_author_label,
+            client_operation_id=client_operation_id,
         )
 
+
+def get_message_by_client_operation_id(
+    chat_id: int,
+    client_operation_id: str | None,
+) -> dict[str, Any] | None:
+    operation_id = str(client_operation_id or "").strip()
+    if not operation_id:
+        return None
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM messages
+            WHERE chat_id=? AND client_operation_id=?
+            LIMIT 1
+            """,
+            (int(chat_id), operation_id),
+        ).fetchone()
+        return row_to_dict(row) if row else None
 
 
 def update_internal_note(chat_id: int, message_id: int, text: str) -> dict[str, Any] | None:
@@ -3448,7 +3183,7 @@ def get_chat(
         ).fetchall()
         result = _decorate_chat_sla(chat_dict)
         message_items = [row_to_dict(r) for r in messages]
-        result["messages"] = _decorate_crm_message_author_labels(conn, message_items)
+        result["messages"] = message_items
         result["tasks"] = [row_to_dict(r) for r in tasks]
         return result
 

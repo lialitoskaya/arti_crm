@@ -161,3 +161,41 @@ resetting the operator to page one. Duplicate ids are rejected when a later
 batch is merged, only one list request may be in flight, and stale filter/search
 responses are ignored. The DOM therefore starts with 30 rows and grows only as
 the operator actually scrolls through older dialogs.
+
+## Canonical CRM message identity
+
+CRM-origin provenance is stored in structured `messages` columns rather than
+being inferred from marketplace payload JSON:
+
+- `is_crm_sent` marks messages created by an authenticated CRM send operation;
+- `crm_author_user_id` and `crm_author_label` preserve the responsible employee;
+- `client_operation_id` is the idempotency key generated once by the browser and
+  reused for every retry of the same send.
+
+The canonical persistence flow is:
+
+```text
+authenticated send route
+  -> stable client_operation_id
+    -> marketplace connector send
+      -> repository.add_message()
+        -> one identity reconciliation path
+          -> messages + unique identity indexes
+```
+
+Marketplace send acknowledgements are audit data and are not assumed to be the
+same identifier later returned by message history. The acknowledgement id stays
+in `raw_json` as `_crm_send_ack_message_id`; the provider history id becomes the
+canonical `external_message_id` when synchronization reconciles the echo.
+
+`repository._add_message_conn()` is the only message insert/update boundary. It
+resolves identity in this order: client operation id, exact provider id, explicit
+WB event identities, then one unambiguous opposite-origin outbound text/time
+counterpart. Ambiguous repeated identical replies are never merged by guesswork.
+Database partial unique indexes enforce `(chat_id, external_message_id)` and
+`(chat_id, client_operation_id)` under concurrent sync/retry races.
+
+The one-time `20260806_message_identity` migration backfills structured CRM
+provenance, resolves employee labels from stored user ids, merges only safe old
+duplicates, and records completion in `schema_migrations`. Repeated startup repair
+jobs and scattered post-hoc duplicate deletion paths are not used.

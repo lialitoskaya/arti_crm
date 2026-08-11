@@ -989,13 +989,24 @@ def _trusted_marketplace_message_id(raw_response: Any) -> str:
     return ""
 
 
-def _mark_crm_sent_raw(raw_response: Any, *, author: str | None = None, user_id: int | None = None) -> dict[str, Any]:
+def _mark_crm_sent_raw(
+    raw_response: Any,
+    *,
+    author: str | None = None,
+    user_id: int | None = None,
+    operation_id: str | None = None,
+) -> dict[str, Any]:
     raw = dict(raw_response) if isinstance(raw_response, dict) else {"_crm_marketplace_response": raw_response}
     raw["_crm_sent_from_crm"] = True
     if author:
         raw["_crm_sent_by_label"] = author
     if user_id:
         raw["_crm_sent_by_user_id"] = user_id
+    if operation_id:
+        raw["_crm_client_operation_id"] = operation_id
+    send_ack_message_id = _trusted_marketplace_message_id(raw_response)
+    if send_ack_message_id:
+        raw["_crm_send_ack_message_id"] = send_ack_message_id
     return raw
 
 def _wb_last_message_payload_from_metadata(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -2294,14 +2305,6 @@ async def on_startup() -> None:
         app.state.last_wb_lastmessage_direction_repair = repo.repair_wb_lastmessage_directions()
     except Exception as exc:
         app.state.last_wb_lastmessage_direction_repair = {"ok": False, "error": str(exc)}
-    try:
-        app.state.last_crm_sent_direction_repair = repo.repair_crm_sent_message_directions()
-    except Exception as exc:
-        app.state.last_crm_sent_direction_repair = {"ok": False, "error": str(exc)}
-    try:
-        app.state.last_outbound_echo_repair = repo.repair_outbound_marketplace_echo_duplicates(limit=3000)
-    except Exception as exc:
-        app.state.last_outbound_echo_repair = {"ok": False, "error": str(exc)}
     app.state.sync_lock = asyncio.Lock()
     app.state.last_sync = {}
     app.state.last_background_sync = {}
@@ -5344,6 +5347,7 @@ async def add_chat_attachments(
     request: Request,
     images: list[UploadFile] = File(...),
     caption: str = Form(default=""),
+    operation_id: str = Form(default=""),
 ) -> dict[str, Any]:
     chat = repo.get_chat(chat_id)
     if not chat:
@@ -5356,6 +5360,7 @@ async def add_chat_attachments(
     current_user = _current_user(request)
     current_user_id = int(current_user.get("id") or 0)
     author = (current_user.get("display_name") or current_user.get("username") or "manager").strip()
+    client_operation_id = operation_id.strip() or f"server:{uuid.uuid4().hex}"
 
     prepared: list[dict[str, Any]] = []
     for upload in images:
@@ -5389,6 +5394,10 @@ async def add_chat_attachments(
                 author=author,
                 external_message_id=f"local-image:{uuid.uuid4().hex}",
                 raw={"_crm_local_attachment": True, "attachments": attachments},
+                is_crm_sent=True,
+                crm_author_user_id=current_user_id,
+                crm_author_label=author,
+                client_operation_id=client_operation_id,
             )
             return {"ok": True, "message_id": message_id, "attachments": attachments, "chat": repo.get_chat(chat_id)}
 
@@ -5447,6 +5456,10 @@ async def add_chat_attachments(
             "attachments": attachments,
             "marketplace_responses": marketplace_responses,
         },
+        is_crm_sent=True,
+        crm_author_user_id=current_user_id,
+        crm_author_label=author,
+        client_operation_id=client_operation_id,
     )
     assigned_on_send = False
     if current_user_id and _env_bool("CRM_AUTO_ASSIGN_FIRST_RESPONSE", True):
@@ -5473,6 +5486,20 @@ async def send_message(chat_id: int, payload: MessageCreate, request: Request) -
     outbound_author = (payload.author or "").strip()
     if not outbound_author or outbound_author.lower() in {"manager", "менеджер", "operator", "оператор"}:
         outbound_author = current_user_label or outbound_author or "manager"
+    client_operation_id = (payload.operation_id or "").strip() or f"server:{uuid.uuid4().hex}"
+
+    existing_operation_message = repo.get_message_by_client_operation_id(
+        chat_id,
+        client_operation_id,
+    )
+    if existing_operation_message:
+        return {
+            "ok": True,
+            "message_id": int(existing_operation_message["id"]),
+            "chat": repo.get_chat(chat_id),
+            "assigned_on_send": False,
+            "deduplicated": True,
+        }
 
     marketplace = chat["marketplace"]
     connector = connectors.get(marketplace) or connectors["mock"]
@@ -5494,8 +5521,20 @@ async def send_message(chat_id: int, payload: MessageCreate, request: Request) -
         direction="outbound",
         text=payload.text,
         author=outbound_author,
-        external_message_id=_trusted_marketplace_message_id(raw_response),
-        raw=_mark_crm_sent_raw(raw_response, author=outbound_author, user_id=current_user_id),
+        # Send acknowledgements and history records are not guaranteed to use the
+        # same provider id. Keep the ACK in raw audit data and let history sync set
+        # the canonical external_message_id on this same row.
+        external_message_id=None,
+        raw=_mark_crm_sent_raw(
+            raw_response,
+            author=outbound_author,
+            user_id=current_user_id,
+            operation_id=client_operation_id,
+        ),
+        is_crm_sent=True,
+        crm_author_user_id=current_user_id,
+        crm_author_label=outbound_author,
+        client_operation_id=client_operation_id,
     )
     assigned_on_send = False
     if current_user_id and _env_bool("CRM_AUTO_ASSIGN_FIRST_RESPONSE", True):
