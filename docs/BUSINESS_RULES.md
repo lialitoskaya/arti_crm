@@ -26,3 +26,14 @@ unread metadata and the global CRM workflow status are not personal read state.
     connectors, start synchronization, or refresh the full chat list.
 12. Frontend optimistic state is protected by an operation version and a request
     snapshot; a GET started before or during a PATCH cannot roll the state back.
+
+## Chat-list pagination
+
+1. The interactive CRM list loads at most 100 chats per page.
+2. Marketplace, workflow, owner, archive, and message-search filters are applied
+   by SQLite before pagination.
+3. The displayed total and unread counters describe the complete filtered result,
+   not only the current page.
+4. Page navigation does not load message history or call marketplace APIs.
+5. The legacy non-paginated repository/API behavior remains available for existing
+   non-UI consumers until they are migrated explicitly.

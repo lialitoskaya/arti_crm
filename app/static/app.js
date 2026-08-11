@@ -213,9 +213,11 @@ let usersCache = [];
 let chatOwnerScope = 'all';
 let chatMessageSearch = '';
 let chatSearchTimer = null;
-const CHAT_LIST_MOBILE_INITIAL_LIMIT = 90;
-const CHAT_LIST_MOBILE_PAGE_SIZE = 60;
-let chatListMobileRenderLimit = CHAT_LIST_MOBILE_INITIAL_LIMIT;
+const CHAT_LIST_PAGE_SIZE = 100;
+let chatListOffset = 0;
+let chatListTotal = 0;
+let chatListUnreadTotal = 0;
+let chatListPageLoading = false;
 let chatListLastRenderKey = '';
 let chatListInfiniteScrollBound = false;
 let knowledgeCategories = [];
@@ -2682,9 +2684,9 @@ function setChatSearchOpen(open = true) {
   }
 }
 
-function resetChatListMobileLimit() {
-  chatListMobileRenderLimit = CHAT_LIST_MOBILE_INITIAL_LIMIT;
+function resetChatListPage() {
   chatListLastRenderKey = '';
+  chatListOffset = 0;
 }
 
 function currentChatListRenderKey() {
@@ -2699,7 +2701,7 @@ function scheduleChatMessageSearch() {
   clearTimeout(chatSearchTimer);
   chatSearchTimer = window.setTimeout(() => {
     chatMessageSearch = currentChatMessageSearch();
-    resetChatListMobileLimit();
+    resetChatListPage();
     updateChatSearchUi();
     loadChats({ withStats: false }).catch(err => notify('Поиск по сообщениям', String(err.message || err)));
   }, 260);
@@ -2710,7 +2712,7 @@ function clearChatMessageSearch() {
   chatMessageSearch = '';
   const input = $('chatSearchInput');
   if (input) input.value = '';
-  resetChatListMobileLimit();
+  resetChatListPage();
   updateChatSearchUi();
   loadChats({ withStats: false }).catch(err => notify('Поиск по сообщениям', String(err.message || err)));
   input?.focus();
@@ -2722,28 +2724,45 @@ function bindChatListInfiniteScroll() {
   chatListInfiniteScrollBound = true;
   list.addEventListener('click', handleChatListClick);
   list.addEventListener('keydown', handleChatListKeydown);
-
-  list.addEventListener('scroll', () => {
-    if (!isMobileChatLayout() || isMobileChatOpen()) return;
-    if (!chats || !chats.length) return;
-
-    const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 220;
-    if (!nearBottom) return;
-
-    const visibleChats = (chats || []).filter(chat => chatScope === 'archive' || !isClosedWorkflowStatus(chat.status, chat.status_label));
-    if (chatListMobileRenderLimit >= visibleChats.length) return;
-
-    const previousScrollTop = list.scrollTop;
-    chatListMobileRenderLimit = Math.min(chatListMobileRenderLimit + CHAT_LIST_MOBILE_PAGE_SIZE, visibleChats.length);
-    renderChatList({ force: true, preserveScrollTop: previousScrollTop });
-  }, { passive: true });
 }
 
 function renderLoadedChats() {
   updateChatCountLabel();
   renderChatList();
+  renderChatListPager();
   renderScopeTabs();
   updateChatSearchUi();
+}
+
+function renderChatListPager() {
+  const pager = $('chatListPager');
+  const previous = $('chatListPrevBtn');
+  const next = $('chatListNextBtn');
+  const label = $('chatListPageLabel');
+  if (!pager || !previous || !next || !label) return;
+
+  const totalPages = Math.max(1, Math.ceil(chatListTotal / CHAT_LIST_PAGE_SIZE));
+  const currentPage = chatListTotal > 0
+    ? Math.min(totalPages, Math.floor(chatListOffset / CHAT_LIST_PAGE_SIZE) + 1)
+    : 1;
+  pager.classList.toggle('hidden', chatListTotal <= CHAT_LIST_PAGE_SIZE);
+  previous.disabled = chatListPageLoading || chatListOffset <= 0;
+  next.disabled = chatListPageLoading || chatListOffset + chats.length >= chatListTotal;
+  label.textContent = `${currentPage} / ${totalPages}`;
+  label.setAttribute('aria-label', `Страница ${currentPage} из ${totalPages}`);
+}
+
+async function moveChatListPage(direction) {
+  if (chatListPageLoading) return;
+  const delta = direction === 'previous' ? -CHAT_LIST_PAGE_SIZE : CHAT_LIST_PAGE_SIZE;
+  const nextOffset = Math.max(0, chatListOffset + delta);
+  if (nextOffset === chatListOffset) return;
+  if (direction !== 'previous' && nextOffset >= chatListTotal) return;
+
+  chatListOffset = nextOffset;
+  const list = $('chatList');
+  if (list) list.scrollTop = 0;
+  await loadChats({ withStats: false });
 }
 
 async function loadChats(options = {}) {
@@ -2762,6 +2781,8 @@ async function loadChats(options = {}) {
   }
 
   chatsLoadPromise = (async () => {
+    chatListPageLoading = true;
+    renderChatListPager();
     const params = new URLSearchParams();
     const marketplaceEl = $('marketplaceFilter');
     const statusEl = $('statusFilter');
@@ -2773,7 +2794,7 @@ async function loadChats(options = {}) {
     chatMessageSearch = searchQuery;
     const renderKey = currentChatListRenderKey();
     if (renderKey !== chatListLastRenderKey) {
-      resetChatListMobileLimit();
+      resetChatListPage();
       chatListLastRenderKey = renderKey;
     }
     if (marketplace) params.set('marketplace', marketplace);
@@ -2786,10 +2807,19 @@ async function loadChats(options = {}) {
     }
 
     if (searchQuery.length >= 2) params.set('q', searchQuery);
+    params.set('paginated', 'true');
+    params.set('limit', String(CHAT_LIST_PAGE_SIZE));
+    params.set('offset', String(chatListOffset));
 
     const readStateRequestContext = chatReadStateController.captureRequestContext();
-    const serverChats = await api(`/api/chats?${params.toString()}`, { timeoutMs: 15000 });
-    chats = (serverChats || []).map((chat) => chatReadStateController.reconcile(chat, readStateRequestContext));
+    const page = await api(`/api/chats?${params.toString()}`, { timeoutMs: 15000 });
+    const serverChats = Array.isArray(page) ? page : (page?.items || []);
+    chatListTotal = Number(Array.isArray(page) ? serverChats.length : (page?.total || 0));
+    chatListUnreadTotal = Number(Array.isArray(page)
+      ? serverChats.filter(chat => chat?.is_unread).length
+      : (page?.unread_total || 0));
+    chatListOffset = Number(Array.isArray(page) ? 0 : (page?.offset || 0));
+    chats = serverChats.map((chat) => chatReadStateController.reconcile(chat, readStateRequestContext));
     trackChatMessageSounds(chats || []);
 
     if (render) renderLoadedChats();
@@ -2801,6 +2831,8 @@ async function loadChats(options = {}) {
     return await chatsLoadPromise;
   } finally {
     chatsLoadPromise = null;
+    chatListPageLoading = false;
+    renderChatListPager();
   }
 }
 
@@ -2935,11 +2967,8 @@ function getChatSummaryById(chatId) {
 function updateChatCountLabel() {
   const counter = $('chatCountLabel');
   if (!counter) return;
-  const total = (chats || []).length;
-  const unread = (chats || []).reduce(
-    (count, chat) => count + (chat?.is_unread ? 1 : 0),
-    0,
-  );
+  const total = Number(chatListTotal || (chats || []).length);
+  const unread = Number(chatListUnreadTotal || 0);
   counter.textContent = unread > 0 ? `${unread} / ${total}` : String(total);
   counter.dataset.unreadCount = String(unread);
   counter.title = `\u041d\u0435\u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043e: ${unread} \u00b7 \u0412\u0441\u0435\u0433\u043e: ${total}`;
@@ -2972,6 +3001,13 @@ function updateChatRowReadState(chatId) {
 function applyChatReadStateLocally(chatId, state) {
   const normalizedChatId = Number(chatId || 0);
   if (!normalizedChatId || !state) return;
+
+  const previous = (chats || []).find((chat) => Number(chat.id) === normalizedChatId);
+  const previousUnread = Boolean(previous?.is_unread);
+  const nextUnread = Boolean(state.is_unread);
+  if (previous && previousUnread !== nextUnread) {
+    chatListUnreadTotal = Math.max(0, chatListUnreadTotal + (nextUnread ? 1 : -1));
+  }
 
   chats = (chats || []).map((chat) => (
     Number(chat.id) === normalizedChatId ? { ...chat, ...state } : chat
@@ -3184,12 +3220,7 @@ function renderChatList(options = {}) {
   }
 
   const visibleChats = (chats || []).filter(chat => chatScope === 'archive' || !isClosedWorkflowStatus(chat.status, chat.status_label));
-  const mobileListVisible = isMobileChatLayout() && !isMobileChatOpen();
-
-  // Large DOM lists are very expensive on mobile Safari. Render the newest
-  // portion first, then append the rest in chunks when the operator scrolls down.
-  const renderLimit = mobileListVisible ? Math.min(chatListMobileRenderLimit, visibleChats.length) : visibleChats.length;
-  const chatsToRender = visibleChats.slice(0, renderLimit);
+  const chatsToRender = visibleChats;
 
   const fragment = document.createDocumentFragment();
   for (const chat of chatsToRender) {
@@ -3226,13 +3257,6 @@ function renderChatList(options = {}) {
   }
 
   list.appendChild(fragment);
-
-  if (mobileListVisible && visibleChats.length > chatsToRender.length) {
-    const note = document.createElement('div');
-    note.className = 'chat-item empty-chat-item chat-list-render-limit-note chat-list-load-more-note';
-    note.innerHTML = `<p>Показано ${chatsToRender.length} из ${visibleChats.length}. Прокрутите ниже, чтобы загрузить ещё.</p>`;
-    list.appendChild(note);
-  }
 
   if (typeof preserveScrollTop === 'number') {
     requestAnimationFrame(() => {
@@ -7492,10 +7516,12 @@ function init() {
     await refreshVisibleData();
   });
   bind('mobileBackBtn', 'click', backToChatListMobile);
-  bind('marketplaceFilter', 'change', () => { resetChatListMobileLimit(); loadChats(); });
-  bind('statusFilter', 'change', () => { resetChatListMobileLimit(); loadChats(); });
-  if ($('funnelFilter')) bind('funnelFilter', 'change', () => { resetChatListMobileLimit(); renderChatSettingsControls({ keepValues: true }); loadChats(); });
-  bind('chatScopeSelect', 'change', (event) => { resetChatListMobileLimit(); handleChatScopeSelectChange(event); });
+  bind('marketplaceFilter', 'change', () => { resetChatListPage(); loadChats(); });
+  bind('statusFilter', 'change', () => { resetChatListPage(); loadChats(); });
+  if ($('funnelFilter')) bind('funnelFilter', 'change', () => { resetChatListPage(); renderChatSettingsControls({ keepValues: true }); loadChats(); });
+  bind('chatListPrevBtn', 'click', () => moveChatListPage('previous').catch(err => notify('Список чатов', String(err.message || err))));
+  bind('chatListNextBtn', 'click', () => moveChatListPage('next').catch(err => notify('Список чатов', String(err.message || err))));
+  bind('chatScopeSelect', 'change', (event) => { resetChatListPage(); handleChatScopeSelectChange(event); });
   bind('chatSearchToggleBtn', 'click', (event) => {
     event.preventDefault();
     const box = $('chatSearchBox');

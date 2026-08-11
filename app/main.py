@@ -5033,9 +5033,24 @@ def list_chats(
     mine: bool = False,
     funnel_id: int | None = None,
     q: str | None = None,
-) -> list[dict[str, Any]]:
+    paginated: bool = False,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict[str, Any]] | dict[str, Any]:
     user = _current_user(request)
     assigned_user_id = int(user["id"]) if mine else None
+    if paginated:
+        return repo.list_chats_page(
+            status=status,
+            marketplace=marketplace,
+            archived=archived,
+            assigned_user_id=assigned_user_id,
+            funnel_id=funnel_id,
+            q=q,
+            current_user_id=int(user["id"]),
+            limit=limit,
+            offset=offset,
+        )
     return repo.list_chats(
         status=status,
         marketplace=marketplace,

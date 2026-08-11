@@ -2850,15 +2850,14 @@ def _message_search_params(variants: list[str]) -> list[str]:
     return [f"%{_escape_like_query(variant)}%" for variant in variants]
 
 
-def list_chats(
+def _chat_list_query_parts(
     status: str | None = None,
     marketplace: str | None = None,
     archived: bool = False,
     assigned_user_id: int | None = None,
     funnel_id: int | None = None,
     q: str | None = None,
-    current_user_id: int | None = None,
-) -> list[dict[str, Any]]:
+) -> tuple[str, list[Any], list[str], list[str]]:
     clauses = [
         "c.marketplace NOT IN ('mock', 'internal_tasks')",
         f"NOT ({_system_excluded_condition_sql('c')})",
@@ -2903,33 +2902,161 @@ def list_chats(
         params.extend(search_params)
 
     where = f"WHERE {' AND '.join(clauses)}"
+    return where, params, search_variants, search_params
+
+
+def _list_chat_items_conn(
+    conn: sqlite3.Connection,
+    *,
+    where: str,
+    params: list[Any],
+    search_variants: list[str],
+    search_params: list[str],
+    q: str | None,
+    current_user_id: int | None,
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    sql = _chats_select_sql(where, current_user_id)
+    query_params = list(params)
+    if limit is not None:
+        sql += "\nLIMIT ? OFFSET ?"
+        query_params.extend([int(limit), max(0, int(offset))])
+
+    rows = conn.execute(sql, query_params).fetchall()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        item = _decorate_chat_sla(row_to_dict(row))
+        if search_variants:
+            match = conn.execute(
+                f"""
+                SELECT text, created_at
+                FROM messages ms
+                WHERE ms.chat_id=?
+                  AND {_message_search_clause('ms', search_variants)}
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                [int(item["id"]), *search_params],
+            ).fetchone()
+            if match:
+                item["search_match_text"] = match["text"]
+                item["search_match_at"] = match["created_at"]
+                item["search_query"] = (q or "").strip()
+        result.append(item)
+    return result
+
+
+def list_chats(
+    status: str | None = None,
+    marketplace: str | None = None,
+    archived: bool = False,
+    assigned_user_id: int | None = None,
+    funnel_id: int | None = None,
+    q: str | None = None,
+    current_user_id: int | None = None,
+) -> list[dict[str, Any]]:
+    where, params, search_variants, search_params = _chat_list_query_parts(
+        status=status,
+        marketplace=marketplace,
+        archived=archived,
+        assigned_user_id=assigned_user_id,
+        funnel_id=funnel_id,
+        q=q,
+    )
     with get_connection() as conn:
-        rows = conn.execute(_chats_select_sql(where, current_user_id), params).fetchall()
-        result: list[dict[str, Any]] = []
-        for row in rows:
-            item = _decorate_chat_sla(row_to_dict(row))
-            if search_variants:
-                match = conn.execute(
-                    f"""
-                    SELECT text, created_at
-                    FROM messages ms
-                    WHERE ms.chat_id=?
-                      AND {_message_search_clause('ms', search_variants)}
-                    ORDER BY created_at DESC, id DESC
-                    LIMIT 1
-                    """,
-                    [int(item["id"]), *search_params],
-                ).fetchone()
-                if match:
-                    item["search_match_text"] = match["text"]
-                    item["search_match_at"] = match["created_at"]
-                    item["search_query"] = (q or "").strip()
-            result.append(item)
+        result = _list_chat_items_conn(
+            conn,
+            where=where,
+            params=params,
+            search_variants=search_variants,
+            search_params=search_params,
+            q=q,
+            current_user_id=current_user_id,
+        )
 
         # v40: do not additionally hide Ozon rows at list-render time.
         # System/support chats are filtered/deleted during sync; hiding here made
         # real customer chats disappear when old metadata was classified too broadly.
         return result
+
+
+def list_chats_page(
+    *,
+    status: str | None = None,
+    marketplace: str | None = None,
+    archived: bool = False,
+    assigned_user_id: int | None = None,
+    funnel_id: int | None = None,
+    q: str | None = None,
+    current_user_id: int | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Return one bounded chat page plus canonical total/unread counters."""
+    safe_limit = max(20, min(int(limit or 100), 200))
+    safe_offset = max(0, int(offset or 0))
+    where, params, search_variants, search_params = _chat_list_query_parts(
+        status=status,
+        marketplace=marketplace,
+        archived=archived,
+        assigned_user_id=assigned_user_id,
+        funnel_id=funnel_id,
+        q=q,
+    )
+    read_user_id = int(current_user_id) if current_user_id is not None else -1
+    with get_connection() as conn:
+        counters = conn.execute(
+            f"""
+            SELECT
+                COUNT(*) AS total,
+                COALESCE(SUM(
+                    CASE
+                        WHEN COALESCE(cus.is_marked_unread, 0)=1 THEN 1
+                        WHEN cus.user_id IS NOT NULL AND EXISTS (
+                            SELECT 1
+                            FROM messages unread_messages
+                            WHERE unread_messages.chat_id=c.id
+                              AND unread_messages.direction='inbound'
+                              AND unread_messages.id > COALESCE(cus.last_read_message_id, 0)
+                        ) THEN 1
+                        ELSE 0
+                    END
+                ), 0) AS unread_total
+            FROM chats c
+            LEFT JOIN chat_statuses s ON s.key = c.status
+            LEFT JOIN chat_user_states cus ON cus.chat_id=c.id AND cus.user_id={read_user_id}
+            {where}
+            """,
+            params,
+        ).fetchone()
+        total = int(counters["total"] or 0)
+        unread_total = int(counters["unread_total"] or 0)
+        if total and safe_offset >= total:
+            safe_offset = max(0, ((total - 1) // safe_limit) * safe_limit)
+        items = _list_chat_items_conn(
+            conn,
+            where=where,
+            params=params,
+            search_variants=search_variants,
+            search_params=search_params,
+            q=q,
+            current_user_id=current_user_id,
+            limit=safe_limit,
+            offset=safe_offset,
+        )
+
+    next_offset = safe_offset + len(items)
+    return {
+        "items": items,
+        "total": total,
+        "unread_total": unread_total,
+        "limit": safe_limit,
+        "offset": safe_offset,
+        "has_previous": safe_offset > 0,
+        "has_more": next_offset < total,
+        "next_offset": next_offset if next_offset < total else None,
+    }
 
 
 

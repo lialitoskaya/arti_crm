@@ -122,3 +122,15 @@ created.
 Rollback to older application code leaves the additive table and index unused.
 Restoring this version resumes the same personal state; no destructive down
 migration is required.
+
+## Bounded chat-list pagination
+
+The browser uses the opt-in paginated form of `GET /api/chats` with a fixed
+page size of 100. The repository applies `LIMIT/OFFSET` in SQLite and returns
+canonical `total` and personal `unread_total` counters separately from the page
+items. The legacy list response remains available when `paginated` is omitted,
+so existing internal consumers are not broken.
+
+Only the current page is rendered in the DOM. Filters, search, owner scope, and
+archive scope reset the offset to the first page; passive refreshes reload only
+the current page. This bounds the normal chat-row DOM to at most 100 items.
