@@ -726,27 +726,91 @@ label { display: grid; gap: 6px; color: var(--crm-text-soft); font-size: 13px; }
 .reply-templates-subtitle { color: var(--crm-muted); font-size: 12px; margin-top: 2px; }
 .reply-template-create { display: grid; gap: 8px; margin-top: 10px; }
 .reply-templates-list { display: grid; gap: 7px; margin-top: 10px; overflow-x: hidden; }
-.reply-template-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: stretch; }
+.reply-template-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  gap: 5px;
+  align-items: stretch;
+}
 .reply-template-item {
   width: 100%;
   min-width: 0;
   display: grid;
-  gap: 4px;
-  padding: 9px 10px;
+  align-content: start;
+  gap: 5px;
+  padding: 10px 11px;
   border: 1px solid var(--crm-line);
   border-radius: var(--crm-radius-md);
   background: var(--crm-panel-soft);
   cursor: pointer;
   text-align: left;
 }
-.reply-template-actions { display: flex; gap: 4px; align-items: center; }
-.reply-template-action { align-self: center; font-size: 16px; }
-.reply-template-item-title,
-.reply-template-item-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.reply-template-item-preview { color: var(--crm-muted); font-size: 12px; overflow: hidden; text-align: left; white-space: break-spaces; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-
+.reply-template-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 2px;
+  padding-top: 2px;
+}
+button.reply-template-action,
+html[data-theme="dark"] button.reply-template-action {
+  width: 28px !important;
+  height: 28px !important;
+  min-width: 28px !important;
+  min-height: 28px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 7px;
+  background: transparent !important;
+  color: var(--crm-muted) !important;
+  box-shadow: none !important;
+}
+button.reply-template-action svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+button.reply-template-action:hover,
+button.reply-template-action:focus-visible,
+html[data-theme="dark"] button.reply-template-action:hover,
+html[data-theme="dark"] button.reply-template-action:focus-visible {
+  background: var(--crm-hover) !important;
+  color: var(--crm-text) !important;
+  border: 0 !important;
+  transform: none;
+}
+button.reply-template-delete-action:hover,
+button.reply-template-delete-action:focus-visible,
+html[data-theme="dark"] button.reply-template-delete-action:hover,
+html[data-theme="dark"] button.reply-template-delete-action:focus-visible {
+  color: var(--crm-red-text) !important;
+}
 .reply-template-item-title {
-  display: none;
+  display: block;
+  overflow: hidden;
+  color: var(--crm-text);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reply-template-item-preview {
+  color: var(--crm-muted);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-align: left;
+  white-space: break-spaces;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
 }
 
 .notification-toast-stack {

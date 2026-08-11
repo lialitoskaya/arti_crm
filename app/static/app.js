@@ -6871,23 +6871,21 @@ function renderReplyTemplates() {
     return;
   }
   list.innerHTML = items.map((template) => {
-    const updated = formatDateTime(template.updated_at) || formatDateTime(template.created_at) || '';
-    const metaParts = [];
-    if (template.updated_by || template.created_by) metaParts.push(escapeHtml(template.updated_by || template.created_by));
-    if (updated) metaParts.push(`обновлён ${escapeHtml(updated)}`);
-    const meta = metaParts.join(' · ');
     const templateId = escapeHtml(String(template.id ?? ''));
     const actions = currentUser?.role === 'admin'
-      ? `<span class="reply-template-actions">
-          <button class="reply-template-action icon-btn" type="button" data-reply-template-edit="${templateId}" aria-label="Редактировать шаблон" title="Редактировать">✎</button>
-          <button class="reply-template-action icon-btn" type="button" data-reply-template-delete="${templateId}" aria-label="Удалить шаблон" title="Удалить">×</button>
+      ? `<span class="reply-template-actions" aria-label="Действия с шаблоном">
+          <button class="reply-template-action reply-template-edit-action icon-btn" type="button" data-reply-template-edit="${templateId}" aria-label="Редактировать шаблон" title="Редактировать">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 20h4l10.5-10.5a2.12 2.12 0 0 0-3-3L5 17v3Zm10.5-12.5 3 3"/></svg>
+          </button>
+          <button class="reply-template-action reply-template-delete-action icon-btn" type="button" data-reply-template-delete="${templateId}" aria-label="Удалить шаблон" title="Удалить">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13M10 11v5m4-5v5"/></svg>
+          </button>
         </span>`
       : '';
     return `<div class="reply-template-row">
       <button class="reply-template-item" type="button" data-reply-template-apply="${templateId}">
         <span class="reply-template-item-title">${escapeHtml(template.title || 'Без названия')}</span>
         <span class="reply-template-item-preview">${escapeHtml(summarizeReplyTemplate(template.content || ''))}</span>
-        ${meta ? `<span class="reply-template-item-meta">${meta}</span>` : ''}
       </button>
       ${actions}
     </div>`;
