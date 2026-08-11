@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import os
 import shutil
 import socket
@@ -79,8 +80,22 @@ def _deny_network(*_args, **_kwargs):
     raise AssertionError("Network access is forbidden in regression foundation tests")
 
 
+def _is_loopback_address(address: object) -> bool:
+    if not isinstance(address, tuple) or not address:
+        return False
+    host = address[0]
+    if not isinstance(host, str):
+        return False
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 class _NoNetworkSocket(_REAL_SOCKET):
-    def connect(self, *_args, **_kwargs):
+    def connect(self, address):
+        if _is_loopback_address(address):
+            return super().connect(address)
         return _deny_network()
 
     def connect_ex(self, *_args, **_kwargs):
@@ -173,6 +188,31 @@ class RegressionFoundationTests(unittest.TestCase):
         self.assertFalse(_DATABASE_CREATED_DURING_IMPORT)
         self.assertFalse(_ATTACHMENTS_CREATED_DURING_IMPORT)
         self.assertFalse(_DATABASE_PATH.exists())
+
+    def test_asyncio_run_can_create_loopback_socketpair_under_network_guard(self) -> None:
+        self.assertEqual("ok", asyncio.run(asyncio.sleep(0, result="ok")))
+        self.assertEqual([], _NETWORK_ATTEMPTS)
+
+    def test_network_guard_allows_only_numeric_loopback_addresses(self) -> None:
+        self.assertTrue(_is_loopback_address(("127.0.0.1", 1)))
+        self.assertTrue(_is_loopback_address(("127.255.255.254", 65535)))
+        self.assertTrue(_is_loopback_address(("::1", 1, 0, 0)))
+        self.assertFalse(_is_loopback_address(("0.0.0.0", 1)))
+        self.assertFalse(_is_loopback_address(("::", 1, 0, 0)))
+        self.assertFalse(_is_loopback_address(("203.0.113.10", 443)))
+        self.assertFalse(_is_loopback_address(("2001:db8::1", 443, 0, 0)))
+        self.assertFalse(_is_loopback_address(("localhost", 443)))
+        self.assertFalse(_is_loopback_address("127.0.0.1"))
+
+    def test_network_guard_rejects_non_loopback_without_real_connect(self) -> None:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as candidate:
+            with self.assertRaisesRegex(
+                AssertionError,
+                "Network access is forbidden in regression foundation tests",
+            ):
+                candidate.connect(("203.0.113.10", 443))
+        self.assertEqual(["blocked"], _NETWORK_ATTEMPTS)
+        _NETWORK_ATTEMPTS.clear()
 
     def test_health_and_static_assets_are_served_without_lifespan(self) -> None:
         async def exercise_public_routes():
