@@ -110,6 +110,90 @@ class ChatReadStateTests(unittest.TestCase):
 
         self.assertFalse(self._state(self.manager_a)["is_unread"])
 
+    def test_marketplace_echo_cannot_downgrade_crm_outbound_to_inbound(self) -> None:
+        self._add_message("inbound", "needs reply")
+        repo.set_chat_read_state(self.chat_id, int(self.manager_a["id"]), is_unread=False)
+
+        message_id = repo.add_message(
+            self.chat_id,
+            "outbound",
+            "crm reply",
+            author="Manager A",
+            external_message_id="marketplace-echo-id",
+            raw={"_crm_sent_from_crm": True, "_crm_sent_by_user_id": self.manager_a["id"]},
+        )
+        echoed_id = repo.add_message(
+            self.chat_id,
+            "inbound",
+            "crm reply",
+            author="customer",
+            external_message_id="marketplace-echo-id",
+            raw={"marketplace_payload": True},
+        )
+
+        self.assertEqual(message_id, echoed_id)
+        with db.get_connection() as conn:
+            row = conn.execute(
+                "SELECT direction, author, raw_json FROM messages WHERE id=?",
+                (message_id,),
+            ).fetchone()
+        self.assertEqual("outbound", row["direction"])
+        self.assertEqual("Manager A", row["author"])
+        self.assertIn("_crm_sent_from_crm", row["raw_json"])
+        self.assertFalse(self._state(self.manager_a)["is_unread"])
+
+    def test_seller_side_payload_is_never_inserted_as_unread_inbound(self) -> None:
+        repo.set_chat_read_state(self.chat_id, int(self.manager_a["id"]), is_unread=False)
+
+        message_id = repo.add_message(
+            self.chat_id,
+            "inbound",
+            "seller-side echo",
+            author="seller",
+            external_message_id="seller-side-evidence",
+            raw={"user": {"type": "seller"}},
+        )
+
+        with db.get_connection() as conn:
+            row = conn.execute(
+                "SELECT direction FROM messages WHERE id=?",
+                (message_id,),
+            ).fetchone()
+        self.assertEqual("outbound", row["direction"])
+        self.assertFalse(self._state(self.manager_a)["is_unread"])
+
+    def test_startup_repair_removes_false_unread_from_crm_sent_row(self) -> None:
+        self._add_message("inbound", "customer message")
+        repo.set_chat_read_state(self.chat_id, int(self.manager_a["id"]), is_unread=False)
+
+        with db.get_connection() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO messages (
+                    chat_id, external_message_id, direction, author, text, created_at, raw_json
+                ) VALUES (?, ?, 'inbound', ?, ?, CURRENT_TIMESTAMP, ?)
+                """,
+                (
+                    self.chat_id,
+                    "legacy-wrong-direction",
+                    "Manager A",
+                    "legacy crm reply",
+                    '{"_crm_sent_from_crm": true}',
+                ),
+            )
+            repo.refresh_chat_last_message(conn, self.chat_id)
+            wrong_message_id = int(cur.lastrowid)
+
+        self.assertTrue(self._state(self.manager_a)["is_unread"])
+        self.assertEqual(1, repo.repair_crm_sent_message_directions())
+        self.assertFalse(self._state(self.manager_a)["is_unread"])
+        with db.get_connection() as conn:
+            repaired = conn.execute(
+                "SELECT direction FROM messages WHERE id=?",
+                (wrong_message_id,),
+            ).fetchone()
+        self.assertEqual("outbound", repaired["direction"])
+
     def test_replayed_historical_inbound_does_not_reopen_a_read_chat(self) -> None:
         self._add_message("inbound", "current inbound")
         repo.set_chat_read_state(self.chat_id, int(self.manager_a["id"]), is_unread=False)

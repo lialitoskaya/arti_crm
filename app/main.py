@@ -2295,6 +2295,10 @@ async def on_startup() -> None:
     except Exception as exc:
         app.state.last_wb_lastmessage_direction_repair = {"ok": False, "error": str(exc)}
     try:
+        app.state.last_crm_sent_direction_repair = repo.repair_crm_sent_message_directions()
+    except Exception as exc:
+        app.state.last_crm_sent_direction_repair = {"ok": False, "error": str(exc)}
+    try:
         app.state.last_outbound_echo_repair = repo.repair_outbound_marketplace_echo_duplicates(limit=3000)
     except Exception as exc:
         app.state.last_outbound_echo_repair = {"ok": False, "error": str(exc)}
