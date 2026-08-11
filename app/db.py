@@ -193,6 +193,8 @@ def init_db() -> None:
                 last_read_message_id INTEGER,
                 last_read_at TEXT,
                 is_marked_unread INTEGER NOT NULL DEFAULT 0 CHECK(is_marked_unread IN (0, 1)),
+                is_pinned INTEGER NOT NULL DEFAULT 0 CHECK(is_pinned IN (0, 1)),
+                pinned_at TEXT,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY(user_id, chat_id),
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -314,6 +316,14 @@ def init_db() -> None:
             conn.execute("ALTER TABLE chats ADD COLUMN assigned_user_id INTEGER")
         if "assigned_user_id" not in task_columns:
             conn.execute("ALTER TABLE tasks ADD COLUMN assigned_user_id INTEGER")
+
+        chat_user_state_columns = _columns("chat_user_states")
+        if "is_pinned" not in chat_user_state_columns:
+            conn.execute(
+                "ALTER TABLE chat_user_states ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0 CHECK(is_pinned IN (0, 1))"
+            )
+        if "pinned_at" not in chat_user_state_columns:
+            conn.execute("ALTER TABLE chat_user_states ADD COLUMN pinned_at TEXT")
 
         conn.executescript(
             """
@@ -573,6 +583,8 @@ def init_db() -> None:
                 ON messages(chat_id, direction, id);
             CREATE INDEX IF NOT EXISTS idx_chat_user_states_chat_user
                 ON chat_user_states(chat_id, user_id);
+            CREATE INDEX IF NOT EXISTS idx_chat_user_states_user_pinned
+                ON chat_user_states(user_id, is_pinned, chat_id);
             CREATE INDEX IF NOT EXISTS idx_tasks_chat_created_id
                 ON tasks(chat_id, created_at DESC, id DESC);
             CREATE INDEX IF NOT EXISTS idx_chats_marketplace_status_last_message

@@ -1,4 +1,4 @@
-const ARTI_CRM_SW_VERSION = 'v93-chat-pagination-20260805';
+const ARTI_CRM_SW_VERSION = 'v94-chat-pinning-20260805';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();

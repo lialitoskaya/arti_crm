@@ -254,6 +254,8 @@ class ChatReadStateTests(unittest.TestCase):
                 "last_read_message_id",
                 "last_read_at",
                 "is_marked_unread",
+                "is_pinned",
+                "pinned_at",
                 "updated_at",
             },
             columns,

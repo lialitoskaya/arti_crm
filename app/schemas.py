@@ -34,6 +34,10 @@ class ChatReadStateUpdate(BaseModel):
     is_unread: bool
 
 
+class ChatPinStateUpdate(BaseModel):
+    is_pinned: bool
+
+
 class ChatFunnelCreate(BaseModel):
     title: str = Field(min_length=1, max_length=160)
     sort_order: int = 0

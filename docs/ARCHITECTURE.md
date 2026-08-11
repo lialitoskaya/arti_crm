@@ -123,6 +123,28 @@ Rollback to older application code leaves the additive table and index unused.
 Restoring this version resumes the same personal state; no destructive down
 migration is required.
 
+## Personal chat pin state
+
+The same `chat_user_states` row also stores personal pin metadata in `is_pinned`
+and `pinned_at`; no second user/chat state table is introduced. Pinning an old chat
+lazily initializes its read boundary to the current local message so pre-existing
+history does not become unread as a side effect.
+
+The execution flow is:
+
+```text
+PATCH /api/chats/{chat_id}/pin-state
+  -> authenticated current user + shared CSRF middleware
+    -> repository.set_chat_pin_state()
+      -> chat_user_states
+```
+
+Chat list SQL sorts the current user's pinned chats first and preserves descending
+message activity order inside pinned and ordinary groups. The frontend applies a
+per-chat optimistic update with rollback and stale-GET protection, then reloads
+only the bounded current page to reconcile global ordering. A single delegated
+list handler owns the control; clicking the pin never opens the chat.
+
 ## Bounded chat-list pagination
 
 The browser uses the opt-in paginated form of `GET /api/chats` with a fixed

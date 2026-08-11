@@ -392,6 +392,108 @@ function createChatReadStateController(options) {
   return { captureRequestContext, reconcile, set };
 }
 
+function createChatPinStateController(options) {
+  const operations = new Map();
+  let operationVersion = 0;
+
+  function snapshot(chat) {
+    return {
+      is_pinned: Boolean(chat?.is_pinned),
+      pinned_at: chat?.pinned_at ?? null,
+    };
+  }
+
+  function captureRequestContext() {
+    return {
+      version: operationVersion,
+      pendingChatIds: new Set(
+        [...operations.entries()]
+          .filter(([, operation]) => operation.pending)
+          .map(([chatId]) => Number(chatId)),
+      ),
+    };
+  }
+
+  function reconcile(serverChat, context = {}) {
+    const chatId = Number(serverChat?.id ?? serverChat?.chat_id ?? 0);
+    if (!chatId) return serverChat;
+
+    const operation = operations.get(chatId);
+    const localChat = options.read(chatId);
+    if (!operation || !localChat) return serverChat;
+
+    const requestVersion = Number(context.version || 0);
+    const pendingAtStart = Boolean(context.pendingChatIds?.has?.(chatId));
+    if (operation.pending || operation.version > requestVersion || pendingAtStart) {
+      return { ...serverChat, ...snapshot(localChat) };
+    }
+    return serverChat;
+  }
+
+  function set(chatId, isPinned) {
+    const normalizedChatId = Number(chatId || 0);
+    const desiredPinned = Boolean(isPinned);
+    if (!normalizedChatId) return Promise.resolve(null);
+
+    const existingOperation = operations.get(normalizedChatId);
+    if (existingOperation?.pending) {
+      if (existingOperation.desiredPinned === desiredPinned) return existingOperation.promise;
+      return existingOperation.promise
+        .catch(() => null)
+        .then(() => set(normalizedChatId, desiredPinned));
+    }
+
+    const current = options.read(normalizedChatId);
+    if (!current) return Promise.resolve(null);
+    if (Boolean(current.is_pinned) === desiredPinned) return Promise.resolve(snapshot(current));
+
+    const previous = snapshot(current);
+    const version = ++operationVersion;
+    const operation = {
+      version,
+      desiredPinned,
+      pending: true,
+      promise: null,
+    };
+    operations.set(normalizedChatId, operation);
+
+    options.apply(normalizedChatId, {
+      is_pinned: desiredPinned,
+      pinned_at: desiredPinned ? (previous.pinned_at || new Date().toISOString()) : null,
+    });
+
+    let requestResult;
+    try {
+      requestResult = options.request(normalizedChatId, desiredPinned);
+    } catch (error) {
+      requestResult = Promise.reject(error);
+    }
+
+    operation.promise = Promise.resolve(requestResult)
+      .then((canonical) => {
+        if (Number(canonical?.chat_id || 0) !== normalizedChatId) {
+          throw new Error('Pin-state response chat ID mismatch');
+        }
+        const activeOperation = operations.get(normalizedChatId);
+        if (!activeOperation || activeOperation.version !== version) return canonical;
+        activeOperation.pending = false;
+        options.apply(normalizedChatId, canonical);
+        return canonical;
+      })
+      .catch((error) => {
+        const activeOperation = operations.get(normalizedChatId);
+        if (activeOperation?.version === version) {
+          activeOperation.pending = false;
+          options.apply(normalizedChatId, previous);
+        }
+        throw error;
+      });
+    return operation.promise;
+  }
+
+  return { captureRequestContext, reconcile, set };
+}
+
 function readChatReadStateModel(chatId) {
   const normalizedChatId = Number(chatId || 0);
   return (chats || []).find((chat) => Number(chat.id) === normalizedChatId)
@@ -407,6 +509,17 @@ const chatReadStateController = createChatReadStateController({
   },
   read: readChatReadStateModel,
   apply: applyChatReadStateLocally,
+});
+
+const chatPinStateController = createChatPinStateController({
+  request(chatId, isPinned) {
+    return api(`/api/chats/${chatId}/pin-state`, {
+      method: 'PATCH',
+      body: JSON.stringify({ is_pinned: Boolean(isPinned) }),
+    });
+  },
+  read: readChatReadStateModel,
+  apply: applyChatPinStateLocally,
 });
 
 
@@ -2812,6 +2925,7 @@ async function loadChats(options = {}) {
     params.set('offset', String(chatListOffset));
 
     const readStateRequestContext = chatReadStateController.captureRequestContext();
+    const pinStateRequestContext = chatPinStateController.captureRequestContext();
     const page = await api(`/api/chats?${params.toString()}`, { timeoutMs: 15000 });
     const serverChats = Array.isArray(page) ? page : (page?.items || []);
     chatListTotal = Number(Array.isArray(page) ? serverChats.length : (page?.total || 0));
@@ -2819,7 +2933,10 @@ async function loadChats(options = {}) {
       ? serverChats.filter(chat => chat?.is_unread).length
       : (page?.unread_total || 0));
     chatListOffset = Number(Array.isArray(page) ? 0 : (page?.offset || 0));
-    chats = serverChats.map((chat) => chatReadStateController.reconcile(chat, readStateRequestContext));
+    chats = serverChats.map((chat) => chatPinStateController.reconcile(
+      chatReadStateController.reconcile(chat, readStateRequestContext),
+      pinStateRequestContext,
+    ));
     trackChatMessageSounds(chats || []);
 
     if (render) renderLoadedChats();
@@ -3019,6 +3136,36 @@ function applyChatReadStateLocally(chatId, state) {
   updateChatCountLabel();
 }
 
+function chatListActivityValue(chat) {
+  const parsed = Date.parse(chat?.last_message_at || chat?.updated_at || chat?.created_at || '');
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function sortLoadedChatsByPinAndActivity() {
+  chats = [...(chats || [])].sort((left, right) => {
+    const pinDelta = Number(Boolean(right?.is_pinned)) - Number(Boolean(left?.is_pinned));
+    if (pinDelta) return pinDelta;
+    const activityDelta = chatListActivityValue(right) - chatListActivityValue(left);
+    if (activityDelta) return activityDelta;
+    return Number(right?.id || 0) - Number(left?.id || 0);
+  });
+}
+
+function applyChatPinStateLocally(chatId, state) {
+  const normalizedChatId = Number(chatId || 0);
+  if (!normalizedChatId || !state) return;
+
+  chats = (chats || []).map((chat) => (
+    Number(chat.id) === normalizedChatId ? { ...chat, ...state } : chat
+  ));
+  if (Number(currentChat?.id) === normalizedChatId) {
+    currentChat = { ...currentChat, ...state };
+  }
+  sortLoadedChatsByPinAndActivity();
+  renderChatList({ force: true });
+  renderChatListPager();
+}
+
 function markChatReadOnOpen(chatId) {
   const chat = readChatReadStateModel(chatId);
   if (!chat?.is_unread) return Promise.resolve(null);
@@ -3036,6 +3183,23 @@ function handleChatListClick(event) {
 
   const chatId = Number(item.dataset.chatId || 0);
   if (!chatId) return;
+
+  const pinStateControl = target.closest?.('[data-chat-pin-state]');
+  if (pinStateControl) {
+    event.preventDefault();
+    event.stopPropagation();
+    const chat = readChatReadStateModel(chatId);
+    const desiredPinned = !Boolean(chat?.is_pinned);
+    chatPinStateController.set(chatId, desiredPinned)
+      .then(() => {
+        if (desiredPinned) chatListOffset = 0;
+        return loadChats({ withStats: false });
+      })
+      .catch((error) => {
+        notify('Закрепление чата', `Не удалось изменить закрепление: ${String(error.message || error)}`);
+      });
+    return;
+  }
 
   const readStateControl = target.closest?.('[data-chat-read-state]');
   if (readStateControl) {
@@ -3158,9 +3322,13 @@ async function refreshCurrentChatMessagesOnly(options = {}) {
 
   try {
     const readStateRequestContext = chatReadStateController.captureRequestContext();
+    const pinStateRequestContext = chatPinStateController.captureRequestContext();
     const serverChat = await api(`/api/chats/${chatId}?messages_limit=${messagesLimit}`, { timeoutMs: 15000 });
     if (Number(serverChat?.id || 0) !== chatId) return null;
-    const chat = chatReadStateController.reconcile(serverChat, readStateRequestContext);
+    const chat = chatPinStateController.reconcile(
+      chatReadStateController.reconcile(serverChat, readStateRequestContext),
+      pinStateRequestContext,
+    );
 
     if (Number(currentChatId) !== chatId) return null;
 
@@ -3226,9 +3394,10 @@ function renderChatList(options = {}) {
   for (const chat of chatsToRender) {
     const item = document.createElement('div');
     const showWaitingMarker = shouldShowWaitingMarker(chat);
-    item.className = `chat-item ${chat.id === currentChatId ? 'active' : ''} ${showWaitingMarker ? 'needs-response' : ''} ${chat.is_unread ? 'is-unread' : ''}`;
+    item.className = `chat-item ${chat.id === currentChatId ? 'active' : ''} ${showWaitingMarker ? 'needs-response' : ''} ${chat.is_unread ? 'is-unread' : ''} ${chat.is_pinned ? 'is-pinned' : ''}`;
     item.dataset.chatId = String(chat.id);
     item.dataset.unread = chat.is_unread ? '1' : '0';
+    item.dataset.pinned = chat.is_pinned ? '1' : '0';
     const slaBadge = waitingResponseBadge(chat);
     const assigneeBadge = chat.assigned_user_id ? `<span class="assignee-chip">${escapeHtml(chat.assigned_user_display_name || chat.assigned_user_username || chat.assigned_to || 'назначен')}</span>` : '';
     const time = formatChatTime(chat.last_message_at || chat.updated_at || chat.created_at);
@@ -3240,7 +3409,12 @@ function renderChatList(options = {}) {
         <div class="chat-item-title">
           <strong title="${escapeHtml(customerLabel(chat))}">${escapeHtml(customerLabel(chat))}</strong>
         </div>
-        <span class="badge ${chat.marketplace}">${marketplaceNames[chat.marketplace] || chat.marketplace}</span>
+        <div class="chat-item-actions">
+          <button class="chat-pin-control" type="button" data-chat-pin-state data-chat-id="${chat.id}" aria-label="${chat.is_pinned ? 'Открепить чат' : 'Закрепить чат'}" aria-pressed="${chat.is_pinned ? 'true' : 'false'}" title="${chat.is_pinned ? 'Открепить чат' : 'Закрепить чат'}">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3h8l-1 6 3 3v2H6v-2l3-3-1-6Z"></path><path d="M12 14v7"></path></svg>
+          </button>
+          <span class="badge ${chat.marketplace}">${marketplaceNames[chat.marketplace] || chat.marketplace}</span>
+        </div>
       </div>
       <p class="preview ${chat.search_match_text ? 'chat-search-match-preview' : ''}">${escapeHtml(searchMatch)}</p>
       <div class="chat-item-footer">
@@ -3301,13 +3475,17 @@ async function openChat(chatId, options = {}) {
 
   let chat;
   const readStateRequestContext = chatReadStateController.captureRequestContext();
+  const pinStateRequestContext = chatPinStateController.captureRequestContext();
   chatOpenInFlight = true;
   try {
     const serverChat = await api(`/api/chats/${chatId}?messages_limit=${messagesLimit}`);
     if (Number(serverChat?.id || 0) !== Number(chatId)) {
       throw new Error('Read-state response chat ID mismatch');
     }
-    chat = chatReadStateController.reconcile(serverChat, readStateRequestContext);
+    chat = chatPinStateController.reconcile(
+      chatReadStateController.reconcile(serverChat, readStateRequestContext),
+      pinStateRequestContext,
+    );
   } catch (err) {
     if (requestSeq === openChatRequestSeq) {
       notify('Не удалось открыть чат', String(err.message || err));

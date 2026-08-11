@@ -68,7 +68,7 @@ from app.connectors.ozon import OzonConnector
 from app.connectors.wildberries import WildberriesConnector
 from app.connectors.yandex_market import YandexMarketConnector
 from app.db import get_connection, init_db
-from app.schemas import AiReplyCreate, ChatCreate, ChatReadStateUpdate, ChatUpdate, InternalNoteCreate, InternalNoteUpdate, LoginCreate, MessageCreate, ReviewReplyCreate, QuestionAnswerCreate, TaskCreate, TaskUpdate, UserCreate, UserPasswordUpdate, UserUpdate, ProfileUpdate, KnowledgeCategoryCreate, KnowledgeArticleCreate, KnowledgeArticleUpdate, YandexOAuthManagedLinkCreate, YandexOAuthManagedLinkUpdate
+from app.schemas import AiReplyCreate, ChatCreate, ChatPinStateUpdate, ChatReadStateUpdate, ChatUpdate, InternalNoteCreate, InternalNoteUpdate, LoginCreate, MessageCreate, ReviewReplyCreate, QuestionAnswerCreate, TaskCreate, TaskUpdate, UserCreate, UserPasswordUpdate, UserUpdate, ProfileUpdate, KnowledgeCategoryCreate, KnowledgeArticleCreate, KnowledgeArticleUpdate, YandexOAuthManagedLinkCreate, YandexOAuthManagedLinkUpdate
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -5087,6 +5087,23 @@ def update_chat_read_state(
         chat_id,
         int(user["id"]),
         is_unread=payload.is_unread,
+    )
+    if not state:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    return state
+
+
+@app.patch("/api/chats/{chat_id}/pin-state")
+def update_chat_pin_state(
+    chat_id: int,
+    payload: ChatPinStateUpdate,
+    request: Request,
+) -> dict[str, Any]:
+    user = _current_user(request)
+    state = repo.set_chat_pin_state(
+        chat_id,
+        int(user["id"]),
+        is_pinned=payload.is_pinned,
     )
     if not state:
         raise HTTPException(status_code=404, detail="Chat not found")

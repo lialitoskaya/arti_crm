@@ -27,6 +27,21 @@ unread metadata and the global CRM workflow status are not personal read state.
 12. Frontend optimistic state is protected by an operation version and a request
     snapshot; a GET started before or during a PATCH cannot roll the state back.
 
+## Personal chat pinning
+
+1. Pin state is personal to the authenticated CRM user and keyed by
+   `(user_id, chat_id)`.
+2. Pinning or unpinning never changes another user's state and never invokes a
+   marketplace connector or synchronization.
+3. Pinned chats sort before ordinary chats; each group remains ordered by latest
+   message activity.
+4. Repeating the same pin-state PATCH is idempotent.
+5. Pinning a legacy chat must not make its pre-existing history unread.
+6. Viewer, manager, and admin roles may mutate only their own pin state; unsafe
+   requests use the shared CSRF protection.
+7. The pin control is placed in the top-right action group before the marketplace
+   badge. It uses delegated events and does not open the chat.
+
 ## Chat-list pagination
 
 1. The interactive CRM list loads at most 100 chats per page.

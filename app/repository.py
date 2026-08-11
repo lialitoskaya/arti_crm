@@ -2307,6 +2307,93 @@ def set_chat_read_state(
         )
 
 
+def _chat_pin_state_row_conn(conn: Any, chat_id: int, user_id: int) -> Any:
+    return conn.execute(
+        """
+        SELECT
+            c.id AS chat_id,
+            cus.user_id AS state_user_id,
+            COALESCE(cus.is_pinned, 0) AS is_pinned,
+            cus.pinned_at AS pinned_at,
+            (
+                SELECT MAX(all_messages.id)
+                FROM messages all_messages
+                WHERE all_messages.chat_id=c.id
+            ) AS latest_message_id
+        FROM chats c
+        LEFT JOIN chat_user_states cus
+          ON cus.chat_id=c.id AND cus.user_id=?
+        WHERE c.id=?
+        """,
+        (int(user_id), int(chat_id)),
+    ).fetchone()
+
+
+def _serialize_chat_pin_state(row: Any) -> dict[str, Any] | None:
+    if not row:
+        return None
+    return {
+        "chat_id": int(row["chat_id"]),
+        "is_pinned": bool(row["is_pinned"]),
+        "pinned_at": row["pinned_at"],
+    }
+
+
+def get_chat_pin_state(chat_id: int, user_id: int) -> dict[str, Any] | None:
+    with get_connection() as conn:
+        return _serialize_chat_pin_state(
+            _chat_pin_state_row_conn(conn, int(chat_id), int(user_id))
+        )
+
+
+def set_chat_pin_state(
+    chat_id: int,
+    user_id: int,
+    *,
+    is_pinned: bool,
+) -> dict[str, Any] | None:
+    """Set personal pin state without changing read state or loading history."""
+    with get_connection() as conn:
+        current = _chat_pin_state_row_conn(conn, int(chat_id), int(user_id))
+        if not current:
+            return None
+
+        if is_pinned:
+            conn.execute(
+                """
+                INSERT INTO chat_user_states (
+                    user_id, chat_id, last_read_message_id, last_read_at,
+                    is_marked_unread, is_pinned, pinned_at, updated_at
+                )
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP, 0, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT(user_id, chat_id) DO UPDATE SET
+                    is_pinned=1,
+                    pinned_at=CASE
+                        WHEN chat_user_states.is_pinned=1 THEN chat_user_states.pinned_at
+                        ELSE CURRENT_TIMESTAMP
+                    END,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE chat_user_states.is_pinned<>1
+                """,
+                (int(user_id), int(chat_id), current["latest_message_id"]),
+            )
+        elif current["state_user_id"] is not None:
+            conn.execute(
+                """
+                UPDATE chat_user_states
+                SET is_pinned=0,
+                    pinned_at=NULL,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE user_id=? AND chat_id=? AND is_pinned<>0
+                """,
+                (int(user_id), int(chat_id)),
+            )
+
+        return _serialize_chat_pin_state(
+            _chat_pin_state_row_conn(conn, int(chat_id), int(user_id))
+        )
+
+
 def _preserve_read_users_for_replayed_inbound_conn(
     conn: Any,
     *,
@@ -2794,6 +2881,8 @@ def _chats_select_sql(where: str, current_user_id: int | None = None) -> str:
             cus.last_read_message_id AS last_read_message_id,
             cus.last_read_at AS last_read_at,
             COALESCE(cus.is_marked_unread, 0) AS is_marked_unread,
+            COALESCE(cus.is_pinned, 0) AS is_pinned,
+            cus.pinned_at AS pinned_at,
             CASE
                 WHEN COALESCE(cus.is_marked_unread, 0)=1 THEN 1
                 WHEN cus.user_id IS NOT NULL AND EXISTS (
@@ -2822,7 +2911,7 @@ def _chats_select_sql(where: str, current_user_id: int | None = None) -> str:
         LEFT JOIN chat_funnels f ON f.id = s.funnel_id
         LEFT JOIN chat_user_states cus ON cus.chat_id=c.id AND cus.user_id={read_user_id}
         {where}
-        ORDER BY julianday(actual_last_message_at) DESC, c.id DESC
+        ORDER BY COALESCE(cus.is_pinned, 0) DESC, julianday(actual_last_message_at) DESC, c.id DESC
     """
 
 
