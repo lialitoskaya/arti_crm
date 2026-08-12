@@ -200,23 +200,29 @@ provenance, resolves employee labels from stored user ids, merges only safe old
 duplicates, and records completion in `schema_migrations`. Repeated startup repair
 jobs and scattered post-hoc duplicate deletion paths are not used.
 
-## Chat message calendar-date filter
+## Chat-list calendar-date filter
 
-The calendar control in the chat header is a transport-level filter over the
-canonical `messages.created_at` timeline. The browser sends an inclusive local
-calendar-date range together with `Date.getTimezoneOffset()`. The route validates
-both boundaries, converts them to one half-open UTC range `[start, end)` and
-passes the boundaries to the repository; the repository owns the SQL predicate
-and ordering.
+The calendar control belongs to the chat-list filters, not to an opened dialog.
+It filters chats by the timestamp of each chat's latest canonical message. The
+browser sends an inclusive local calendar range together with
+`Date.getTimezoneOffset()`. The route validates both boundaries, converts them
+to one half-open UTC interval `[start, end)` and passes those boundaries into
+the same repository query used by lazy loading, counters and background list
+refreshes.
 
-Both initial chat opening and passive message refresh use the single
-`chatMessagesRequestUrl()` frontend builder. This prevents the foreground and
-background paths from drifting into different filter behavior. Switching to a
-different chat clears the date filter; refreshing the same chat preserves it.
-The repository still applies the existing bounded message limit inside the
-selected range, so the filter never turns into an unbounded history load.
+The open-chat endpoint always returns the normal bounded message history and has
+no date-filter parameters. This keeps message loading, polling and read-state
+behavior independent from list discovery filters. Changing or clearing the chat
+range resets the lazy feed to its first 30-item batch; the active range is part
+of the stale-response key so an older request cannot overwrite the new result.
 
 ## Canonical task filtering and date ordering
+
+The standalone task calendar filter uses one inclusive `due_at` date range.
+Both boundaries are validated by the route and applied in the repository; the
+frontend does not hide tasks locally. The existing single calendar control opens
+one shared date-range popover with `from` and `to` fields.
+
 
 The Tasks view sends search, task type, status/bucket, due date, and responsible
 employee filters to `GET /api/tasks`. The browser no longer re-filters the

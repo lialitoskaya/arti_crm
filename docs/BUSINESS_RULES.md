@@ -86,33 +86,36 @@ unread metadata and the global CRM workflow status are not personal read state.
 10. Existing duplicate rows are repaired once by an idempotent schema migration;
     the application does not run recurring legacy repair passes at startup.
 
-## Chat message filtering by date
+## Chat-list filtering by date
 
-1. Both selected boundaries are interpreted in the operator browser's local
-   timezone. The range is inclusive by calendar date.
-2. The backend validates both boundaries, converts the range to one half-open UTC
-   interval and remains the source of truth for message selection; the frontend
-   does not hide already loaded messages as a substitute for filtering.
-3. Initial chat loading and background refresh use the same request builder and
-   therefore the same active date filter.
-4. Changing to another chat clears the filter. Refreshing or reopening the same
-   chat preserves it.
-5. The existing message limit remains enforced within the selected range.
-6. An empty result is shown explicitly as no messages for the selected period.
+1. The calendar filter is shown only in the chat list. The open chat header has
+   no calendar and message history is not filtered by this control.
+2. A chat matches when its latest canonical message timestamp falls inside the
+   selected inclusive local calendar-date range.
+3. The backend validates both boundaries, converts the browser-local range to a
+   half-open UTC interval and remains the source of truth for selection.
+4. Lazy loading, total/unread counters and passive list refreshes use the same
+   repository predicate.
+5. Applying or clearing the range resets the chat feed to the first 30 rows and
+   stale requests for the previous range are ignored.
+6. Chats without messages do not match an active date range.
 
 ## Task date and responsible employee
 
-1. `due_at` is the task date shown in cards and used by the calendar filter.
-   `created_at` and `updated_at` are audit timestamps and never substitute for it.
-2. Tasks are ordered strictly from the newest due date to the oldest; tasks
+1. `due_at` is the task date shown in cards and used by the existing calendar
+   filter. `created_at` and `updated_at` are audit timestamps and never substitute
+   for it.
+2. The task calendar opens one inclusive `from`/`to` range. Both boundaries are
+   required, validated by the route and applied in the repository.
+3. Tasks are ordered strictly from the newest due date to the oldest; tasks
    without a date appear after all dated tasks.
-3. Status does not override date ordering. Equal dates use descending task id as
+4. Status does not override date ordering. Equal dates use descending task id as
    a stable deterministic tie breaker.
-4. The responsible-employee filter uses `assigned_user_id` and is evaluated in
+5. The responsible-employee filter uses `assigned_user_id` and is evaluated in
    the repository. The frontend does not re-filter an already returned array.
-5. `mine=true` always means the authenticated user and takes precedence over an
+6. `mine=true` always means the authenticated user and takes precedence over an
    explicit responsible-employee query parameter.
-6. The same due-date ordering applies to the all-tasks view and tasks shown
+7. The same due-date ordering applies to the all-tasks view and tasks shown
    inside an individual chat.
 
 ## CRM outbound message author

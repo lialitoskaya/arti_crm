@@ -100,9 +100,34 @@ class TaskAssigneeDateSortTests(unittest.TestCase):
             [int(task["id"]) for task in chat["tasks"]],
         )
 
-    def test_repository_filters_by_due_date_only(self) -> None:
-        tasks = repo.list_tasks(due_date="2026-08-08")
-        self.assertEqual([self.earlier_id], [int(task["id"]) for task in tasks])
+    def test_repository_filters_by_inclusive_due_date_range_only(self) -> None:
+        tasks = repo.list_tasks(
+            due_date_from="2026-08-08",
+            due_date_to="2026-08-10",
+        )
+        self.assertEqual(
+            [self.later_id, self.earlier_id],
+            [int(task["id"]) for task in tasks],
+        )
+        self.assertNotIn(self.no_date_id, [int(task["id"]) for task in tasks])
+
+    def test_api_rejects_partial_or_reversed_due_date_range(self) -> None:
+        token = repo.create_session(int(self.manager_a["id"]), user_agent="task-filter-test")
+
+        async def exercise(params):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=main.app),
+                base_url="https://testserver",
+            ) as client:
+                client.cookies.set(main.AUTH_COOKIE_NAME, token)
+                return await client.get("/api/tasks", params=params)
+
+        partial = asyncio.run(exercise({"due_date_from": "2026-08-08"}))
+        reversed_range = asyncio.run(
+            exercise({"due_date_from": "2026-08-10", "due_date_to": "2026-08-08"})
+        )
+        self.assertEqual(422, partial.status_code)
+        self.assertEqual(422, reversed_range.status_code)
 
     def test_api_filters_by_explicit_assignee(self) -> None:
         token = repo.create_session(int(self.manager_a["id"]), user_agent="task-filter-test")
@@ -159,12 +184,23 @@ class TaskAssigneeDateSortUiContractTests(unittest.TestCase):
         self.assertIn('id="taskAssigneeFilter"', self.html)
         self.assertIn("function buildTaskListQuery()", self.source)
         self.assertIn("params.set('assigned_user_id', assignedUserId)", self.source)
-        self.assertIn("params.set('due_date', dueDate)", self.source)
+        self.assertIn("params.set('due_date_from', currentTaskDueDateFrom)", self.source)
+        self.assertIn("params.set('due_date_to', currentTaskDueDateTo)", self.source)
         self.assertIn("params.set('task_type_id', taskTypeId)", self.source)
         self.assertIn("params.set('q', searchValue)", self.source)
         self.assertNotIn("function filterTasksForUi", self.source)
         self.assertNotIn("function taskMatchesDate", self.source)
         self.assertNotIn("window.lastLoadedTasks", self.source)
+
+
+    def test_existing_task_calendar_contains_one_date_range_popover(self) -> None:
+        self.assertIn('id="taskDueDateFilterBtn"', self.html)
+        self.assertIn('id="taskDueDateFromFilter" type="date"', self.html)
+        self.assertIn('id="taskDueDateToFilter" type="date"', self.html)
+        self.assertIn('id="taskDueDateFilterPopover"', self.html)
+        self.assertNotIn('id="taskDueDateFilter" type="date"', self.html)
+        self.assertNotIn("params.set('due_date',", self.source)
+        self.assertIn("validateDateRangeValues(fromValue, toValue)", self.source)
 
     def test_task_card_renders_canonical_due_date_field(self) -> None:
         self.assertIn('<span class="tasks-ref-field-title">Дата</span>', self.source)

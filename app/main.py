@@ -4943,6 +4943,49 @@ async def answer_ozon_question(question_id: int, payload: QuestionAnswerCreate) 
     return {"ok": True, "question": updated, "marketplace_response": raw_response, "status_response": status_result}
 
 
+def _validate_complete_date_range(
+    date_from: date | None,
+    date_to: date | None,
+) -> tuple[date | None, date | None]:
+    if date_from is None and date_to is None:
+        return None, None
+    if date_from is None or date_to is None:
+        raise HTTPException(status_code=422, detail="Both date boundaries are required")
+    if date_from > date_to:
+        raise HTTPException(status_code=422, detail="Date range is invalid")
+    return date_from, date_to
+
+
+def _local_date_range_utc_bounds(
+    date_from: date | None,
+    date_to: date | None,
+    timezone_offset_minutes: int,
+) -> tuple[str | None, str | None]:
+    normalized_from, normalized_to = _validate_complete_date_range(date_from, date_to)
+    if normalized_from is None or normalized_to is None:
+        return None, None
+    if timezone_offset_minutes < -840 or timezone_offset_minutes > 840:
+        raise HTTPException(status_code=422, detail="Invalid timezone offset")
+
+    # Browser getTimezoneOffset() is UTC - local time. Convert the inclusive
+    # local calendar range to one half-open UTC interval [start, end).
+    local_timezone = timezone(timedelta(minutes=-timezone_offset_minutes))
+    local_start = datetime.combine(normalized_from, datetime_time.min, tzinfo=local_timezone)
+    try:
+        end_date_exclusive = normalized_to + timedelta(days=1)
+    except OverflowError as exc:
+        raise HTTPException(status_code=422, detail="Date range is invalid") from exc
+    local_end_exclusive = datetime.combine(
+        end_date_exclusive,
+        datetime_time.min,
+        tzinfo=local_timezone,
+    )
+    return (
+        local_start.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+        local_end_exclusive.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+    )
+
+
 @app.get("/api/tasks")
 def list_tasks(
     request: Request,
@@ -4951,10 +4994,12 @@ def list_tasks(
     mine: bool = False,
     q: str | None = None,
     task_type_id: int | None = None,
-    due_date: str | None = None,
+    due_date_from: date | None = None,
+    due_date_to: date | None = None,
     assigned_user_id: int | None = None,
 ) -> list[dict[str, Any]]:
     user = _current_user(request)
+    normalized_from, normalized_to = _validate_complete_date_range(due_date_from, due_date_to)
     effective_assigned_user_id = int(user["id"]) if mine else assigned_user_id
     return repo.list_tasks(
         status=status,
@@ -4962,7 +5007,8 @@ def list_tasks(
         assigned_user_id=effective_assigned_user_id,
         q=q,
         task_type_id=task_type_id,
-        due_date=due_date,
+        due_date_from=normalized_from.isoformat() if normalized_from else None,
+        due_date_to=normalized_to.isoformat() if normalized_to else None,
     )
 
 
@@ -5041,68 +5087,38 @@ def list_chats(
     mine: bool = False,
     funnel_id: int | None = None,
     q: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    timezone_offset_minutes: int = 0,
     paginated: bool = False,
     limit: int = 30,
     offset: int = 0,
 ) -> list[dict[str, Any]] | dict[str, Any]:
     user = _current_user(request)
     assigned_user_id = int(user["id"]) if mine else None
+    last_message_created_from, last_message_created_to = _local_date_range_utc_bounds(
+        date_from,
+        date_to,
+        timezone_offset_minutes,
+    )
+    common_filters = {
+        "status": status,
+        "marketplace": marketplace,
+        "archived": archived,
+        "assigned_user_id": assigned_user_id,
+        "funnel_id": funnel_id,
+        "q": q,
+        "current_user_id": int(user["id"]),
+        "last_message_created_from": last_message_created_from,
+        "last_message_created_to": last_message_created_to,
+    }
     if paginated:
         return repo.list_chats_page(
-            status=status,
-            marketplace=marketplace,
-            archived=archived,
-            assigned_user_id=assigned_user_id,
-            funnel_id=funnel_id,
-            q=q,
-            current_user_id=int(user["id"]),
+            **common_filters,
             limit=limit,
             offset=offset,
         )
-    return repo.list_chats(
-        status=status,
-        marketplace=marketplace,
-        archived=archived,
-        assigned_user_id=assigned_user_id,
-        funnel_id=funnel_id,
-        q=q,
-        current_user_id=int(user["id"]),
-    )
-
-
-def _message_date_range_utc_bounds(
-    message_date_from: date | None,
-    message_date_to: date | None,
-    timezone_offset_minutes: int,
-) -> tuple[str | None, str | None]:
-    if message_date_from is None and message_date_to is None:
-        return None, None
-    if message_date_from is None or message_date_to is None:
-        raise HTTPException(status_code=422, detail="Both message date boundaries are required")
-    if message_date_from > message_date_to:
-        raise HTTPException(status_code=422, detail="Message date range is invalid")
-    if timezone_offset_minutes < -840 or timezone_offset_minutes > 840:
-        raise HTTPException(status_code=422, detail="Invalid timezone offset")
-
-    # Browser getTimezoneOffset() is UTC - local time. Convert it to a normal
-    # timezone offset before building an inclusive local calendar-date range.
-    local_timezone = timezone(timedelta(minutes=-timezone_offset_minutes))
-    local_start = datetime.combine(message_date_from, datetime_time.min, tzinfo=local_timezone)
-    try:
-        end_date_exclusive = message_date_to + timedelta(days=1)
-    except OverflowError as exc:
-        raise HTTPException(status_code=422, detail="Message date range is invalid") from exc
-    local_end_exclusive = datetime.combine(
-        end_date_exclusive,
-        datetime_time.min,
-        tzinfo=local_timezone,
-    )
-    utc_start = local_start.astimezone(timezone.utc)
-    utc_end = local_end_exclusive.astimezone(timezone.utc)
-    return (
-        utc_start.isoformat().replace("+00:00", "Z"),
-        utc_end.isoformat().replace("+00:00", "Z"),
-    )
+    return repo.list_chats(**common_filters)
 
 
 @app.get("/api/chats/{chat_id}")
@@ -5110,23 +5126,13 @@ def get_chat(
     chat_id: int,
     request: Request,
     messages_limit: int = 120,
-    message_date_from: date | None = None,
-    message_date_to: date | None = None,
-    timezone_offset_minutes: int = 0,
 ) -> dict[str, Any]:
     user = _current_user(request)
     safe_limit = max(20, min(int(messages_limit or 120), 500))
-    message_created_from, message_created_to = _message_date_range_utc_bounds(
-        message_date_from,
-        message_date_to,
-        timezone_offset_minutes,
-    )
     chat = repo.get_chat(
         chat_id,
         messages_limit=safe_limit,
         current_user_id=int(user["id"]),
-        message_created_from=message_created_from,
-        message_created_to=message_created_to,
     )
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")

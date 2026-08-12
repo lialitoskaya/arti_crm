@@ -2802,6 +2802,16 @@ def delete_internal_note(chat_id: int, message_id: int) -> bool:
         refresh_chat_last_message(conn, int(chat_id))
         return True
 
+def _latest_chat_message_at_sql(chat_alias: str = "c") -> str:
+    return f"""(
+        SELECT latest_message.created_at
+        FROM messages latest_message
+        WHERE latest_message.chat_id = {chat_alias}.id
+        ORDER BY julianday(latest_message.created_at) DESC, latest_message.id DESC
+        LIMIT 1
+    )"""
+
+
 def _chats_select_sql(where: str, current_user_id: int | None = None) -> str:
     read_user_id = int(current_user_id) if current_user_id is not None else -1
     return f"""
@@ -2830,13 +2840,7 @@ def _chats_select_sql(where: str, current_user_id: int | None = None) -> str:
                 ORDER BY julianday(m.created_at) DESC, m.id DESC
                 LIMIT 1
             ) AS actual_last_message_text,
-            (
-                SELECT m.created_at
-                FROM messages m
-                WHERE m.chat_id = c.id
-                ORDER BY julianday(m.created_at) DESC, m.id DESC
-                LIMIT 1
-            ) AS actual_last_message_at,
+            {_latest_chat_message_at_sql("c")} AS actual_last_message_at,
             cus.last_read_message_id AS last_read_message_id,
             cus.last_read_at AS last_read_at,
             COALESCE(cus.is_marked_unread, 0) AS is_marked_unread,
@@ -2905,6 +2909,8 @@ def _chat_list_query_parts(
     assigned_user_id: int | None = None,
     funnel_id: int | None = None,
     q: str | None = None,
+    last_message_created_from: str | None = None,
+    last_message_created_to: str | None = None,
 ) -> tuple[str, list[Any], list[str], list[str]]:
     clauses = [
         "c.marketplace NOT IN ('mock', 'internal_tasks')",
@@ -2933,6 +2939,14 @@ def _chat_list_query_parts(
     if assigned_user_id:
         clauses.append("c.assigned_user_id = ?")
         params.append(int(assigned_user_id))
+
+    if last_message_created_from and last_message_created_to:
+        latest_message_at = _latest_chat_message_at_sql("c")
+        clauses.extend([
+            f"julianday({latest_message_at}) >= julianday(?)",
+            f"julianday({latest_message_at}) < julianday(?)",
+        ])
+        params.extend([last_message_created_from, last_message_created_to])
 
     search_variants = _chat_message_search_variants(q)
     search_params = _message_search_params(search_variants)
@@ -3003,6 +3017,8 @@ def list_chats(
     funnel_id: int | None = None,
     q: str | None = None,
     current_user_id: int | None = None,
+    last_message_created_from: str | None = None,
+    last_message_created_to: str | None = None,
 ) -> list[dict[str, Any]]:
     where, params, search_variants, search_params = _chat_list_query_parts(
         status=status,
@@ -3011,6 +3027,8 @@ def list_chats(
         assigned_user_id=assigned_user_id,
         funnel_id=funnel_id,
         q=q,
+        last_message_created_from=last_message_created_from,
+        last_message_created_to=last_message_created_to,
     )
     with get_connection() as conn:
         result = _list_chat_items_conn(
@@ -3038,6 +3056,8 @@ def list_chats_page(
     funnel_id: int | None = None,
     q: str | None = None,
     current_user_id: int | None = None,
+    last_message_created_from: str | None = None,
+    last_message_created_to: str | None = None,
     limit: int = 30,
     offset: int = 0,
 ) -> dict[str, Any]:
@@ -3051,6 +3071,8 @@ def list_chats_page(
         assigned_user_id=assigned_user_id,
         funnel_id=funnel_id,
         q=q,
+        last_message_created_from=last_message_created_from,
+        last_message_created_to=last_message_created_to,
     )
     read_user_id = int(current_user_id) if current_user_id is not None else -1
     with get_connection() as conn:
@@ -3143,8 +3165,6 @@ def get_chat(
     chat_id: int,
     messages_limit: int | None = None,
     current_user_id: int | None = None,
-    message_created_from: str | None = None,
-    message_created_to: str | None = None,
 ) -> dict[str, Any] | None:
     with get_connection() as conn:
         chat = conn.execute(
@@ -3154,15 +3174,8 @@ def get_chat(
         if not chat:
             return None
         chat_dict = row_to_dict(chat)
-        message_clauses = ["chat_id=?"]
+        message_where = "chat_id=?"
         message_params: list[Any] = [chat_id]
-        if message_created_from and message_created_to:
-            message_clauses.extend([
-                "julianday(created_at) >= julianday(?)",
-                "julianday(created_at) < julianday(?)",
-            ])
-            message_params.extend([message_created_from, message_created_to])
-        message_where = " AND ".join(message_clauses)
 
         if messages_limit and messages_limit > 0:
             messages = conn.execute(
@@ -3836,7 +3849,8 @@ def list_tasks(
     assigned_user_id: int | None = None,
     q: str | None = None,
     task_type_id: int | None = None,
-    due_date: str | None = None,
+    due_date_from: str | None = None,
+    due_date_to: str | None = None,
 ) -> list[dict[str, Any]]:
     clauses = ["c.marketplace != 'mock'"]
     params: list[Any] = []
@@ -3870,9 +3884,12 @@ def list_tasks(
                 search_variants.append(variant)
         clauses.append("(" + " OR ".join(["COALESCE(t.title, '') LIKE ?"] * len(search_variants)) + ")")
         params.extend([f"%{variant}%" for variant in search_variants])
-    if due_date:
-        clauses.append("date(t.due_at) = date(?)")
-        params.append(str(due_date))
+    if due_date_from and due_date_to:
+        clauses.extend([
+            "date(t.due_at) >= date(?)",
+            "date(t.due_at) <= date(?)",
+        ])
+        params.extend([str(due_date_from), str(due_date_to)])
     where = f"WHERE {' AND '.join(clauses)}"
     with get_connection() as conn:
         _ensure_task_types_table(conn)

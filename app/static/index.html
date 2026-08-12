@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <script src="/static/theme-init.js?v=v79-strict-csp-secure-cookie-20260708"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=v95-3-task-newest-compact-actions-20260806" />
+  <link rel="stylesheet" href="/static/styles.css?v=v95-4-chat-task-date-range-scope-20260806" />
 
 </head>
 <body class="auth-pending">
@@ -142,13 +142,34 @@
                 <option value="archive">Архив</option>
               </select>
             </div>
-            <div class="chat-search-wrap">
-              <button id="chatSearchToggleBtn" class="chat-search-toggle" type="button" aria-label="Поиск по сообщениям" aria-expanded="false" title="Поиск по сообщениям">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M16.5 16.5L21 21"></path></svg>
-              </button>
-              <div id="chatSearchBox" class="chat-search-box hidden">
-                <input id="chatSearchInput" type="search" autocomplete="off" placeholder="Поиск по сообщениям" aria-label="Поиск по сообщениям" />
-                <button id="chatSearchClearBtn" class="chat-search-clear hidden" type="button" aria-label="Очистить поиск" title="Очистить">×</button>
+            <div class="chat-filter-actions">
+              <div id="chatDateFilterWrap" class="date-range-filter-wrap">
+                <button id="chatDateFilterBtn" class="chat-search-toggle date-range-filter-btn" type="button" aria-label="Фильтр чатов по дате последнего сообщения" aria-expanded="false" title="Фильтр чатов по дате последнего сообщения">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v4"/><path d="M17 3v4"/><path d="M4 9h16"/><rect x="4" y="5" width="16" height="16" rx="2"/></svg>
+                </button>
+                <div id="chatDateFilterPopover" class="date-range-filter-popover hidden">
+                  <div class="date-range-filter-fields">
+                    <label for="chatDateFilterFromInput">С
+                      <input id="chatDateFilterFromInput" type="date" aria-label="Начальная дата списка чатов" />
+                    </label>
+                    <label for="chatDateFilterToInput">По
+                      <input id="chatDateFilterToInput" type="date" aria-label="Конечная дата списка чатов" />
+                    </label>
+                  </div>
+                  <div class="date-range-filter-actions">
+                    <button id="chatDateFilterClearBtn" class="ghost small" type="button">Сбросить</button>
+                    <button id="chatDateFilterApplyBtn" class="primary small" type="button">Показать</button>
+                  </div>
+                </div>
+              </div>
+              <div class="chat-search-wrap">
+                <button id="chatSearchToggleBtn" class="chat-search-toggle" type="button" aria-label="Поиск по сообщениям" aria-expanded="false" title="Поиск по сообщениям">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M16.5 16.5L21 21"></path></svg>
+                </button>
+                <div id="chatSearchBox" class="chat-search-box hidden">
+                  <input id="chatSearchInput" type="search" autocomplete="off" placeholder="Поиск по сообщениям" aria-label="Поиск по сообщениям" />
+                  <button id="chatSearchClearBtn" class="chat-search-clear hidden" type="button" aria-label="Очистить поиск" title="Очистить">×</button>
+                </div>
               </div>
             </div>
           </div>
@@ -182,25 +203,6 @@
                   <option value="new">Новый</option>
                 </select>
                 <select id="assignedUserSelect" aria-label="Ответственный за чат"><option value="">Не назначен</option></select>
-                <div id="messageDateFilterWrap" class="message-date-filter-wrap">
-                  <button id="messageDateFilterBtn" class="icon-btn message-date-filter-btn" type="button" aria-label="Фильтр сообщений по дате" aria-expanded="false" title="Фильтр сообщений по дате" disabled>
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v4"/><path d="M17 3v4"/><path d="M4 9h16"/><rect x="4" y="5" width="16" height="16" rx="2"/></svg>
-                  </button>
-                  <div id="messageDateFilterPopover" class="message-date-filter-popover hidden">
-                    <div class="message-date-filter-fields">
-                      <label for="messageDateFilterFromInput">С
-                        <input id="messageDateFilterFromInput" type="date" aria-label="Начальная дата сообщений" />
-                      </label>
-                      <label for="messageDateFilterToInput">По
-                        <input id="messageDateFilterToInput" type="date" aria-label="Конечная дата сообщений" />
-                      </label>
-                    </div>
-                    <div class="message-date-filter-actions">
-                      <button id="messageDateFilterClearBtn" class="ghost small" type="button">Сбросить</button>
-                      <button id="messageDateFilterApplyBtn" class="primary small" type="button">Показать</button>
-                    </div>
-                  </div>
-                </div>
                 <button id="extraMenuBtn" class="icon-btn" type="button" aria-label="Дополнительные функции" title="Дополнительные функции">⋯</button>
                   <div id="extraMenu" class="extra-menu hidden" role="menu">
                     <button type="button" data-extra="tasks">Задачи по чату</button>
@@ -652,10 +654,25 @@
           <select id="taskAssigneeFilter" class="tasks-ref-select" aria-label="Ответственный по задаче">
             <option value="">Ответственный</option>
           </select>
-          <label class="tasks-ref-date" title="Фильтр по дате задачи">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v4"/><path d="M17 3v4"/><path d="M4 9h16"/><rect x="4" y="5" width="16" height="16" rx="2"/></svg>
-            <input id="taskDueDateFilter" type="date" aria-label="Фильтр задач по дате" />
-          </label>
+          <div id="taskDueDateFilterWrap" class="tasks-ref-date date-range-filter-wrap">
+            <button id="taskDueDateFilterBtn" class="date-range-filter-btn" type="button" aria-label="Фильтр задач по диапазону дат" aria-expanded="false" title="Фильтр задач по диапазону дат">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v4"/><path d="M17 3v4"/><path d="M4 9h16"/><rect x="4" y="5" width="16" height="16" rx="2"/></svg>
+            </button>
+            <div id="taskDueDateFilterPopover" class="date-range-filter-popover hidden">
+              <div class="date-range-filter-fields">
+                <label for="taskDueDateFromFilter">С
+                  <input id="taskDueDateFromFilter" type="date" aria-label="Начальная дата задач" />
+                </label>
+                <label for="taskDueDateToFilter">По
+                  <input id="taskDueDateToFilter" type="date" aria-label="Конечная дата задач" />
+                </label>
+              </div>
+              <div class="date-range-filter-actions">
+                <button id="taskDueDateFilterClearBtn" class="ghost small" type="button">Сбросить</button>
+                <button id="taskDueDateFilterApplyBtn" class="primary small" type="button">Показать</button>
+              </div>
+            </div>
+          </div>
           <input id="taskBucketFilter" type="hidden" value="active" />
         </section>
         <section id="taskStandaloneCreatePanel" class="panel-card tasks-standalone-create-panel hidden" aria-label="Создание задачи без чата">
@@ -1004,6 +1021,6 @@
 
   <div id="notificationToasts" class="notification-toast-stack" aria-live="polite"></div>
 
-  <script src="/static/app.js?v=v95-3-task-newest-compact-actions-20260806"></script>
+  <script src="/static/app.js?v=v95-4-chat-task-date-range-scope-20260806"></script>
 </body>
 </html>

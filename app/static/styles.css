@@ -939,21 +939,19 @@ html[data-theme="dark"] button.reply-template-delete-action:focus-visible {
   background: #fff;
 }
 .tasks-ref-search svg,
-.tasks-ref-date svg { width: 16px; height: 16px; stroke: var(--crm-muted); fill: none; stroke-width: 1.8; }
-.tasks-ref-search input,
-.tasks-ref-date input { border: 0; padding-left: 0; box-shadow: none; min-height: 32px; }
+.tasks-ref-date svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.8; }
+.tasks-ref-search input { border: 0; padding-left: 0; box-shadow: none; min-height: 32px; }
 .tasks-ref-select { min-height: 34px; }
 .tasks-ref-date {
-  height: 36px;
   width: 44px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--crm-line);
-  border-radius: var(--crm-radius-sm);
-  background: #fff;
   position: relative;
 }
-.tasks-ref-date input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.tasks-ref-date > .date-range-filter-btn {
+  width: 44px;
+  height: 36px;
+  min-width: 44px;
+  min-height: 36px;
+}
 .tasks-ref-list { display: grid; gap: 10px; }
 .tasks-ref-card {
   display: grid;
@@ -2801,16 +2799,23 @@ textarea {
 
 /* Arti CRM — v38 chat message search */
 #chatsView .filters {
-  grid-template-columns: repeat(3, minmax(0, 1fr)) 36px;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
   align-items: start;
   overflow: visible;
   position: relative;
 }
 
+.chat-filter-actions {
+  display: flex;
+  align-items: center;
+  justify-self: end;
+  gap: 6px;
+  min-width: 0;
+}
+
 .chat-search-wrap {
   position: relative;
   min-width: 36px;
-  justify-self: end;
 }
 
 .chat-search-toggle {
@@ -2893,11 +2898,12 @@ textarea {
     grid-column: 1 / span 2;
   }
 
-  #chatsView .chat-search-wrap {
+  #chatsView .chat-filter-actions {
     grid-column: 3;
     grid-row: 1 / span 2;
     align-self: start;
     justify-self: end;
+    flex-direction: column;
   }
 
   .chat-search-box {
@@ -3781,7 +3787,7 @@ html[data-theme="dark"] :is(
   #noteText,
   #customerNameInput,
   .tasks-ref-search input,
-  .tasks-ref-date input
+  .date-range-filter-popover input
 ) {
   background: #182234 !important;
   border-color: var(--crm-line) !important;
@@ -6007,15 +6013,24 @@ html[data-theme] .internal-note-edit-text:focus {
 
 
 
-/* Arti CRM — v95 chat message date filter */
-.message-date-filter-wrap {
+/* Arti CRM — v95.2 shared chat/task date-range filters */
+.date-range-filter-wrap {
   position: relative;
-  flex: 0 0 auto;
 }
 
-.message-date-filter-btn svg {
-  width: 18px;
-  height: 18px;
+.date-range-filter-btn {
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--crm-line);
+  border-radius: var(--crm-radius-sm);
+  background: var(--crm-panel);
+  color: var(--crm-text-soft);
+}
+
+.date-range-filter-btn svg {
+  width: 16px;
+  height: 16px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.8;
@@ -6023,13 +6038,19 @@ html[data-theme] .internal-note-edit-text:focus {
   stroke-linejoin: round;
 }
 
-.message-date-filter-btn.is-active {
-  background: var(--crm-blue);
-  border-color: transparent;
-  color: var(--crm-blue-text);
+.date-range-filter-btn:hover,
+.date-range-filter-btn.is-active {
+  background: var(--crm-hover);
+  border-color: var(--crm-line-strong);
+  color: var(--crm-text);
+  transform: none;
 }
 
-.message-date-filter-popover {
+.date-range-filter-btn.is-active {
+  box-shadow: inset 0 0 0 1px var(--crm-blue);
+}
+
+.date-range-filter-popover {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
@@ -6044,41 +6065,36 @@ html[data-theme] .internal-note-edit-text:focus {
   box-shadow: var(--crm-shadow-md);
 }
 
-.message-date-filter-fields {
+.date-range-filter-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 
-.message-date-filter-popover label {
+.date-range-filter-popover label {
   display: grid;
   gap: 5px;
   color: var(--crm-muted);
   font-size: 12px;
 }
 
-.message-date-filter-popover input {
+.date-range-filter-popover input {
   width: 100%;
   min-width: 0;
 }
 
-.message-date-filter-actions {
+.date-range-filter-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
 }
 
-.message-date-filter-actions button {
+.date-range-filter-actions button {
   width: auto;
 }
 
-.message-date-empty {
-  align-self: center;
-  margin: auto;
-}
-
 @media (max-width: 900px) {
-  .message-date-filter-popover {
+  .date-range-filter-popover {
     position: fixed;
     top: 118px;
     right: 12px;
@@ -6086,13 +6102,13 @@ html[data-theme] .internal-note-edit-text:focus {
     width: auto;
   }
 
-  .message-date-filter-fields {
+  .date-range-filter-fields {
     grid-template-columns: 1fr;
   }
 }
 
 
-/* Arti CRM — v95 task assignee filter and canonical due-date ordering */
+/* Arti CRM — v95.2 chat/task date-range scope correction */
 #tasksView .tasks-ref-due time {
   display: block;
   white-space: nowrap;

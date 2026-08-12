@@ -1,4 +1,4 @@
-const ARTI_CRM_SW_VERSION = 'v95-3-task-newest-compact-actions-20260806';
+const ARTI_CRM_SW_VERSION = 'v95-4-chat-task-date-range-scope-20260806';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
