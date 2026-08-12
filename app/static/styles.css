@@ -989,7 +989,6 @@ html[data-theme="dark"] button.reply-template-delete-action:focus-visible {
 .tasks-ref-status-option { width: 100%; justify-content: flex-start; background: transparent; border: 0; color: var(--crm-text); min-height: 30px; }
 .tasks-ref-status-option.active,
 .tasks-ref-status-option:hover { background: var(--crm-hover); transform: none; }
-.tasks-ref-chat-btn { background: #fff; border: 1px solid var(--crm-line); color: var(--crm-text); }
 .tasks-ref-empty { padding: 16px; border: 1px solid var(--crm-line); border-radius: var(--crm-radius-lg); background: #fff; color: var(--crm-muted); }
 
 .task-card,
@@ -3814,7 +3813,6 @@ html[data-theme="dark"] :is(
   .composer-attach-btn,
   .composer-template-btn,
   .composer-send-btn,
-  .tasks-ref-chat-btn,
   .tasks-ref-status-option
 ) {
   background: #182234 !important;
@@ -3841,7 +3839,6 @@ html[data-theme="dark"] :is(
   .composer-attach-btn,
   .composer-template-btn,
   .composer-send-btn,
-  .tasks-ref-chat-btn,
   .tasks-ref-status-option
 ):hover {
   background: #22314a !important;
@@ -4045,7 +4042,6 @@ html[data-theme="dark"] :is(
   .message-actions-btn,
   .composer-attach-btn,
   .composer-template-btn,
-  .tasks-ref-chat-btn,
   .tasks-ref-status-option,
   .extra-menu button,
   .message-actions-menu button,
@@ -4075,7 +4071,6 @@ html[data-theme="dark"] :is(
   .message-actions-btn,
   .composer-attach-btn,
   .composer-template-btn,
-  .tasks-ref-chat-btn,
   .tasks-ref-status-option,
   .extra-menu button,
   .message-actions-menu button,
@@ -4747,29 +4742,53 @@ html[data-theme="dark"] #analyticsHourlyChart .analytics-hour-value {
 }
 
 #tasksView .tasks-ref-icon-btn {
-  width: 34px;
-  height: 34px;
-  min-width: 34px;
-  min-height: 34px;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
   padding: 0;
-  border-radius: 10px;
-  background: var(--crm-panel-soft);
-  border: 1px solid var(--crm-line);
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
   color: var(--crm-text-soft);
-  font-size: 17px;
   line-height: 1;
   box-shadow: none;
 }
 
-#tasksView .tasks-ref-icon-btn:hover {
+#tasksView .tasks-ref-icon-btn svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+#tasksView .tasks-ref-icon-btn:hover,
+#tasksView .tasks-ref-icon-btn:focus-visible {
   background: var(--crm-hover);
-  border-color: var(--crm-line-strong);
   color: var(--crm-text);
   transform: none;
 }
 
-#tasksView .tasks-ref-delete-btn {
+#tasksView .tasks-ref-delete-btn:hover,
+#tasksView .tasks-ref-delete-btn:focus-visible {
   color: var(--crm-red-text);
+}
+
+#tasksView .tasks-ref-chat-btn {
+  width: 26px;
+  height: 26px;
+  min-width: 26px;
+  min-height: 26px;
+}
+
+#tasksView .tasks-ref-chat-btn svg {
+  width: 14px;
+  height: 14px;
 }
 
 #tasksView .tasks-ref-edit-panel {
@@ -4805,22 +4824,6 @@ html[data-theme="dark"] #analyticsHourlyChart .analytics-hour-value {
   justify-content: flex-end;
   gap: 8px;
   flex-wrap: wrap;
-}
-
-html[data-theme="dark"] #tasksView .tasks-ref-icon-btn {
-  background: var(--crm-card);
-  border-color: var(--crm-line);
-  color: var(--crm-text-soft);
-}
-
-html[data-theme="dark"] #tasksView .tasks-ref-icon-btn:hover {
-  background: var(--crm-card-hover);
-  border-color: var(--crm-line-strong);
-  color: var(--crm-text);
-}
-
-html[data-theme="dark"] #tasksView .tasks-ref-delete-btn {
-  color: var(--crm-red-text);
 }
 
 html[data-theme="dark"] #tasksView .tasks-ref-edit-panel {

@@ -104,10 +104,10 @@ unread metadata and the global CRM workflow status are not personal read state.
 
 1. `due_at` is the task date shown in cards and used by the calendar filter.
    `created_at` and `updated_at` are audit timestamps and never substitute for it.
-2. Tasks are ordered strictly from the earliest due date to the latest; tasks
+2. Tasks are ordered strictly from the newest due date to the oldest; tasks
    without a date appear after all dated tasks.
-3. Status does not override date ordering. Equal dates use task id as a stable
-   deterministic tie breaker.
+3. Status does not override date ordering. Equal dates use descending task id as
+   a stable deterministic tie breaker.
 4. The responsible-employee filter uses `assigned_user_id` and is evaluated in
    the repository. The frontend does not re-filter an already returned array.
 5. `mine=true` always means the authenticated user and takes precedence over an

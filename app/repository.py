@@ -3191,8 +3191,8 @@ def get_chat(
             WHERE t.chat_id=?
             ORDER BY
                 CASE WHEN t.due_at IS NULL OR t.due_at='' THEN 1 ELSE 0 END,
-                julianday(t.due_at) ASC,
-                t.id ASC
+                julianday(t.due_at) DESC,
+                t.id DESC
             """,
             (chat_id,),
         ).fetchall()
@@ -3898,8 +3898,8 @@ def list_tasks(
             {where}
             ORDER BY
                 CASE WHEN t.due_at IS NULL OR t.due_at='' THEN 1 ELSE 0 END,
-                julianday(t.due_at) ASC,
-                t.id ASC
+                julianday(t.due_at) DESC,
+                t.id DESC
             """,
             params,
         ).fetchall()

@@ -225,7 +225,7 @@ filter membership and ordering.
 
 `tasks.due_at` is the canonical task date entered during creation or editing.
 Task list queries and tasks embedded in a chat use the same ordering rule:
-ascending `due_at`, with undated tasks last and `id` as the deterministic tie
-breaker. Workflow status does not create a second sort group. The explicit
+descending `due_at`, with undated tasks last and descending `id` as the
+deterministic tie breaker. Workflow status does not create a second sort group. The explicit
 `assigned_user_id` query parameter filters by responsible employee; `mine=true`
 intentionally takes precedence and resolves to the authenticated user's id.

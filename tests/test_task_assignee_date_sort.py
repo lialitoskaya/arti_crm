@@ -89,14 +89,14 @@ class TaskAssigneeDateSortTests(unittest.TestCase):
     def test_repository_sorts_strictly_by_due_date_with_undated_last(self) -> None:
         tasks = repo.list_tasks()
         self.assertEqual(
-            [self.earlier_id, self.later_id, self.no_date_id],
+            [self.later_id, self.earlier_id, self.no_date_id],
             [int(task["id"]) for task in tasks],
         )
 
         chat = repo.get_chat(self.chat_id, current_user_id=int(self.manager_a["id"]))
         self.assertIsNotNone(chat)
         self.assertEqual(
-            [self.earlier_id, self.later_id, self.no_date_id],
+            [self.later_id, self.earlier_id, self.no_date_id],
             [int(task["id"]) for task in chat["tasks"]],
         )
 
@@ -153,6 +153,7 @@ class TaskAssigneeDateSortUiContractTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         cls.source = (root / "app" / "static" / "app.js").read_text(encoding="utf-8")
         cls.html = (root / "app" / "static" / "index.html").read_text(encoding="utf-8")
+        cls.styles = (root / "app" / "static" / "styles.css").read_text(encoding="utf-8")
 
     def test_task_filters_are_server_backed_and_include_assignee(self) -> None:
         self.assertIn('id="taskAssigneeFilter"', self.html)
@@ -169,6 +170,19 @@ class TaskAssigneeDateSortUiContractTests(unittest.TestCase):
         self.assertIn('<span class="tasks-ref-field-title">Дата</span>', self.source)
         self.assertIn('datetime="${escapeHtml(task.due_at || \'\')}"', self.source)
         self.assertIn("const dueLabel = formatDateTime(task.due_at) || 'Без даты';", self.source)
+
+
+    def test_task_actions_are_compact_icon_only_controls(self) -> None:
+        self.assertIn('aria-label="Редактировать задачу"', self.source)
+        self.assertIn('aria-label="Удалить задачу"', self.source)
+        self.assertIn('aria-label="Открыть чат"', self.source)
+        self.assertNotIn('title="Редактировать задачу">✎</button>', self.source)
+        self.assertNotIn('title="Удалить задачу">×</button>', self.source)
+        self.assertNotIn('class="tasks-ref-chat-btn" type="button" data-open-chat', self.source)
+        self.assertIn('#tasksView .tasks-ref-icon-btn {', self.styles)
+        self.assertIn('border: 0;', self.styles)
+        self.assertIn('#tasksView .tasks-ref-chat-btn {', self.styles)
+        self.assertIn('width: 26px;', self.styles)
 
 
 if __name__ == "__main__":

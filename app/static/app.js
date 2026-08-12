@@ -5557,9 +5557,13 @@ function renderAllTasks(tasks) {
           </div>
         </div>
         <div class="tasks-ref-actions" aria-label="Действия с задачей">
-          <button class="tasks-ref-icon-btn" type="button" data-task-ref-edit data-task-id="${escapeHtml(task.id)}" aria-expanded="false" title="Редактировать задачу">✎</button>
-          <button class="tasks-ref-icon-btn tasks-ref-delete-btn" type="button" data-task-ref-delete data-task-id="${escapeHtml(task.id)}" title="Удалить задачу">×</button>
-          ${task.chat_id && !isStandaloneTask ? `<button class="tasks-ref-chat-btn" type="button" data-open-chat="${escapeHtml(task.chat_id)}">в чат <span aria-hidden="true">→</span></button>` : ''}
+          <button class="tasks-ref-icon-btn" type="button" data-task-ref-edit data-task-id="${escapeHtml(task.id)}" aria-expanded="false" aria-label="Редактировать задачу" title="Редактировать задачу">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 20h4l10.5-10.5a2.12 2.12 0 0 0-3-3L5 17v3Zm10.5-12.5 3 3"/></svg>
+          </button>
+          <button class="tasks-ref-icon-btn tasks-ref-delete-btn" type="button" data-task-ref-delete data-task-id="${escapeHtml(task.id)}" aria-label="Удалить задачу" title="Удалить задачу">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13M10 11v5m4-5v5"/></svg>
+          </button>
+          ${task.chat_id && !isStandaloneTask ? `<button class="tasks-ref-icon-btn tasks-ref-chat-btn" type="button" data-open-chat="${escapeHtml(task.chat_id)}" aria-label="Открыть чат" title="Открыть чат"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 5h14v10H9l-4 4V5Z"/><path d="m13 8 3 3-3 3M16 11h-5"/></svg></button>` : ''}
         </div>
       </div>
       ${taskBoardEditPanelHtml(task, fieldLabel, primaryText)}
