@@ -10,7 +10,7 @@ import uuid
 import hmac
 import hashlib
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time as datetime_time, timedelta, timezone
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -5069,14 +5069,47 @@ def list_chats(
     )
 
 
+def _message_date_utc_bounds(
+    message_date: date | None,
+    timezone_offset_minutes: int,
+) -> tuple[str | None, str | None]:
+    if message_date is None:
+        return None, None
+    if timezone_offset_minutes < -840 or timezone_offset_minutes > 840:
+        raise HTTPException(status_code=422, detail="Invalid timezone offset")
+
+    # Browser getTimezoneOffset() is UTC - local time. Convert it to a normal
+    # timezone offset before building the selected local calendar day.
+    local_timezone = timezone(timedelta(minutes=-timezone_offset_minutes))
+    local_start = datetime.combine(message_date, datetime_time.min, tzinfo=local_timezone)
+    utc_start = local_start.astimezone(timezone.utc)
+    utc_end = (local_start + timedelta(days=1)).astimezone(timezone.utc)
+    return (
+        utc_start.isoformat().replace("+00:00", "Z"),
+        utc_end.isoformat().replace("+00:00", "Z"),
+    )
+
+
 @app.get("/api/chats/{chat_id}")
-def get_chat(chat_id: int, request: Request, messages_limit: int = 120) -> dict[str, Any]:
+def get_chat(
+    chat_id: int,
+    request: Request,
+    messages_limit: int = 120,
+    message_date: date | None = None,
+    timezone_offset_minutes: int = 0,
+) -> dict[str, Any]:
     user = _current_user(request)
     safe_limit = max(20, min(int(messages_limit or 120), 500))
+    message_created_from, message_created_to = _message_date_utc_bounds(
+        message_date,
+        timezone_offset_minutes,
+    )
     chat = repo.get_chat(
         chat_id,
         messages_limit=safe_limit,
         current_user_id=int(user["id"]),
+        message_created_from=message_created_from,
+        message_created_to=message_created_to,
     )
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")

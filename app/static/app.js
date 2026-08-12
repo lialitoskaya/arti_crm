@@ -212,6 +212,7 @@ let assignees = [];
 let usersCache = [];
 let chatOwnerScope = 'all';
 let chatMessageSearch = '';
+let currentChatMessageDateFilter = '';
 let chatSearchTimer = null;
 const CHAT_LIST_BATCH_SIZE = 30;
 const CHAT_LIST_LOAD_THRESHOLD_PX = 360;
@@ -3391,6 +3392,51 @@ async function refreshChatListOnly(options = {}) {
   }
 }
 
+function chatMessagesRequestUrl(chatId, messagesLimit) {
+  const params = new URLSearchParams();
+  params.set('messages_limit', String(messagesLimit));
+  if (currentChatMessageDateFilter) {
+    params.set('message_date', currentChatMessageDateFilter);
+    params.set('timezone_offset_minutes', String(new Date().getTimezoneOffset()));
+  }
+  return `/api/chats/${Number(chatId)}?${params.toString()}`;
+}
+
+function syncMessageDateFilterUi() {
+  const input = $('messageDateFilterInput');
+  const button = $('messageDateFilterBtn');
+  if (input && input.value !== currentChatMessageDateFilter) input.value = currentChatMessageDateFilter;
+  if (button) {
+    button.disabled = !currentChatId;
+    button.classList.toggle('is-active', Boolean(currentChatMessageDateFilter));
+    button.title = currentChatMessageDateFilter
+      ? `Сообщения за ${currentChatMessageDateFilter.split('-').reverse().join('.')}`
+      : 'Фильтр сообщений по дате';
+  }
+}
+
+function setMessageDateFilterPopover(open) {
+  const popover = $('messageDateFilterPopover');
+  const button = $('messageDateFilterBtn');
+  if (!popover || !button) return;
+  popover.classList.toggle('hidden', !open);
+  button.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (open) $('messageDateFilterInput')?.focus();
+}
+
+async function applyMessageDateFilter(value) {
+  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(String(value || '')) ? String(value) : '';
+  if (normalized === currentChatMessageDateFilter) {
+    setMessageDateFilterPopover(false);
+    return;
+  }
+  currentChatMessageDateFilter = normalized;
+  selectedAiMessageId = null;
+  syncMessageDateFilterUi();
+  setMessageDateFilterPopover(false);
+  if (currentChatId) await openChat(currentChatId, { syncRoute: false });
+}
+
 function chatMessagesSignature(messages) {
   return (messages || [])
     .map((message) => `${message.id || ''}:${message.direction || ''}:${message.created_at || ''}:${message.updated_at || ''}:${String(message.text || '').length}`)
@@ -3426,7 +3472,7 @@ async function refreshCurrentChatMessagesOnly(options = {}) {
   try {
     const readStateRequestContext = chatReadStateController.captureRequestContext();
     const pinStateRequestContext = chatPinStateController.captureRequestContext();
-    const serverChat = await api(`/api/chats/${chatId}?messages_limit=${messagesLimit}`, { timeoutMs: 15000 });
+    const serverChat = await api(chatMessagesRequestUrl(chatId, messagesLimit), { timeoutMs: 15000 });
     if (Number(serverChat?.id || 0) !== chatId) return null;
     const chat = chatPinStateController.reconcile(
       chatReadStateController.reconcile(serverChat, readStateRequestContext),
@@ -3552,8 +3598,11 @@ async function openChat(chatId, options = {}) {
   }
   if (previousChatId !== currentChatId) {
     selectedAiMessageId = null;
+    currentChatMessageDateFilter = '';
     setReplyTemplatesPanel(false);
   }
+  syncMessageDateFilterUi();
+  setMessageDateFilterPopover(false);
   const messagesBox = $('messages');
   const wasNearBottom = messagesBox ? (messagesBox.scrollHeight - messagesBox.scrollTop - messagesBox.clientHeight < 80) : true;
   const mobileLayout = isMobileChatLayout();
@@ -3581,7 +3630,7 @@ async function openChat(chatId, options = {}) {
   const pinStateRequestContext = chatPinStateController.captureRequestContext();
   chatOpenInFlight = true;
   try {
-    const serverChat = await api(`/api/chats/${chatId}?messages_limit=${messagesLimit}`);
+    const serverChat = await api(chatMessagesRequestUrl(chatId, messagesLimit));
     if (Number(serverChat?.id || 0) !== Number(chatId)) {
       throw new Error('Read-state response chat ID mismatch');
     }
@@ -3705,6 +3754,13 @@ function renderMessages(messages) {
   const box = $('messages');
   if (!box) return;
   box.innerHTML = '';
+  if (!(messages || []).length) {
+    const label = currentChatMessageDateFilter
+      ? `За ${currentChatMessageDateFilter.split('-').reverse().join('.')} сообщений нет.`
+      : 'В этом диалоге пока нет сообщений.';
+    box.innerHTML = `<div class="empty-card message-date-empty">${escapeHtml(label)}</div>`;
+    return;
+  }
   const receiptContext = buildMessageReceiptContext(messages || []);
 
   for (const message of messages) {
@@ -7811,6 +7867,19 @@ function init() {
     await refreshVisibleData();
   });
   bind('mobileBackBtn', 'click', backToChatListMobile);
+  bind('messageDateFilterBtn', 'click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const popover = $('messageDateFilterPopover');
+    setMessageDateFilterPopover(Boolean(popover?.classList.contains('hidden')));
+  });
+  bind('messageDateFilterInput', 'change', (event) => {
+    applyMessageDateFilter(event.target?.value || '').catch(err => notify('Фильтр сообщений', String(err.message || err)));
+  });
+  bind('messageDateFilterClearBtn', 'click', (event) => {
+    event.preventDefault();
+    applyMessageDateFilter('').catch(err => notify('Фильтр сообщений', String(err.message || err)));
+  });
   bind('marketplaceFilter', 'change', () => { resetChatListFeed(); loadChats(); });
   bind('statusFilter', 'change', () => { resetChatListFeed(); loadChats(); });
   if ($('funnelFilter')) bind('funnelFilter', 'change', () => { resetChatListFeed(); renderChatSettingsControls({ keepValues: true }); loadChats(); });
@@ -8463,6 +8532,7 @@ function autosizeComposerTextarea(textarea) {
 
 document.addEventListener('click', (event) => {
   if (!event.target.closest?.('.message-actions-menu-wrap')) closeMessageActionsMenus();
+  if (!event.target.closest?.('#messageDateFilterWrap')) setMessageDateFilterPopover(false);
 });
 
 

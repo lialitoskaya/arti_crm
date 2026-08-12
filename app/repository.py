@@ -3143,6 +3143,8 @@ def get_chat(
     chat_id: int,
     messages_limit: int | None = None,
     current_user_id: int | None = None,
+    message_created_from: str | None = None,
+    message_created_to: str | None = None,
 ) -> dict[str, Any] | None:
     with get_connection() as conn:
         chat = conn.execute(
@@ -3152,24 +3154,34 @@ def get_chat(
         if not chat:
             return None
         chat_dict = row_to_dict(chat)
+        message_clauses = ["chat_id=?"]
+        message_params: list[Any] = [chat_id]
+        if message_created_from and message_created_to:
+            message_clauses.extend([
+                "julianday(created_at) >= julianday(?)",
+                "julianday(created_at) < julianday(?)",
+            ])
+            message_params.extend([message_created_from, message_created_to])
+        message_where = " AND ".join(message_clauses)
+
         if messages_limit and messages_limit > 0:
             messages = conn.execute(
-                """
+                f"""
                 SELECT * FROM (
                     SELECT *
                     FROM messages
-                    WHERE chat_id=?
-                    ORDER BY created_at DESC, id DESC
+                    WHERE {message_where}
+                    ORDER BY julianday(created_at) DESC, id DESC
                     LIMIT ?
                 )
-                ORDER BY created_at ASC, id ASC
+                ORDER BY julianday(created_at) ASC, id ASC
                 """,
-                (chat_id, int(messages_limit)),
+                [*message_params, int(messages_limit)],
             ).fetchall()
         else:
             messages = conn.execute(
-                "SELECT * FROM messages WHERE chat_id=? ORDER BY created_at ASC, id ASC",
-                (chat_id,),
+                f"SELECT * FROM messages WHERE {message_where} ORDER BY julianday(created_at) ASC, id ASC",
+                message_params,
             ).fetchall()
         tasks = conn.execute(
             """

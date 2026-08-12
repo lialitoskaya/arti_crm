@@ -86,6 +86,19 @@ unread metadata and the global CRM workflow status are not personal read state.
 10. Existing duplicate rows are repaired once by an idempotent schema migration;
     the application does not run recurring legacy repair passes at startup.
 
+## Chat message filtering by date
+
+1. The selected date is interpreted in the operator browser's local timezone.
+2. The backend converts the local day to one half-open UTC range and remains the
+   source of truth for message selection; the frontend does not hide already
+   loaded messages as a substitute for filtering.
+3. Initial chat loading and background refresh use the same request builder and
+   therefore the same active date filter.
+4. Changing to another chat clears the filter. Refreshing or reopening the same
+   chat preserves it.
+5. The existing message limit remains enforced within the selected day.
+6. An empty result is shown explicitly as no messages for the selected date.
+
 ## CRM outbound message author
 
 1. Every outbound message sent through the CRM carries CRM-origin markers and the

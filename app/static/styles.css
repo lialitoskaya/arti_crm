@@ -6002,3 +6002,69 @@ html[data-theme] .internal-note-edit-text:focus {
   }
 }
 
+
+
+/* Arti CRM — v95 chat message date filter */
+.message-date-filter-wrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.message-date-filter-btn svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.message-date-filter-btn.is-active {
+  background: var(--crm-blue);
+  border-color: transparent;
+  color: var(--crm-blue-text);
+}
+
+.message-date-filter-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 70;
+  width: 220px;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--crm-line);
+  border-radius: var(--crm-radius-md);
+  background: var(--crm-panel);
+  box-shadow: var(--crm-shadow-md);
+}
+
+.message-date-filter-popover label {
+  color: var(--crm-muted);
+  font-size: 12px;
+}
+
+.message-date-filter-popover input {
+  width: 100%;
+}
+
+.message-date-filter-popover button {
+  width: 100%;
+}
+
+.message-date-empty {
+  align-self: center;
+  margin: auto;
+}
+
+@media (max-width: 900px) {
+  .message-date-filter-popover {
+    position: fixed;
+    top: 118px;
+    right: 12px;
+    left: 12px;
+    width: auto;
+  }
+}

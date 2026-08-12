@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <script src="/static/theme-init.js?v=v79-strict-csp-secure-cookie-20260708"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=v94-4-chat-infinite-scroll-20260806" />
+  <link rel="stylesheet" href="/static/styles.css?v=v95-chat-message-date-filter-20260806" />
 
 </head>
 <body class="auth-pending">
@@ -182,6 +182,16 @@
                   <option value="new">Новый</option>
                 </select>
                 <select id="assignedUserSelect" aria-label="Ответственный за чат"><option value="">Не назначен</option></select>
+                <div id="messageDateFilterWrap" class="message-date-filter-wrap">
+                  <button id="messageDateFilterBtn" class="icon-btn message-date-filter-btn" type="button" aria-label="Фильтр сообщений по дате" aria-expanded="false" title="Фильтр сообщений по дате" disabled>
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v4"/><path d="M17 3v4"/><path d="M4 9h16"/><rect x="4" y="5" width="16" height="16" rx="2"/></svg>
+                  </button>
+                  <div id="messageDateFilterPopover" class="message-date-filter-popover hidden">
+                    <label for="messageDateFilterInput">Дата сообщений</label>
+                    <input id="messageDateFilterInput" type="date" aria-label="Показать сообщения за дату" />
+                    <button id="messageDateFilterClearBtn" class="secondary small" type="button">Сбросить</button>
+                  </div>
+                </div>
                 <button id="extraMenuBtn" class="icon-btn" type="button" aria-label="Дополнительные функции" title="Дополнительные функции">⋯</button>
                   <div id="extraMenu" class="extra-menu hidden" role="menu">
                     <button type="button" data-extra="tasks">Задачи по чату</button>
@@ -982,6 +992,6 @@
 
   <div id="notificationToasts" class="notification-toast-stack" aria-live="polite"></div>
 
-  <script src="/static/app.js?v=v94-5-crm-message-identity-20260806"></script>
+  <script src="/static/app.js?v=v95-chat-message-date-filter-20260806"></script>
 </body>
 </html>
