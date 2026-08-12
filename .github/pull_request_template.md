@@ -39,6 +39,19 @@
 
 <!-- Влияние на auth/session/CSRF, secrets, logs и пользовательские данные. -->
 
+## UI/UX gate
+
+<!-- Для UI обязательно свериться с docs/UI_DESIGN_STANDARDS.md. Для не-UI: не применимо. -->
+
+- [ ] Прочитан и применён `docs/UI_DESIGN_STANDARDS.md`
+- [ ] Решение сохраняет существующую дизайн-систему и плотность CRM
+- [ ] Устранена первопричина; старый конкурирующий UI/CSS/state-путь удалён
+- [ ] Нет необоснованных AI-slop паттернов: glassmorphism, glow, generic AI-gradients, лишних карточек и pill-кнопок
+- [ ] Нет duplicate selectors, handlers, DOM IDs, design tokens и sources of truth
+- [ ] Проверены desktop, mobile, длинный контент, overflow и touch targets
+- [ ] Проверены loading, empty, error, disabled, read-only, keyboard и focus-visible
+- [ ] Проверены DOM-size и отсутствие performance-регрессии
+
 ## Screenshots
 
 <!-- Для UI: before/after на desktop и mobile. Для не-UI: не применимо. -->
