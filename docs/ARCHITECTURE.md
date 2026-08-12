@@ -203,17 +203,18 @@ jobs and scattered post-hoc duplicate deletion paths are not used.
 ## Chat message calendar-date filter
 
 The calendar control in the chat header is a transport-level filter over the
-canonical `messages.created_at` timeline. The browser sends the selected local
-calendar date together with `Date.getTimezoneOffset()`. The route converts that
-pair to one half-open UTC range `[start, end)` and passes the boundaries to the
-repository; the repository owns the SQL predicate and ordering.
+canonical `messages.created_at` timeline. The browser sends an inclusive local
+calendar-date range together with `Date.getTimezoneOffset()`. The route validates
+both boundaries, converts them to one half-open UTC range `[start, end)` and
+passes the boundaries to the repository; the repository owns the SQL predicate
+and ordering.
 
 Both initial chat opening and passive message refresh use the single
 `chatMessagesRequestUrl()` frontend builder. This prevents the foreground and
 background paths from drifting into different filter behavior. Switching to a
 different chat clears the date filter; refreshing the same chat preserves it.
 The repository still applies the existing bounded message limit inside the
-selected day, so the filter never turns into an unbounded history load.
+selected range, so the filter never turns into an unbounded history load.
 
 ## Canonical task filtering and date ordering
 

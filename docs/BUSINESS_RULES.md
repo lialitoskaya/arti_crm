@@ -88,16 +88,17 @@ unread metadata and the global CRM workflow status are not personal read state.
 
 ## Chat message filtering by date
 
-1. The selected date is interpreted in the operator browser's local timezone.
-2. The backend converts the local day to one half-open UTC range and remains the
-   source of truth for message selection; the frontend does not hide already
-   loaded messages as a substitute for filtering.
+1. Both selected boundaries are interpreted in the operator browser's local
+   timezone. The range is inclusive by calendar date.
+2. The backend validates both boundaries, converts the range to one half-open UTC
+   interval and remains the source of truth for message selection; the frontend
+   does not hide already loaded messages as a substitute for filtering.
 3. Initial chat loading and background refresh use the same request builder and
    therefore the same active date filter.
 4. Changing to another chat clears the filter. Refreshing or reopening the same
    chat preserves it.
-5. The existing message limit remains enforced within the selected day.
-6. An empty result is shown explicitly as no messages for the selected date.
+5. The existing message limit remains enforced within the selected range.
+6. An empty result is shown explicitly as no messages for the selected period.
 
 ## Task date and responsible employee
 

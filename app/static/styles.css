@@ -6031,7 +6031,7 @@ html[data-theme] .internal-note-edit-text:focus {
   top: calc(100% + 8px);
   right: 0;
   z-index: 70;
-  width: 220px;
+  width: 300px;
   display: grid;
   gap: 8px;
   padding: 10px;
@@ -6041,17 +6041,32 @@ html[data-theme] .internal-note-edit-text:focus {
   box-shadow: var(--crm-shadow-md);
 }
 
+.message-date-filter-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
 .message-date-filter-popover label {
+  display: grid;
+  gap: 5px;
   color: var(--crm-muted);
   font-size: 12px;
 }
 
 .message-date-filter-popover input {
   width: 100%;
+  min-width: 0;
 }
 
-.message-date-filter-popover button {
-  width: 100%;
+.message-date-filter-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.message-date-filter-actions button {
+  width: auto;
 }
 
 .message-date-empty {
@@ -6066,6 +6081,10 @@ html[data-theme] .internal-note-edit-text:focus {
     right: 12px;
     left: 12px;
     width: auto;
+  }
+
+  .message-date-filter-fields {
+    grid-template-columns: 1fr;
   }
 }
 

@@ -212,7 +212,8 @@ let assignees = [];
 let usersCache = [];
 let chatOwnerScope = 'all';
 let chatMessageSearch = '';
-let currentChatMessageDateFilter = '';
+let currentChatMessageDateFrom = '';
+let currentChatMessageDateTo = '';
 let chatSearchTimer = null;
 const CHAT_LIST_BATCH_SIZE = 30;
 const CHAT_LIST_LOAD_THRESHOLD_PX = 360;
@@ -3401,25 +3402,60 @@ async function refreshChatListOnly(options = {}) {
   }
 }
 
+function normalizeMessageDateFilterValue(value) {
+  const normalized = String(value || '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : '';
+}
+
+function formatMessageDateFilterValue(value) {
+  return String(value || '').split('-').reverse().join('.');
+}
+
+function hasActiveMessageDateRange() {
+  return Boolean(currentChatMessageDateFrom && currentChatMessageDateTo);
+}
+
+function messageDateRangeLabel() {
+  if (!hasActiveMessageDateRange()) return '';
+  const fromLabel = formatMessageDateFilterValue(currentChatMessageDateFrom);
+  const toLabel = formatMessageDateFilterValue(currentChatMessageDateTo);
+  return currentChatMessageDateFrom === currentChatMessageDateTo
+    ? fromLabel
+    : `${fromLabel} — ${toLabel}`;
+}
+
 function chatMessagesRequestUrl(chatId, messagesLimit) {
   const params = new URLSearchParams();
   params.set('messages_limit', String(messagesLimit));
-  if (currentChatMessageDateFilter) {
-    params.set('message_date', currentChatMessageDateFilter);
+  if (hasActiveMessageDateRange()) {
+    params.set('message_date_from', currentChatMessageDateFrom);
+    params.set('message_date_to', currentChatMessageDateTo);
     params.set('timezone_offset_minutes', String(new Date().getTimezoneOffset()));
   }
   return `/api/chats/${Number(chatId)}?${params.toString()}`;
 }
 
+function syncMessageDateFilterDraftBounds() {
+  const fromInput = $('messageDateFilterFromInput');
+  const toInput = $('messageDateFilterToInput');
+  if (!fromInput || !toInput) return;
+  fromInput.max = toInput.value || '';
+  toInput.min = fromInput.value || '';
+}
+
 function syncMessageDateFilterUi() {
-  const input = $('messageDateFilterInput');
+  const fromInput = $('messageDateFilterFromInput');
+  const toInput = $('messageDateFilterToInput');
   const button = $('messageDateFilterBtn');
-  if (input && input.value !== currentChatMessageDateFilter) input.value = currentChatMessageDateFilter;
+  if (fromInput && fromInput.value !== currentChatMessageDateFrom) fromInput.value = currentChatMessageDateFrom;
+  if (toInput && toInput.value !== currentChatMessageDateTo) toInput.value = currentChatMessageDateTo;
+  syncMessageDateFilterDraftBounds();
   if (button) {
+    const active = hasActiveMessageDateRange();
     button.disabled = !currentChatId;
-    button.classList.toggle('is-active', Boolean(currentChatMessageDateFilter));
-    button.title = currentChatMessageDateFilter
-      ? `Сообщения за ${currentChatMessageDateFilter.split('-').reverse().join('.')}`
+    button.classList.toggle('is-active', active);
+    button.title = active
+      ? `Сообщения за период ${messageDateRangeLabel()}`
       : 'Фильтр сообщений по дате';
   }
 }
@@ -3430,16 +3466,40 @@ function setMessageDateFilterPopover(open) {
   if (!popover || !button) return;
   popover.classList.toggle('hidden', !open);
   button.setAttribute('aria-expanded', open ? 'true' : 'false');
-  if (open) $('messageDateFilterInput')?.focus();
+  if (open) $('messageDateFilterFromInput')?.focus();
 }
 
-async function applyMessageDateFilter(value) {
-  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(String(value || '')) ? String(value) : '';
-  if (normalized === currentChatMessageDateFilter) {
+async function applyMessageDateFilter(fromValue, toValue) {
+  const normalizedFrom = normalizeMessageDateFilterValue(fromValue);
+  const normalizedTo = normalizeMessageDateFilterValue(toValue);
+  if (!normalizedFrom || !normalizedTo) {
+    throw new Error('Укажите обе даты: «с» и «по».');
+  }
+  if (normalizedFrom > normalizedTo) {
+    throw new Error('Дата «с» не может быть позже даты «по».');
+  }
+  if (
+    normalizedFrom === currentChatMessageDateFrom
+    && normalizedTo === currentChatMessageDateTo
+  ) {
     setMessageDateFilterPopover(false);
     return;
   }
-  currentChatMessageDateFilter = normalized;
+  currentChatMessageDateFrom = normalizedFrom;
+  currentChatMessageDateTo = normalizedTo;
+  selectedAiMessageId = null;
+  syncMessageDateFilterUi();
+  setMessageDateFilterPopover(false);
+  if (currentChatId) await openChat(currentChatId, { syncRoute: false });
+}
+
+async function clearMessageDateFilter() {
+  if (!currentChatMessageDateFrom && !currentChatMessageDateTo) {
+    setMessageDateFilterPopover(false);
+    return;
+  }
+  currentChatMessageDateFrom = '';
+  currentChatMessageDateTo = '';
   selectedAiMessageId = null;
   syncMessageDateFilterUi();
   setMessageDateFilterPopover(false);
@@ -3607,7 +3667,8 @@ async function openChat(chatId, options = {}) {
   }
   if (previousChatId !== currentChatId) {
     selectedAiMessageId = null;
-    currentChatMessageDateFilter = '';
+    currentChatMessageDateFrom = '';
+    currentChatMessageDateTo = '';
     setReplyTemplatesPanel(false);
   }
   syncMessageDateFilterUi();
@@ -3764,8 +3825,8 @@ function renderMessages(messages) {
   if (!box) return;
   box.innerHTML = '';
   if (!(messages || []).length) {
-    const label = currentChatMessageDateFilter
-      ? `За ${currentChatMessageDateFilter.split('-').reverse().join('.')} сообщений нет.`
+    const label = hasActiveMessageDateRange()
+      ? `За период ${messageDateRangeLabel()} сообщений нет.`
       : 'В этом диалоге пока нет сообщений.';
     box.innerHTML = `<div class="empty-card message-date-empty">${escapeHtml(label)}</div>`;
     return;
@@ -7868,12 +7929,18 @@ function init() {
     const popover = $('messageDateFilterPopover');
     setMessageDateFilterPopover(Boolean(popover?.classList.contains('hidden')));
   });
-  bind('messageDateFilterInput', 'change', (event) => {
-    applyMessageDateFilter(event.target?.value || '').catch(err => notify('Фильтр сообщений', String(err.message || err)));
+  bind('messageDateFilterFromInput', 'change', syncMessageDateFilterDraftBounds);
+  bind('messageDateFilterToInput', 'change', syncMessageDateFilterDraftBounds);
+  bind('messageDateFilterApplyBtn', 'click', (event) => {
+    event.preventDefault();
+    applyMessageDateFilter(
+      $('messageDateFilterFromInput')?.value || '',
+      $('messageDateFilterToInput')?.value || '',
+    ).catch(err => notify('Фильтр сообщений', String(err.message || err)));
   });
   bind('messageDateFilterClearBtn', 'click', (event) => {
     event.preventDefault();
-    applyMessageDateFilter('').catch(err => notify('Фильтр сообщений', String(err.message || err)));
+    clearMessageDateFilter().catch(err => notify('Фильтр сообщений', String(err.message || err)));
   });
   bind('marketplaceFilter', 'change', () => { resetChatListFeed(); loadChats(); });
   bind('statusFilter', 'change', () => { resetChatListFeed(); loadChats(); });

@@ -5070,21 +5070,35 @@ def list_chats(
     )
 
 
-def _message_date_utc_bounds(
-    message_date: date | None,
+def _message_date_range_utc_bounds(
+    message_date_from: date | None,
+    message_date_to: date | None,
     timezone_offset_minutes: int,
 ) -> tuple[str | None, str | None]:
-    if message_date is None:
+    if message_date_from is None and message_date_to is None:
         return None, None
+    if message_date_from is None or message_date_to is None:
+        raise HTTPException(status_code=422, detail="Both message date boundaries are required")
+    if message_date_from > message_date_to:
+        raise HTTPException(status_code=422, detail="Message date range is invalid")
     if timezone_offset_minutes < -840 or timezone_offset_minutes > 840:
         raise HTTPException(status_code=422, detail="Invalid timezone offset")
 
     # Browser getTimezoneOffset() is UTC - local time. Convert it to a normal
-    # timezone offset before building the selected local calendar day.
+    # timezone offset before building an inclusive local calendar-date range.
     local_timezone = timezone(timedelta(minutes=-timezone_offset_minutes))
-    local_start = datetime.combine(message_date, datetime_time.min, tzinfo=local_timezone)
+    local_start = datetime.combine(message_date_from, datetime_time.min, tzinfo=local_timezone)
+    try:
+        end_date_exclusive = message_date_to + timedelta(days=1)
+    except OverflowError as exc:
+        raise HTTPException(status_code=422, detail="Message date range is invalid") from exc
+    local_end_exclusive = datetime.combine(
+        end_date_exclusive,
+        datetime_time.min,
+        tzinfo=local_timezone,
+    )
     utc_start = local_start.astimezone(timezone.utc)
-    utc_end = (local_start + timedelta(days=1)).astimezone(timezone.utc)
+    utc_end = local_end_exclusive.astimezone(timezone.utc)
     return (
         utc_start.isoformat().replace("+00:00", "Z"),
         utc_end.isoformat().replace("+00:00", "Z"),
@@ -5096,13 +5110,15 @@ def get_chat(
     chat_id: int,
     request: Request,
     messages_limit: int = 120,
-    message_date: date | None = None,
+    message_date_from: date | None = None,
+    message_date_to: date | None = None,
     timezone_offset_minutes: int = 0,
 ) -> dict[str, Any]:
     user = _current_user(request)
     safe_limit = max(20, min(int(messages_limit or 120), 500))
-    message_created_from, message_created_to = _message_date_utc_bounds(
-        message_date,
+    message_created_from, message_created_to = _message_date_range_utc_bounds(
+        message_date_from,
+        message_date_to,
         timezone_offset_minutes,
     )
     chat = repo.get_chat(
