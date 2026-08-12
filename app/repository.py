@@ -3189,7 +3189,10 @@ def get_chat(
             FROM tasks t
             LEFT JOIN users u ON u.id = t.assigned_user_id
             WHERE t.chat_id=?
-            ORDER BY t.created_at DESC, t.id DESC
+            ORDER BY
+                CASE WHEN t.due_at IS NULL OR t.due_at='' THEN 1 ELSE 0 END,
+                julianday(t.due_at) ASC,
+                t.id ASC
             """,
             (chat_id,),
         ).fetchall()
@@ -3894,15 +3897,9 @@ def list_tasks(
             LEFT JOIN users u ON u.id = t.assigned_user_id
             {where}
             ORDER BY
-                CASE
-                    WHEN t.status IN ('new', 'open') THEN 0
-                    WHEN t.status = 'in_progress' THEN 1
-                    WHEN t.status IN ('archived', 'done', 'cancelled') THEN 2
-                    ELSE 3
-                END,
                 CASE WHEN t.due_at IS NULL OR t.due_at='' THEN 1 ELSE 0 END,
-                datetime(t.due_at),
-                datetime(t.updated_at) DESC
+                julianday(t.due_at) ASC,
+                t.id ASC
             """,
             params,
         ).fetchall()

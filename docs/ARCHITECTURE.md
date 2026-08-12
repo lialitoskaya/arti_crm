@@ -214,3 +214,17 @@ background paths from drifting into different filter behavior. Switching to a
 different chat clears the date filter; refreshing the same chat preserves it.
 The repository still applies the existing bounded message limit inside the
 selected day, so the filter never turns into an unbounded history load.
+
+## Canonical task filtering and date ordering
+
+The Tasks view sends search, task type, status/bucket, due date, and responsible
+employee filters to `GET /api/tasks`. The browser no longer re-filters the
+returned task array, so one repository query is the source of truth for both
+filter membership and ordering.
+
+`tasks.due_at` is the canonical task date entered during creation or editing.
+Task list queries and tasks embedded in a chat use the same ordering rule:
+ascending `due_at`, with undated tasks last and `id` as the deterministic tie
+breaker. Workflow status does not create a second sort group. The explicit
+`assigned_user_id` query parameter filters by responsible employee; `mine=true`
+intentionally takes precedence and resolves to the authenticated user's id.

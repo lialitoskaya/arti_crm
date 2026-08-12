@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <script src="/static/theme-init.js?v=v79-strict-csp-secure-cookie-20260708"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=v95-chat-message-date-filter-20260806" />
+  <link rel="stylesheet" href="/static/styles.css?v=v95-task-assignee-date-sort-20260806" />
 
 </head>
 <body class="auth-pending">
@@ -640,6 +640,9 @@
             <option value="in_progress">В работе</option>
             <option value="archive">Архив</option>
           </select>
+          <select id="taskAssigneeFilter" class="tasks-ref-select" aria-label="Ответственный по задаче">
+            <option value="">Ответственный</option>
+          </select>
           <label class="tasks-ref-date" title="Фильтр по дате задачи">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v4"/><path d="M17 3v4"/><path d="M4 9h16"/><rect x="4" y="5" width="16" height="16" rx="2"/></svg>
             <input id="taskDueDateFilter" type="date" aria-label="Фильтр задач по дате" />
@@ -992,6 +995,6 @@
 
   <div id="notificationToasts" class="notification-toast-stack" aria-live="polite"></div>
 
-  <script src="/static/app.js?v=v95-chat-message-date-filter-20260806"></script>
+  <script src="/static/app.js?v=v95-task-assignee-date-sort-20260806"></script>
 </body>
 </html>

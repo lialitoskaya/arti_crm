@@ -975,6 +975,10 @@ def init_db() -> None:
                 ON push_outbox(user_id);
             CREATE INDEX IF NOT EXISTS idx_tasks_status_type
                 ON tasks(status, task_type_id);
+            CREATE INDEX IF NOT EXISTS idx_tasks_due_at_id
+                ON tasks(due_at, id);
+            CREATE INDEX IF NOT EXISTS idx_tasks_assigned_due_id
+                ON tasks(assigned_user_id, due_at, id);
             CREATE INDEX IF NOT EXISTS idx_task_types_active_sort
                 ON task_types(is_active, sort_order, title);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_dedupe

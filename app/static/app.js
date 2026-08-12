@@ -1806,6 +1806,15 @@ function hydrateAssigneeSelects() {
     standaloneTaskSelect.innerHTML = assigneeOptions(current, true);
     standaloneTaskSelect.value = current;
   }
+  const taskAssigneeFilter = $('taskAssigneeFilter');
+  if (taskAssigneeFilter) {
+    const current = taskAssigneeFilter.value || '';
+    taskAssigneeFilter.innerHTML = '<option value="">Ответственный</option>' + (assignees || []).map(user => {
+      const value = String(user.id);
+      return `<option value="${escapeHtml(value)}" ${value === current ? 'selected' : ''}>${escapeHtml(assigneeDisplay(user))}</option>`;
+    }).join('');
+    taskAssigneeFilter.value = current;
+  }
 }
 
 function assigneeNameFromTask(task) {
@@ -2076,7 +2085,6 @@ async function loadTaskTypes(options = {}) {
     taskTypes = await api(`/api/task-types?include_inactive=${includeInactive ? 'true' : 'false'}`);
     renderTaskTypeSettingsList();
     hydrateTaskTypeSelects();
-    updateTaskTypeFilterOptions(Array.isArray(window.lastLoadedTasks) ? window.lastLoadedTasks : []);
     return taskTypes;
   } catch (err) {
     console.warn('task types failed', err);
@@ -2136,6 +2144,7 @@ function hydrateTaskTypeSelects() {
 
   hydrateSingleTaskTypeSelect($('taskTypeSelect'), updateTaskCreateCommentLabel);
   hydrateSingleTaskTypeSelect($('taskStandaloneType'), updateStandaloneTaskCreateCommentLabel);
+  hydrateSingleTaskTypeSelect($('taskTypeFilter'));
 
   document.querySelectorAll('[data-task-type]').forEach(typeSelect => {
     const current = typeSelect.value || typeSelect.dataset.currentTaskType || '';
@@ -5400,53 +5409,34 @@ function bindTaskBoardCardActions(item) {
 }
 
 
-function taskMatchesDate(task, yyyyMmDd) {
-  if (!yyyyMmDd) return true;
-  const values = [task?.due_at, task?.created_at, task?.updated_at].filter(Boolean).map(String);
-  return values.some(value => value.startsWith(yyyyMmDd));
-}
-
-function updateTaskTypeFilterOptions(tasks) {
-  const select = $('taskTypeFilter');
-  if (!select) return;
-  const current = select.value || '';
-  const sourceLabels = Array.isArray(taskTypes) && taskTypes.length
-    ? taskTypes.filter(type => type.is_active !== false && type.is_active !== 0).map(type => type.title || type.name)
-    : (tasks || []).map(getTaskTypeLabel);
-  const labels = Array.from(new Set(sourceLabels.filter(Boolean).map(value => String(value).trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'ru'));
-  select.innerHTML = '<option value="">Тип задачи</option>' + labels.map(label => `<option value="${escapeHtml(label)}" ${label === current ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('');
-}
-
-function filterTasksForUi(tasks) {
-  const searchValue = ($('taskSearchInput')?.value || '').trim().toLowerCase();
-  const typeValue = $('taskTypeFilter')?.value || '';
-  const statusValue = $('taskStatusFilter')?.value || '';
-  const dateValue = $('taskDueDateFilter')?.value || '';
-  return (tasks || []).filter(task => {
-    const normalizedStatus = normalizeTaskStatus(task.status);
-    if (statusValue) {
-      const wanted = statusValue === 'archive' ? 'archive' : statusValue;
-      if (normalizedStatus !== wanted) return false;
-    }
-    if (typeValue && getTaskTypeLabel(task) !== typeValue) return false;
-    if (searchValue.length >= 3 && !getTaskPrimaryText(task).toLowerCase().includes(searchValue)) return false;
-    if (!taskMatchesDate(task, dateValue)) return false;
-    return true;
-  });
-}
-
-async function loadAllTasks() {
+function buildTaskListQuery() {
   const params = new URLSearchParams();
   const status = $('taskStatusFilter')?.value || '';
   const bucket = $('taskBucketFilter')?.value || 'active';
+  const searchValue = ($('taskSearchInput')?.value || '').trim();
+  const taskTypeId = $('taskTypeFilter')?.value || '';
+  const dueDate = $('taskDueDateFilter')?.value || '';
+  const assignedUserId = $('taskAssigneeFilter')?.value || '';
+
   if (status === 'archive') params.set('bucket', 'archive');
   else if (status) params.set('status', status);
-  else if (bucket === 'mine') { params.set('bucket', 'active'); params.set('mine', 'true'); }
-  else if (bucket && bucket !== 'all') params.set('bucket', bucket);
-  const tasks = await api(`/api/tasks?${params.toString()}`);
-  window.lastLoadedTasks = tasks;
-  updateTaskTypeFilterOptions(tasks);
-  renderAllTasks(filterTasksForUi(tasks));
+  else if (bucket === 'mine') {
+    params.set('bucket', 'active');
+    params.set('mine', 'true');
+  } else if (bucket && bucket !== 'all') {
+    params.set('bucket', bucket);
+  }
+
+  if (searchValue.length >= 3) params.set('q', searchValue);
+  if (taskTypeId) params.set('task_type_id', taskTypeId);
+  if (dueDate) params.set('due_date', dueDate);
+  if (assignedUserId) params.set('assigned_user_id', assignedUserId);
+  return params;
+}
+
+async function loadAllTasks() {
+  const tasks = await api(`/api/tasks?${buildTaskListQuery().toString()}`);
+  renderAllTasks(Array.isArray(tasks) ? tasks : []);
 }
 
 function renderAllTasks(tasks) {
@@ -5468,6 +5458,7 @@ function renderAllTasks(tasks) {
     const clientLabel = isStandaloneTask ? 'Без чата' : (customerLabel(task) || task.customer_id || task.external_chat_id || `ID ${task.chat_id || task.id || ''}`.trim());
     const primaryText = getTaskPrimaryText(task);
     const responsibleLabel = assigneeNameFromTask(task) || 'Не назначен';
+    const dueLabel = formatDateTime(task.due_at) || 'Без даты';
     item.classList.toggle('tasks-ref-card-standalone', isStandaloneTask);
     item.innerHTML = `
       <div class="tasks-ref-client">
@@ -5477,6 +5468,10 @@ function renderAllTasks(tasks) {
       <div class="tasks-ref-assignee">
         <span class="tasks-ref-field-title">Ответственный</span>
         <span class="tasks-ref-field-value">${escapeHtml(responsibleLabel)}</span>
+      </div>
+      <div class="tasks-ref-due">
+        <span class="tasks-ref-field-title">Дата</span>
+        <time class="tasks-ref-field-value" datetime="${escapeHtml(task.due_at || '')}">${escapeHtml(dueLabel)}</time>
       </div>
       <div class="tasks-ref-comment">
         <span class="tasks-ref-field-title">${escapeHtml(fieldLabel)}</span>
@@ -7916,6 +7911,7 @@ function init() {
   bind('taskStatusFilter', 'change', loadAllTasks);
   bind('taskBucketFilter', 'change', loadAllTasks);
   bind('taskTypeFilter', 'change', loadAllTasks);
+  bind('taskAssigneeFilter', 'change', loadAllTasks);
   bind('taskDueDateFilter', 'change', loadAllTasks);
   bind('taskSearchInput', 'input', () => {
     clearTimeout(taskSearchTimer);

@@ -4952,13 +4952,14 @@ def list_tasks(
     q: str | None = None,
     task_type_id: int | None = None,
     due_date: str | None = None,
+    assigned_user_id: int | None = None,
 ) -> list[dict[str, Any]]:
     user = _current_user(request)
-    assigned_user_id = int(user["id"]) if mine else None
+    effective_assigned_user_id = int(user["id"]) if mine else assigned_user_id
     return repo.list_tasks(
         status=status,
         bucket=bucket,
-        assigned_user_id=assigned_user_id,
+        assigned_user_id=effective_assigned_user_id,
         q=q,
         task_type_id=task_type_id,
         due_date=due_date,

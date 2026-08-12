@@ -917,7 +917,7 @@ html[data-theme="dark"] button.reply-template-delete-action:focus-visible {
 .tasks-redesign-page { padding: 0; }
 .tasks-ref-toolbar {
   display: grid;
-  grid-template-columns: auto minmax(220px, 1fr) minmax(150px, 190px) minmax(140px, 170px) 44px;
+  grid-template-columns: auto minmax(220px, 1fr) minmax(140px, 180px) minmax(130px, 160px) minmax(150px, 190px) 44px;
   align-items: center;
   gap: 10px;
   padding: 12px 14px;
@@ -957,7 +957,7 @@ html[data-theme="dark"] button.reply-template-delete-action:focus-visible {
 .tasks-ref-list { display: grid; gap: 10px; }
 .tasks-ref-card {
   display: grid;
-  grid-template-columns: minmax(130px, 1.1fr) minmax(130px, 1fr) minmax(220px, 2fr) auto;
+  grid-template-columns: minmax(120px, 1fr) minmax(130px, 1fr) minmax(120px, .8fr) minmax(220px, 2fr) auto;
   align-items: stretch;
   gap: 12px;
   padding: 14px;
@@ -5457,7 +5457,7 @@ html[data-theme="dark"] .supply-planning-filters {
 /* Arti CRM — v73-standalone-tasks-and-supply-beta-nav-20260707
    Tasks: standalone task creation in the Tasks section + supply menu beta label placement. */
 #tasksView .tasks-ref-toolbar {
-  grid-template-columns: minmax(190px, auto) minmax(220px, 1fr) minmax(150px, 190px) minmax(140px, 170px) 44px;
+  grid-template-columns: minmax(190px, auto) minmax(220px, 1fr) minmax(140px, 180px) minmax(130px, 160px) minmax(150px, 190px) 44px;
 }
 
 #tasksView .tasks-ref-title-row {
@@ -6066,5 +6066,18 @@ html[data-theme] .internal-note-edit-text:focus {
     right: 12px;
     left: 12px;
     width: auto;
+  }
+}
+
+
+/* Arti CRM — v95 task assignee filter and canonical due-date ordering */
+#tasksView .tasks-ref-due time {
+  display: block;
+  white-space: nowrap;
+}
+
+@media (max-width: 1250px) and (min-width: 1101px) {
+  #tasksView .tasks-ref-toolbar {
+    grid-template-columns: minmax(180px, auto) minmax(200px, 1fr) repeat(3, minmax(130px, 1fr)) 44px;
   }
 }

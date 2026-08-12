@@ -1,4 +1,4 @@
-const ARTI_CRM_SW_VERSION = 'v95-chat-message-date-filter-20260806';
+const ARTI_CRM_SW_VERSION = 'v95-task-assignee-date-sort-20260806';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();

@@ -99,6 +99,21 @@ unread metadata and the global CRM workflow status are not personal read state.
 5. The existing message limit remains enforced within the selected day.
 6. An empty result is shown explicitly as no messages for the selected date.
 
+## Task date and responsible employee
+
+1. `due_at` is the task date shown in cards and used by the calendar filter.
+   `created_at` and `updated_at` are audit timestamps and never substitute for it.
+2. Tasks are ordered strictly from the earliest due date to the latest; tasks
+   without a date appear after all dated tasks.
+3. Status does not override date ordering. Equal dates use task id as a stable
+   deterministic tie breaker.
+4. The responsible-employee filter uses `assigned_user_id` and is evaluated in
+   the repository. The frontend does not re-filter an already returned array.
+5. `mine=true` always means the authenticated user and takes precedence over an
+   explicit responsible-employee query parameter.
+6. The same due-date ordering applies to the all-tasks view and tasks shown
+   inside an individual chat.
+
 ## CRM outbound message author
 
 1. Every outbound message sent through the CRM carries CRM-origin markers and the
