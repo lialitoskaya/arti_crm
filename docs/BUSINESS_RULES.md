@@ -118,6 +118,29 @@ unread metadata and the global CRM workflow status are not personal read state.
 7. The same due-date ordering applies to the all-tasks view and tasks shown
    inside an individual chat.
 
+## Ozon message product context
+
+1. Ozon transport markers such as the leading `errorText` token are not user-visible
+   message text and are removed at the connector boundary.
+2. This rule applies to an Ozon `/v3/chat/history` message only when its top-level
+   `context.sku` is present, non-empty, and safe for an Ozon product path.
+3. A valid `context.sku` confirms product context, but it does not prove the source
+   or classify the message as review-origin.
+4. The UI uses the neutral label `Товар`. Without a confirmed provider-owned
+   discriminator, CRM does not classify the message as review-origin.
+5. The canonical product link is `https://www.ozon.ru/product/{sku}` and opens in a
+   separate tab with `noopener`/`noreferrer` protections.
+6. `_crm_product_context` is an internal canonical marker created only by the Ozon
+   connector after SKU validation. A marker from provider payload is never accepted.
+7. The UI consumes only this connector-normalized marker; it does not parse arbitrary
+   provider context through a second presentation path.
+8. Product title and preview are optional. A preview is rendered only when the same
+   Ozon message payload already includes a valid HTTPS image URL.
+9. Product preview images use the existing lazy image path and are excluded from the
+   generic attachment gallery so the same image is never rendered twice.
+10. Rendering this context must not call an additional marketplace product endpoint,
+   start synchronization, or add per-message background requests.
+
 ## CRM outbound message author
 
 1. Every outbound message sent through the CRM carries CRM-origin markers and the

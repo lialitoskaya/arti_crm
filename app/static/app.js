@@ -3870,6 +3870,78 @@ function buildMessageReceiptContext(messages) {
   };
 }
 
+function ozonProductContext(message) {
+  const rawContext = message?.raw?._crm_product_context;
+  if (!rawContext || rawContext.kind !== 'ozon_product') return null;
+  const sku = String(rawContext.sku || '').trim();
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(sku)) return null;
+  const url = String(rawContext.url || '').trim();
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(url);
+  } catch (error) {
+    return null;
+  }
+  if (parsedUrl.protocol !== 'https:' || parsedUrl.hostname !== 'www.ozon.ru' || parsedUrl.pathname !== `/product/${sku}`) return null;
+  const title = String(rawContext.title || '').trim();
+  const imageUrl = String(rawContext.image_url || '').trim();
+  return {
+    sku,
+    url: parsedUrl.href,
+    title,
+    imageUrl: /^https:\/\//i.test(imageUrl) ? imageUrl : '',
+  };
+}
+
+function createOzonProductContextCard(context) {
+  const card = document.createElement('a');
+  card.className = 'message-product-context';
+  card.href = context.url;
+  card.target = '_blank';
+  card.rel = 'noreferrer noopener';
+  card.title = 'Открыть товар на Ozon';
+  card.setAttribute('aria-label', `Открыть товар SKU ${context.sku} на Ozon`);
+
+  if (context.imageUrl) {
+    const media = document.createElement('span');
+    media.className = 'message-product-context-media';
+    const img = document.createElement('img');
+    img.alt = context.title ? `Изображение товара ${context.title}` : `Изображение товара SKU ${context.sku}`;
+    img.loading = 'lazy';
+    img.decoding = 'async';
+    img.width = 52;
+    img.height = 52;
+    img.referrerPolicy = 'no-referrer';
+    img.onerror = () => card.classList.add('image-unavailable');
+    prepareLazyChatImage(img, imagePreviewSrc(context.imageUrl));
+    media.appendChild(img);
+    card.appendChild(media);
+  } else {
+    card.classList.add('without-image');
+  }
+
+  const copy = document.createElement('span');
+  copy.className = 'message-product-context-copy';
+
+  const label = document.createElement('span');
+  label.className = 'message-product-context-label';
+  label.textContent = 'Товар';
+
+  const title = document.createElement('span');
+  title.className = 'message-product-context-title';
+  title.textContent = context.title || 'Открыть товар на Ozon';
+
+  const meta = document.createElement('span');
+  meta.className = 'message-product-context-meta';
+  meta.textContent = `SKU ${context.sku}`;
+
+  copy.appendChild(label);
+  copy.appendChild(title);
+  copy.appendChild(meta);
+  card.appendChild(copy);
+  return card;
+}
+
 function crmMessageAuthorLabel(message) {
   if (!message || message.direction !== 'outbound') return '';
   const isCrmSent = message.is_crm_sent === true || message.is_crm_sent === 1;
@@ -3892,7 +3964,8 @@ function renderMessages(messages) {
     item.className = `message ${message.direction} ${Number(message.id) === Number(selectedAiMessageId) ? 'ai-selected-message' : ''}`;
     item.dataset.messageId = message.id;
 
-    const images = extractImageUrls(message);
+    const productContext = ozonProductContext(message);
+    const images = extractImageUrls(message, productContext?.imageUrl ? [productContext.imageUrl] : []);
     if (images.length) item.classList.add('message-has-images');
     const displayText = cleanMessageTextForDisplay(message.text || '', images);
     const bubble = document.createElement('div');
@@ -3974,6 +4047,10 @@ function renderMessages(messages) {
       noteActions.appendChild(deleteBtn);
       meta.appendChild(noteActions);
       item.appendChild(meta);
+    }
+
+    if (productContext) {
+      bubble.appendChild(createOzonProductContextCard(productContext));
     }
 
     if (displayText) {
@@ -4356,7 +4433,7 @@ function renderTextWithLinks(container, value) {
   }
 }
 
-function extractImageUrls(message) {
+function extractImageUrls(message, excludedUrls = []) {
   const found = new Set();
   const textUrls = String(message.text || '').match(/(?:https?:\/\/|\/api\/chat-uploads\/)[^\s<>"]+/g) || [];
   for (const url of textUrls) {
@@ -4364,6 +4441,9 @@ function extractImageUrls(message) {
     if (isLikelyImageUrl(clean, 'text')) found.add(clean);
   }
   scanForImages(message.raw || {}, '', found);
+  for (const excludedUrl of excludedUrls || []) {
+    if (excludedUrl) found.delete(String(excludedUrl));
+  }
   return Array.from(found).slice(0, 16);
 }
 

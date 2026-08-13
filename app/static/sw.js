@@ -1,4 +1,4 @@
-const ARTI_CRM_SW_VERSION = 'v95-4-chat-task-date-range-scope-20260806';
+const ARTI_CRM_SW_VERSION = 'v95-5-ozon-review-product-context-20260806';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
