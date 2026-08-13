@@ -65,24 +65,31 @@ class OzonProductContextConnectorTests(unittest.IsolatedAsyncioTestCase):
                 )
         self.assertIsNone(self.connector._normalize_product_context({}))
 
-    def test_optional_preview_is_normalized_without_additional_marketplace_call(self) -> None:
-        payload = {
-            "context": {
-                "sku": "12345",
-                "product_name": "Беспроводные наушники",
-                "image": {"url": "https://cdn1.ozone.ru/s3/product-preview.jpg"},
-            }
+    def test_product_context_ignores_all_provider_preview_aliases(self) -> None:
+        aliases = {
+            "image_url": "https://cdn1.ozone.ru/image-url.jpg",
+            "imageUrl": "https://cdn1.ozone.ru/image-url-camel.jpg",
+            "image": {"url": "https://cdn1.ozone.ru/image.jpg"},
+            "picture": {"src": "https://cdn1.ozone.ru/picture.jpg"},
+            "preview": "https://cdn1.ozone.ru/preview.jpg",
+            "thumbnail": {"link": "https://cdn1.ozone.ru/thumbnail.jpg"},
         }
-        self.assertEqual(
-            {
-                "kind": "ozon_product",
-                "sku": "12345",
-                "url": "https://www.ozon.ru/product/12345",
-                "title": "Беспроводные наушники",
-                "image_url": "https://cdn1.ozone.ru/s3/product-preview.jpg",
-            },
-            self.connector._normalize_product_context(payload),
-        )
+        expected = {
+            "kind": "ozon_product",
+            "sku": "12345",
+            "url": "https://www.ozon.ru/product/12345",
+            "title": "Беспроводные наушники",
+        }
+        for alias, value in aliases.items():
+            with self.subTest(alias=alias):
+                context = {
+                    "sku": "12345",
+                    "product_name": "Беспроводные наушники",
+                    alias: value,
+                }
+                normalized = self.connector._normalize_product_context({"context": context})
+                self.assertEqual(expected, normalized)
+                self.assertNotIn("image_url", normalized or {})
 
     async def test_history_mapping_keeps_one_canonical_context_contract(self) -> None:
         raw_message = {
@@ -194,10 +201,10 @@ class OzonProductContextConnectorTests(unittest.IsolatedAsyncioTestCase):
                 "sku": "12345",
                 "url": "https://www.ozon.ru/product/12345",
                 "title": "Проверенное название",
-                "image_url": "https://cdn1.ozone.ru/product.jpg",
             },
             messages[0].raw.get("_crm_product_context"),
         )
+        self.assertNotIn("image_url", messages[0].raw["_crm_product_context"])
         self.assertNotIn("extra", messages[0].raw["_crm_product_context"])
         self.assertIs(raw_message["_crm_product_context"], spoofed_context)
 
@@ -246,20 +253,59 @@ class OzonProductContextUiTests(unittest.TestCase):
             """
         )
 
-    def test_preview_is_lazy_and_not_duplicated_in_generic_image_gallery(self) -> None:
+    def test_product_context_does_not_render_or_load_preview_images(self) -> None:
         create_card = _extract_function(self.source, "createOzonProductContextCard")
         extract_images = _extract_function(self.source, "extractImageUrls")
-        self.assertIn("img.loading = 'lazy'", create_card)
-        self.assertIn("prepareLazyChatImage", create_card)
-        self.assertIn("productContext?.imageUrl", self.source)
-        self.assertIn("found.delete", extract_images)
+        self.assertNotIn("createElement('img')", create_card)
+        self.assertNotIn("prepareLazyChatImage", create_card)
+        self.assertNotIn("imagePreviewSrc", create_card)
+        self.assertNotIn("onerror", create_card)
+        self.assertNotIn("imageUrl", self.context_function)
+        self.assertIn("delete raw.context", extract_images)
+        self.assertIn("delete raw._crm_product_context", extract_images)
         self.assertNotIn("/v", create_card)
         self.assertNotIn("fetch(", create_card)
+
+    def test_generic_gallery_excludes_product_context_without_mutating_raw(self) -> None:
+        start_marker = "function extractImageUrls"
+        end_marker = "function imagePreviewSrc"
+        start = self.source.find(start_marker)
+        end = self.source.find(end_marker)
+        self.assertNotEqual(-1, start)
+        self.assertNotEqual(-1, end)
+        self.assertLess(start, end)
+        image_functions = self.source[start:end]
+        _run_node(
+            f"""
+            {self.context_function}
+            {image_functions}
+            const providerImage = 'https://cdn1.ozone.ru/product-preview.jpg';
+            const markerImage = 'https://attacker.example/spoof.jpg';
+            const raw = {{
+              context: {{ sku: '12345', image_url: providerImage }},
+              _crm_product_context: {{
+                kind: 'ozon_product',
+                sku: '12345',
+                url: 'https://www.ozon.ru/product/12345',
+                image_url: markerImage,
+              }},
+            }};
+            const before = JSON.stringify(raw);
+            const images = extractImageUrls({{ text: '', raw }});
+            if (images.includes(providerImage) || images.includes(markerImage)) {{
+              throw new Error('product preview leaked into generic gallery');
+            }}
+            if (JSON.stringify(raw) !== before) throw new Error('message.raw was mutated');
+            """
+        )
 
     def test_product_context_uses_compact_existing_message_layout(self) -> None:
         self.assertIn(".message-product-context {", self.styles)
         self.assertIn("border-bottom: 1px solid var(--crm-line);", self.styles)
-        self.assertIn(".message-product-context.without-image", self.styles)
+        self.assertIn("display: block;", self.styles)
+        self.assertNotIn(".message-product-context-media", self.styles)
+        self.assertNotIn(".message-product-context.without-image", self.styles)
+        self.assertNotIn(".message-product-context.image-unavailable", self.styles)
         self.assertNotIn("message-product-context-placeholder", self.source)
 
     def test_frontend_uses_neutral_product_label_and_accessible_name(self) -> None:
@@ -267,9 +313,15 @@ class OzonProductContextUiTests(unittest.TestCase):
         self.assertIn("label.textContent = 'Товар'", create_card)
         self.assertIn("card.title = 'Открыть товар на Ozon'", create_card)
         self.assertIn("`Открыть товар SKU ${context.sku} на Ozon`", create_card)
-        self.assertIn("`Изображение товара ${context.title}`", create_card)
+        self.assertIn("card.target = '_blank'", create_card)
+        self.assertIn("card.rel = 'noreferrer noopener'", create_card)
+        self.assertIn("title.textContent = context.title || 'Открыть товар на Ozon'", create_card)
+        self.assertNotIn("Изображение товара", create_card)
         self.assertNotIn("Товар из отзыва", create_card)
         self.assertNotIn("отзыв", create_card.lower())
+
+    def test_obsolete_review_test_path_is_not_restored(self) -> None:
+        self.assertFalse((ROOT / "tests" / "test_ozon_review_context.py").exists())
 
     def test_repeated_render_rebuilds_only_one_product_block_per_message(self) -> None:
         render_messages = _extract_function(self.source, "renderMessages")

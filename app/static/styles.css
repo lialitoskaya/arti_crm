@@ -2597,24 +2597,13 @@ textarea {
 .message-product-context {
   width: min(320px, 100%);
   min-width: 0;
-  display: grid;
-  grid-template-columns: 52px minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
+  display: block;
   padding: 0 0 9px;
   border-bottom: 1px solid var(--crm-line);
   color: inherit;
   text-decoration: none;
 }
 
-.message-product-context.without-image,
-.message-product-context.image-unavailable {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.message-product-context.image-unavailable .message-product-context-media {
-  display: none;
-}
 
 .message-product-context:hover .message-product-context-title {
   text-decoration: underline;
@@ -2627,21 +2616,6 @@ textarea {
   box-shadow: var(--crm-focus);
 }
 
-.message-product-context-media {
-  width: 52px;
-  height: 52px;
-  overflow: hidden;
-  border: 1px solid var(--crm-line);
-  border-radius: var(--crm-radius-xs);
-  background: var(--crm-panel-soft);
-}
-
-.message-product-context-media img {
-  width: 100%;
-  height: 100%;
-  display: block;
-  object-fit: cover;
-}
 
 .message-product-context-copy {
   min-width: 0;

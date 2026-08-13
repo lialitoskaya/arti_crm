@@ -697,24 +697,6 @@ class OzonConnector(MarketplaceConnector):
             return "\n".join(parts)
         return cls._stringify_message_content(value)
 
-    @staticmethod
-    def _context_image_url(context: dict[str, Any]) -> str | None:
-        image_keys = (
-            "image_url", "imageUrl", "image", "picture", "picture_url",
-            "pictureUrl", "preview", "preview_url", "previewUrl",
-            "thumbnail", "thumbnail_url", "thumbnailUrl",
-        )
-        for key in image_keys:
-            value = context.get(key)
-            if isinstance(value, str) and value.strip().lower().startswith("https://"):
-                return value.strip()
-            if isinstance(value, dict):
-                for nested_key in ("url", "src", "link"):
-                    nested = value.get(nested_key)
-                    if isinstance(nested, str) and nested.strip().lower().startswith("https://"):
-                        return nested.strip()
-        return None
-
     @classmethod
     def _normalize_product_context(cls, item: dict[str, Any]) -> dict[str, Any] | None:
         """Map Ozon message product context to one stable CRM presentation contract."""
@@ -737,7 +719,6 @@ class OzonConnector(MarketplaceConnector):
             "sku": sku,
             "url": f"https://www.ozon.ru/product/{sku}",
             "title": title,
-            "image_url": cls._context_image_url(context),
         }
         return {key: value for key, value in normalized.items() if value not in (None, "")}
 

@@ -3884,12 +3884,10 @@ function ozonProductContext(message) {
   }
   if (parsedUrl.protocol !== 'https:' || parsedUrl.hostname !== 'www.ozon.ru' || parsedUrl.pathname !== `/product/${sku}`) return null;
   const title = String(rawContext.title || '').trim();
-  const imageUrl = String(rawContext.image_url || '').trim();
   return {
     sku,
     url: parsedUrl.href,
     title,
-    imageUrl: /^https:\/\//i.test(imageUrl) ? imageUrl : '',
   };
 }
 
@@ -3901,24 +3899,6 @@ function createOzonProductContextCard(context) {
   card.rel = 'noreferrer noopener';
   card.title = 'Открыть товар на Ozon';
   card.setAttribute('aria-label', `Открыть товар SKU ${context.sku} на Ozon`);
-
-  if (context.imageUrl) {
-    const media = document.createElement('span');
-    media.className = 'message-product-context-media';
-    const img = document.createElement('img');
-    img.alt = context.title ? `Изображение товара ${context.title}` : `Изображение товара SKU ${context.sku}`;
-    img.loading = 'lazy';
-    img.decoding = 'async';
-    img.width = 52;
-    img.height = 52;
-    img.referrerPolicy = 'no-referrer';
-    img.onerror = () => card.classList.add('image-unavailable');
-    prepareLazyChatImage(img, imagePreviewSrc(context.imageUrl));
-    media.appendChild(img);
-    card.appendChild(media);
-  } else {
-    card.classList.add('without-image');
-  }
 
   const copy = document.createElement('span');
   copy.className = 'message-product-context-copy';
@@ -3965,7 +3945,7 @@ function renderMessages(messages) {
     item.dataset.messageId = message.id;
 
     const productContext = ozonProductContext(message);
-    const images = extractImageUrls(message, productContext?.imageUrl ? [productContext.imageUrl] : []);
+    const images = extractImageUrls(message);
     if (images.length) item.classList.add('message-has-images');
     const displayText = cleanMessageTextForDisplay(message.text || '', images);
     const bubble = document.createElement('div');
@@ -4433,17 +4413,22 @@ function renderTextWithLinks(container, value) {
   }
 }
 
-function extractImageUrls(message, excludedUrls = []) {
+function extractImageUrls(message) {
   const found = new Set();
   const textUrls = String(message.text || '').match(/(?:https?:\/\/|\/api\/chat-uploads\/)[^\s<>"]+/g) || [];
   for (const url of textUrls) {
     const clean = url.replace(/[),.;]+$/, '');
     if (isLikelyImageUrl(clean, 'text')) found.add(clean);
   }
-  scanForImages(message.raw || {}, '', found);
-  for (const excludedUrl of excludedUrls || []) {
-    if (excludedUrl) found.delete(String(excludedUrl));
+
+  const raw = message?.raw && typeof message.raw === 'object'
+    ? { ...message.raw }
+    : {};
+  if (ozonProductContext(message)) {
+    delete raw.context;
+    delete raw._crm_product_context;
   }
+  scanForImages(raw, '', found);
   return Array.from(found).slice(0, 16);
 }
 

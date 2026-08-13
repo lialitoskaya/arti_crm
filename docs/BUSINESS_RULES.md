@@ -134,10 +134,12 @@ unread metadata and the global CRM workflow status are not personal read state.
    connector after SKU validation. A marker from provider payload is never accepted.
 7. The UI consumes only this connector-normalized marker; it does not parse arbitrary
    provider context through a second presentation path.
-8. Product title and preview are optional. A preview is rendered only when the same
-   Ozon message payload already includes a valid HTTPS image URL.
-9. Product preview images use the existing lazy image path and are excluded from the
-   generic attachment gallery so the same image is never rendered twice.
+8. Product title is optional. The canonical marker contains only `kind`, `sku`, `title`,
+   and `url`; it never contains `image_url`. The UI renders a compact text-only link and
+   does not render or request product-context images.
+9. For a canonical-normalized message, provider `context` metadata and the canonical
+   marker are excluded from the generic attachment image scanner, so product previews
+   cannot reappear as ordinary message attachments.
 10. Rendering this context must not call an additional marketplace product endpoint,
    start synchronization, or add per-message background requests.
 
