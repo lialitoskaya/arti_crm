@@ -9,7 +9,14 @@ from typing import Any
 
 import httpx
 
-from app.connectors.base import MarketplaceConnector, UnifiedChat, UnifiedMessage
+from app.connectors.base import (
+    MarketplaceConnector,
+    MarketplaceSendError,
+    MarketplaceSendOutcome,
+    UnifiedChat,
+    UnifiedMessage,
+    sanitize_provider_payload,
+)
 from app.marketplace_sender import (
     extract_sender_designations as _shared_extract_sender_designations,
     normalize_system_sender as _shared_normalize_system_sender,
@@ -860,8 +867,7 @@ class OzonConnector(MarketplaceConnector):
             if not external_message_id:
                 external_message_id = self._fallback_message_id(item, external_chat_id, text, direction)
 
-            provider_payload = dict(item)
-            provider_payload.pop("_crm_product_context", None)
+            provider_payload = sanitize_provider_payload(item)
             raw_payload = {
                 **provider_payload,
                 "_crm_author_name": author_name,
@@ -886,11 +892,61 @@ class OzonConnector(MarketplaceConnector):
         messages.sort(key=lambda m: m.created_at or "")
         return messages
 
-    async def send_message(self, external_chat_id: str, text: str) -> dict[str, Any]:
+    async def send_message(
+        self,
+        external_chat_id: str,
+        text: str,
+    ) -> MarketplaceSendOutcome:
+        """Send one text without persisting provider response bodies on failure."""
         if not self.client_id or not self.api_key:
-            raise RuntimeError("OZON_CLIENT_ID/OZON_API_KEY are not configured")
+            raise MarketplaceSendError(
+                category="configuration",
+                safe_summary="Ozon connector is not configured",
+                side_effect_possible=False,
+            )
         payload = {"chat_id": external_chat_id, "text": text}
-        return await self._post("/v1/chat/send/message", payload)
+        try:
+            async with httpx.AsyncClient(timeout=45) as client:
+                response = await client.post(
+                    f"{self.base_url}/v1/chat/send/message",
+                    headers=self.headers,
+                    json=payload,
+                )
+        except httpx.TimeoutException as exc:
+            raise MarketplaceSendError(
+                category="ambiguous_timeout",
+                safe_summary="Ozon send timed out; provider outcome is unknown",
+                side_effect_possible=True,
+            ) from exc
+        except httpx.RequestError as exc:
+            raise MarketplaceSendError(
+                category="ambiguous_transport",
+                safe_summary="Ozon transport failed; provider outcome is unknown",
+                side_effect_possible=True,
+            ) from exc
+        correlation_id = response.headers.get("x-request-id") or response.headers.get("request-id")
+        if response.status_code >= 400:
+            raise MarketplaceSendError(
+                category="provider_http_error",
+                safe_summary="Ozon rejected or did not confirm the send request",
+                side_effect_possible=True,
+                http_status=response.status_code,
+                correlation_id=correlation_id,
+            )
+        try:
+            data = response.json()
+        except Exception as exc:
+            raise MarketplaceSendError(
+                category="ambiguous_response",
+                safe_summary="Ozon returned an unreadable send response",
+                side_effect_possible=True,
+                http_status=response.status_code,
+                correlation_id=correlation_id,
+            ) from exc
+        return MarketplaceSendOutcome(
+            response=data if isinstance(data, dict) else {"ok": True},
+            provider_external_message_id=None,
+        )
 
     async def send_file(
         self,

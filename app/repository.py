@@ -2551,8 +2551,30 @@ def _add_message_conn(
     client_operation_id: str | None = None,
 ) -> int:
     """Persist one logical message through a single identity reconciliation path."""
+    from app.message_send_operations import (
+        confirm_operation_from_echo_conn,
+        match_operation_for_echo_conn,
+    )
+
     created_at = created_at or _utc_now_iso()
     raw_payload = dict(raw) if isinstance(raw, dict) else {}
+    clean_external_id = str(external_message_id or "").strip() or None
+    matched_operation = None
+    if not is_crm_sent and str(direction or "").strip().lower() == "outbound":
+        matched_operation = match_operation_for_echo_conn(
+            conn,
+            chat_id=int(chat_id),
+            direction=direction,
+            text=text,
+            provider_external_message_id=clean_external_id,
+            created_at=created_at,
+        )
+        if matched_operation:
+            is_crm_sent = True
+            crm_author_user_id = int(matched_operation.get("author_user_id") or 0) or None
+            crm_author_label = str(matched_operation.get("author_label") or "").strip() or None
+            client_operation_id = str(matched_operation.get("client_operation_id") or "").strip() or None
+
     crm_label = str(
         crm_author_label or raw_payload.get("_crm_sent_by_label") or ""
     ).strip() or None
@@ -2586,7 +2608,6 @@ def _add_message_conn(
     elif direction == "inbound" and _message_raw_looks_seller_side(raw_payload):
         direction = "outbound"
 
-    clean_external_id = str(external_message_id or "").strip() or None
     previous_latest_message_id: int | None = None
     if direction == "inbound":
         previous_latest = conn.execute(
@@ -2623,6 +2644,13 @@ def _add_message_conn(
             client_operation_id=operation_id,
         )
         refresh_chat_last_message(conn, int(chat_id))
+        if matched_operation:
+            confirm_operation_from_echo_conn(
+                conn,
+                operation_id=int(matched_operation["id"]),
+                canonical_message_id=message_id,
+                provider_external_message_id=clean_external_id,
+            )
         return message_id
 
     raw_json = json.dumps(raw_payload, ensure_ascii=False)
@@ -2683,6 +2711,13 @@ def _add_message_conn(
         )
 
     refresh_chat_last_message(conn, int(chat_id))
+    if matched_operation:
+        confirm_operation_from_echo_conn(
+            conn,
+            operation_id=int(matched_operation["id"]),
+            canonical_message_id=message_id,
+            provider_external_message_id=clean_external_id,
+        )
     if direction == "inbound":
         _mark_chat_unread_for_active_users_conn(
             conn,

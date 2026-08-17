@@ -208,6 +208,64 @@ class OzonProductContextConnectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("extra", messages[0].raw["_crm_product_context"])
         self.assertIs(raw_message["_crm_product_context"], spoofed_context)
 
+    async def test_history_mapping_recursively_sanitizes_reserved_keys_before_canonical_context(self) -> None:
+        raw_message = {
+            "message_id": "recursive-sanitizer",
+            "user": {"type": "Customer"},
+            "data": ["Сообщение с товаром"],
+            "is_crm_sent": True,
+            "crm_author_label": "Provider spoof",
+            "context": {
+                "sku": "12345",
+                "product_name": "Доверенный товарный контекст",
+                "_crm_nested_marker": "provider spoof",
+                "nested": [
+                    {
+                        "client_operation_id": "provider-spoof-operation",
+                        "safe_provider_field": "preserved",
+                    }
+                ],
+            },
+            "_crm_product_context": {
+                "kind": "provider-owned",
+                "sku": "99999",
+                "url": "https://attacker.example/product/99999",
+            },
+        }
+        expected_provider_payload = {
+            **raw_message,
+            "user": dict(raw_message["user"]),
+            "data": list(raw_message["data"]),
+            "context": {
+                **raw_message["context"],
+                "nested": [dict(raw_message["context"]["nested"][0])],
+            },
+            "_crm_product_context": dict(raw_message["_crm_product_context"]),
+        }
+        with patch.object(
+            self.connector,
+            "_post",
+            new=AsyncMock(return_value={"result": {"messages": [raw_message], "has_next": False}}),
+        ):
+            messages = await self.connector.get_messages("context-chat")
+
+        mapped = messages[0].raw
+        self.assertNotIn("is_crm_sent", mapped)
+        self.assertNotIn("crm_author_label", mapped)
+        self.assertNotIn("_crm_nested_marker", mapped["context"])
+        self.assertNotIn("client_operation_id", mapped["context"]["nested"][0])
+        self.assertEqual("preserved", mapped["context"]["nested"][0]["safe_provider_field"])
+        self.assertEqual(
+            {
+                "kind": "ozon_product",
+                "sku": "12345",
+                "url": "https://www.ozon.ru/product/12345",
+                "title": "Доверенный товарный контекст",
+            },
+            mapped["_crm_product_context"],
+        )
+        self.assertEqual(expected_provider_payload, raw_message)
+
     async def test_mapping_does_not_mutate_provider_payload(self) -> None:
         raw_message = {
             "message_id": "input-unchanged",

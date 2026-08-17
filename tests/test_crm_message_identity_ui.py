@@ -15,41 +15,35 @@ class CrmMessageIdentityUiTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.source = APP_JS_PATH.read_text(encoding="utf-8")
         cls.create_operation_id = _extract_function(cls.source, "createClientOperationId")
-        cls.send_request = _extract_function(cls.source, "sendCurrentChatMessageRequest")
         cls.author_label = _extract_function(cls.source, "crmMessageAuthorLabel")
 
-    def test_text_and_attachment_requests_send_the_same_operation_identity(self) -> None:
-        _run_node(
-            f"""
-            {self.send_request}
-            const calls = [];
-            globalThis.api = async (url, options) => {{ calls.push({{ kind: 'json', url, options }}); return {{ ok: true }}; }};
-            globalThis.apiForm = async (url, form) => {{
-              calls.push({{ kind: 'form', url, operationId: form.get('operation_id') }});
-              return {{ ok: true }};
-            }};
-
-            Promise.resolve()
-              .then(() => sendCurrentChatMessageRequest(7, {{ text: 'hello', imageFiles: [], operationId: 'operation-stable-1' }}))
-              .then(() => sendCurrentChatMessageRequest(7, {{ text: 'caption', imageFiles: [new Blob(['x'])], operationId: 'operation-stable-2' }}))
-              .then(() => {{
-                const jsonBody = JSON.parse(calls[0].options.body);
-                if (jsonBody.operation_id !== 'operation-stable-1') throw new Error('text operation id missing');
-                if (calls[1].operationId !== 'operation-stable-2') throw new Error('attachment operation id missing');
-              }})
-              .catch((error) => {{ console.error(error); process.exit(1); }});
-            """
-        )
-
-    def test_submit_creates_one_operation_id_and_reuses_it_for_retry_payload(self) -> None:
-        self.assertIn("const operationId = createClientOperationId();", self.source)
+    def test_text_and_attachment_requests_use_separate_stable_operation_ids(self) -> None:
         self.assertIn(
-            "sendCurrentChatMessageWithRetry(chatIdForSend, { text, imageFiles, operationId })",
+            "operation_id: operationId,\n        intent_origin: intentOrigin",
             self.source,
         )
-        retry = _extract_function(self.source, "sendCurrentChatMessageWithRetry")
-        self.assertIn("sendCurrentChatMessageRequest(chatId, payload)", retry)
-        self.assertNotIn("createClientOperationId", retry)
+        self.assertIn(
+            "formData.append('operation_id', operationId);",
+            self.source,
+        )
+        self.assertNotIn("formData.append('caption'", self.source)
+        caption_position = self.source.index(
+            "intentOrigin: imageFiles.length ? 'attachment_caption' : 'message'"
+        )
+        upload_position = self.source.index("await uploadCurrentChatImages", caption_position)
+        self.assertLess(caption_position, upload_position)
+
+    def test_submit_creates_stable_command_and_attachment_ids_without_client_retry(self) -> None:
+        self.assertIn(
+            "const messageOperationId = text ? createClientOperationId() : null;",
+            self.source,
+        )
+        self.assertIn(
+            "const attachmentOperationId = imageFiles.length ? createClientOperationId() : null;",
+            self.source,
+        )
+        self.assertNotIn("sendCurrentChatMessageWithRetry", self.source)
+        self.assertIn("waitForMessageSendOperation", self.source)
 
     def test_employee_label_requires_canonical_crm_provenance(self) -> None:
         _run_node(

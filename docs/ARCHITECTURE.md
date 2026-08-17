@@ -169,29 +169,72 @@ being inferred from marketplace payload JSON:
 
 - `is_crm_sent` marks messages created by an authenticated CRM send operation;
 - `crm_author_user_id` and `crm_author_label` preserve the responsible employee;
-- `client_operation_id` is the idempotency key generated once by the browser and
-  reused for every retry of the same send.
+- `client_operation_id` is the required idempotency key generated once by the browser
+  and reused for every retry of the same send; the route never invents a replacement
+  key for a request that omitted it.
 
-The canonical persistence flow is:
+Text send intent is persisted before marketplace I/O. The canonical flow is:
 
 ```text
 authenticated send route
   -> stable client_operation_id
-    -> marketplace connector send
-      -> repository.add_message()
-        -> one identity reconciliation path
-          -> messages + unique identity indexes
+    -> message_send_operations (durable normalized payload + server author)
+      -> conditional SQLite claim and committed transaction
+        -> MessageSendService dispatcher
+          -> marketplace connector send (outside the transaction)
+            -> accepted/uncertain/permanent outcome
+              -> provider history echo
+                -> repository._add_message_conn()
+                  -> one canonical messages row + confirmed operation
 ```
 
-Marketplace send acknowledgements are audit data and are not assumed to be the
-same identifier later returned by message history. The acknowledgement id stays
-in `raw_json` as `_crm_send_ack_message_id`; the provider history id becomes the
-canonical `external_message_id` when synchronization reconciles the echo.
+`message_send_operations` stores the complete connector-normalized `payload_json`,
+its hash,
+the server-derived author, target snapshot, attempt/lease fields and only sanitized
+error metadata. Its state machine is `pending -> sending -> accepted -> confirmed`,
+with `retry_wait` only after a structured result proves that no external side effect
+occurred. Ambiguous timeout, transport and provider HTTP outcomes move to
+`uncertain`; stale `sending` leases also move to `uncertain` and are never
+automatically resent. `permanent_failed` is terminal.
+The normalized payload is exactly what is dispatched: for example, Wildberries text
+over its confirmed 1000-character limit is rejected before enqueue instead of being
+silently truncated after hashing.
+
+Claim uses `BEGIN IMMEDIATE` plus a conditional update, a unique token and a
+90-second UTC lease. The connector call has a 60-second hard timeout and starts
+only after the claim transaction commits. Completion requires the matching token;
+a late success may move that token's stale `uncertain` claim to `accepted`, while a
+late error cannot overwrite `uncertain` or `confirmed`. Multiple application
+processes may run the same bounded drain because SQLite, not an in-memory lock,
+owns the concurrency guarantee.
+
+The exact guarantee is:
+
+> Durable registration, не более одной одновременной marketplace-попытки для
+> одной operation и отсутствие автоматического повтора после неоднозначного
+> исхода. Новая автоматическая попытка разрешена только после структурированного
+> результата, доказывающего отсутствие внешнего side effect.
+
+This is not exactly-once and not at-most-one attempt over the complete operation
+lifetime. One operation may have sequential safe attempts, but only one claim can
+be active at a time. Without provider-native idempotency, a crash after provider
+acceptance and before local ACK is indistinguishable from a crash before acceptance;
+the operation remains `uncertain` until provider-history reconciliation or manual
+resolution outside this slice.
+
+Text messages and attachment captions share `command_kind='chat_text'` and the
+same dispatcher. `intent_origin` records `message` or `attachment_caption` locally
+but is not provider identity. The attachment endpoint rejects a nonempty caption;
+after a caption becomes `accepted` or `confirmed`, the browser uploads only files
+with a separate attachment operation id. File-bundle idempotency is not claimed.
 
 `repository._add_message_conn()` is the only message insert/update boundary. It
-resolves identity in this order: client operation id, exact provider id, explicit
-WB event identities, then one unambiguous opposite-origin outbound text/time
-counterpart. Ambiguous repeated identical replies are never merged by guesswork.
+resolves identity in this order: client operation id, an external id explicitly
+proven by the connector to be the history identity, explicit WB event identities,
+then a bounded FIFO payload-hash match. The fallback requires an echo timestamp
+between 120 seconds before and 900 seconds after the operation's `last_attempt_at`;
+old identical history cannot claim a new operation. Ambiguous repeated replies are
+kept as distinct FIFO operations and messages rather than merged by text alone.
 Database partial unique indexes enforce `(chat_id, external_message_id)` and
 `(chat_id, client_operation_id)` under concurrent sync/retry races.
 
@@ -199,6 +242,10 @@ The one-time `20260806_message_identity` migration backfills structured CRM
 provenance, resolves employee labels from stored user ids, merges only safe old
 duplicates, and records completion in `schema_migrations`. Repeated startup repair
 jobs and scattered post-hoc duplicate deletion paths are not used.
+The additive `20260814_message_send_command_outbox` migration runs only after that
+identity contract. It validates the complete column, CHECK, foreign-key, and index
+contract. A nonempty partial outbox schema fails closed because its canonical payload
+and server attribution cannot be reconstructed safely.
 
 ## Chat-list calendar-date filter
 

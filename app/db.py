@@ -9,6 +9,8 @@ from typing import Any, Iterator
 
 from dotenv import load_dotenv
 
+from app.message_outbox_migration import apply_message_send_operation_migration
+
 load_dotenv()
 
 DATABASE_PATH = os.getenv("DATABASE_PATH", "./crm.sqlite3")
@@ -678,6 +680,7 @@ def init_db() -> None:
             conn.execute("ALTER TABLE messages ADD COLUMN client_operation_id TEXT")
 
         _apply_message_identity_migration(conn)
+        apply_message_send_operation_migration(conn)
 
         chat_user_state_columns = _columns("chat_user_states")
         if "is_pinned" not in chat_user_state_columns:

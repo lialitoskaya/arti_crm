@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import unittest
+from datetime import datetime, timezone
 from unittest import mock
 
 import httpx
@@ -10,6 +11,8 @@ import httpx
 import test_regression_foundation as foundation  # noqa: E402
 from app import db  # noqa: E402
 from app import repository as repo  # noqa: E402
+from app.connectors.base import UnifiedMessage  # noqa: E402
+from app.message_send_models import MarketplaceSendOutcome  # noqa: E402
 from app.schemas import ChatCreate  # noqa: E402
 
 
@@ -137,7 +140,7 @@ class CrmMessageIdentityTests(unittest.TestCase):
             "outbound",
             "Один запрос",
             author="Лия",
-            created_at="2026-08-06T08:20:00+00:00",
+            created_at=datetime.now(timezone.utc).isoformat(),
             is_crm_sent=True,
             crm_author_user_id=int(self.user["id"]),
             crm_author_label="Лия",
@@ -173,24 +176,42 @@ class CrmMessageIdentityTests(unittest.TestCase):
             finally:
                 await client.aclose()
 
+        echo = UnifiedMessage(
+            external_message_id="history-message-api",
+            external_chat_id="message-identity-chat",
+            direction="outbound",
+            text="API idempotency",
+            author="seller",
+            created_at=datetime.now(timezone.utc).isoformat(),
+            raw={"message_id": "history-message-api"},
+        )
         with mock.patch.object(
             main.connectors["mock"],
             "send_message",
-            new=mock.AsyncMock(return_value={"message_id": "send-ack-api"}),
-        ) as send_message:
+            new=mock.AsyncMock(
+                return_value=MarketplaceSendOutcome(
+                    response={"message_id": "send-ack-api"},
+                    provider_external_message_id=None,
+                )
+            ),
+        ) as send_message, mock.patch.object(
+            main.connectors["mock"],
+            "get_messages",
+            new=mock.AsyncMock(return_value=[echo]),
+        ):
             first, second = asyncio.run(exercise())
 
         self.assertEqual(200, first.status_code)
         self.assertEqual(200, second.status_code)
-        self.assertEqual(first.json()["message_id"], second.json()["message_id"])
-        self.assertTrue(second.json()["deduplicated"])
+        self.assertEqual(first.json()["operation"]["id"], second.json()["operation"]["id"])
+        self.assertEqual("confirmed", first.json()["operation"]["status"])
+        self.assertTrue(second.json()["operation"]["deduplicated"])
         send_message.assert_awaited_once()
         rows = self._rows()
         self.assertEqual(1, len(rows))
         self.assertEqual("Лия", rows[0]["crm_author_label"])
         self.assertEqual("operation-api-idempotent", rows[0]["client_operation_id"])
-        raw = json.loads(str(rows[0]["raw_json"]))
-        self.assertEqual("send-ack-api", raw["_crm_send_ack_message_id"])
+        self.assertEqual("history-message-api", rows[0]["external_message_id"])
 
     def test_migration_repairs_existing_crm_provider_pair_once(self) -> None:
         with db.get_connection() as conn:

@@ -1466,77 +1466,121 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function isMarketplaceRateLimitError(err) {
-  const message = String(err?.detail || err?.message || err || '');
-  const status = Number(err?.status || 0);
-  return status === 420
-    || status === 429
-    || /(too many requests|rate limit|hit rate limit|parallel requests|method_failure|businessId|METHOD_FAILURE)/i.test(message);
-}
-
-function friendlySendError(err) {
-  const message = String(err?.detail || err?.message || err || '');
-  if (isMarketplaceRateLimitError(err)) {
-    return 'Яндекс временно ограничил параллельные запросы. CRM уже сделала несколько повторных попыток, но лимит ещё не освободился. Подождите 10–20 секунд и отправьте снова.';
-  }
-  return message;
-}
-
-class SerialQueue {
-  constructor() {
-    this.tail = Promise.resolve();
-  }
-
-  enqueue(task) {
-    const run = this.tail.catch(() => {}).then(task);
-    this.tail = run.catch(() => {});
-    return run;
-  }
-}
-
-const outboundMessageQueue = new SerialQueue();
-
 function createClientOperationId() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
   return `crm-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-async function sendCurrentChatMessageRequest(chatId, { text, imageFiles, operationId }) {
-  if (imageFiles?.length) {
-    const formData = new FormData();
-    imageFiles.forEach((file) => formData.append('images', file));
-    formData.append('caption', text || '');
-    formData.append('operation_id', operationId);
-    return apiForm(`/api/chats/${chatId}/attachments`, formData);
-  }
+const MESSAGE_OPERATION_STATUS_LABELS = Object.freeze({
+  pending: 'В очереди',
+  sending: 'Отправляется',
+  retry_wait: 'Ожидает повторной попытки',
+  accepted: 'Принято, ожидается подтверждение',
+  confirmed: 'Подтверждено',
+  uncertain: 'Результат отправки неизвестен',
+  permanent_failed: 'Отправка отклонена',
+});
 
-  return api(`/api/chats/${chatId}/messages`, {
-    method: 'POST',
-    body: JSON.stringify({ text, author: 'manager', operation_id: operationId }),
-  });
+function messageOperationStatusLabel(status) {
+  return MESSAGE_OPERATION_STATUS_LABELS[String(status || '')] || 'Статус отправки неизвестен';
 }
 
-async function sendCurrentChatMessageWithRetry(chatId, payload) {
-  const retryDelays = [1200, 2200, 4000, 6500];
+async function getMessageSendOperation(chatId, operationId) {
+  const encodedId = encodeURIComponent(String(operationId));
+  const result = await api(`/api/chats/${chatId}/message-send-operations/${encodedId}`, { timeoutMs: 15000 });
+  return result?.operation || null;
+}
 
-  return outboundMessageQueue.enqueue(async () => {
-    for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
-      try {
-        return await sendCurrentChatMessageRequest(chatId, payload);
-      } catch (err) {
-        const canRetry = isMarketplaceRateLimitError(err) && attempt < retryDelays.length;
-        if (!canRetry) throw err;
+async function waitForMessageSendOperation(chatId, operationId) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const operation = await getMessageSendOperation(chatId, operationId);
+    if (!operation) throw new Error('Операция отправки не найдена');
+    setStatus(messageOperationStatusLabel(operation.status));
+    if (['accepted', 'confirmed', 'uncertain', 'permanent_failed'].includes(operation.status)) {
+      return operation;
+    }
+    await sleep(750);
+  }
+  throw new Error('Операция сохранена, но подтверждение ещё не получено');
+}
 
-        const waitMs = retryDelays[attempt];
-        const seconds = Math.ceil(waitMs / 1000);
-        setStatus(`Яндекс ограничил параллельные запросы — повтор через ${seconds}с`);
-        suppressFrontendSyncUntil = Date.now() + waitMs + 3500;
-        await sleep(waitMs);
+async function sendChatTextOperation(chatId, { text, operationId, intentOrigin = 'message' }) {
+  let result;
+  try {
+    result = await api(`/api/chats/${chatId}/messages`, {
+      method: 'POST',
+      timeoutMs: 65000,
+      body: JSON.stringify({
+        text,
+        operation_id: operationId,
+        intent_origin: intentOrigin,
+      }),
+    });
+  } catch (err) {
+    if (Number(err?.status || 0) !== 0) throw err;
+    return waitForMessageSendOperation(chatId, operationId);
+  }
+
+  let operation = result?.operation;
+  if (!operation) throw new Error('CRM не вернула durable operation');
+  if (['pending', 'sending', 'retry_wait'].includes(operation.status)) {
+    operation = await waitForMessageSendOperation(chatId, operationId);
+  }
+  return operation;
+}
+
+async function uploadCurrentChatImages(chatId, imageFiles, operationId) {
+  const formData = new FormData();
+  imageFiles.forEach((file) => formData.append('images', file));
+  formData.append('operation_id', operationId);
+  return apiForm(`/api/chats/${chatId}/attachments`, formData);
+}
+
+function assertMessageOperationAllowsAttachmentUpload(operation) {
+  const status = String(operation?.status || '');
+  if (status === 'accepted' || status === 'confirmed') return;
+  const summary = operation?.error?.summary;
+  throw new Error(summary || messageOperationStatusLabel(status));
+}
+
+async function dispatchComposerCommands(
+  chatId,
+  {
+    text,
+    imageFiles,
+    messageOperationId,
+    attachmentOperationId,
+    areFilesAvailable,
+    onCaptionAcceptedForFiles,
+  },
+) {
+  const files = Array.isArray(imageFiles) ? imageFiles : [];
+  let messageOperation = null;
+
+  if (text) {
+    messageOperation = await sendChatTextOperation(chatId, {
+      text,
+      operationId: messageOperationId,
+      intentOrigin: imageFiles.length ? 'attachment_caption' : 'message',
+    });
+    if (files.length) {
+      assertMessageOperationAllowsAttachmentUpload(messageOperation);
+      if (typeof onCaptionAcceptedForFiles === 'function') {
+        onCaptionAcceptedForFiles(messageOperation);
       }
     }
+  }
 
-    return null;
-  });
+  if (files.length) {
+    const filesStillAvailable = typeof areFilesAvailable !== 'function'
+      || Boolean(areFilesAvailable(files));
+    if (!filesStillAvailable) {
+      return { messageOperation, filesUnavailable: true };
+    }
+    await uploadCurrentChatImages(chatId, files, attachmentOperationId);
+  }
+
+  return { messageOperation, filesUnavailable: false };
 }
 
 
@@ -3569,8 +3613,52 @@ function chatMessagesRequestUrl(chatId, messagesLimit) {
 
 function chatMessagesSignature(messages) {
   return (messages || [])
-    .map((message) => `${message.id || ''}:${message.direction || ''}:${message.created_at || ''}:${message.updated_at || ''}:${String(message.text || '').length}`)
+    .map((message) => `${message.id || ''}:${message.direction || ''}:${message.created_at || ''}:${message.updated_at || ''}:${message._send_operation_status || ''}:${String(message.text || '').length}`)
     .join('|');
+}
+
+function mergeMessagesWithSendOperations(messages, operations) {
+  const canonicalMessages = Array.isArray(messages) ? messages.slice() : [];
+  const canonicalOperationIds = new Set(
+    canonicalMessages
+      .map((message) => String(message?.client_operation_id || '').trim())
+      .filter(Boolean),
+  );
+  const transient = (Array.isArray(operations) ? operations : [])
+    .filter((operation) => {
+      if (operation?.canonical_message_id) return false;
+      if (String(operation?.status || '') === 'confirmed') return false;
+      return !canonicalOperationIds.has(String(operation?.client_operation_id || '').trim());
+    })
+    .map((operation) => ({
+      id: `send-operation:${operation.id}`,
+      direction: 'outbound',
+      text: String(operation.text || ''),
+      author: String(operation.author_label || 'manager'),
+      created_at: operation.requested_at,
+      is_crm_sent: true,
+      crm_author_label: String(operation.author_label || ''),
+      client_operation_id: String(operation.client_operation_id || ''),
+      raw: {},
+      _send_operation_status: String(operation.status || ''),
+      _send_operation_error: operation.error || null,
+    }));
+  return [...canonicalMessages, ...transient].sort((left, right) => {
+    const timeDelta = messageTimestampMs(left) - messageTimestampMs(right);
+    if (timeDelta) return timeDelta;
+    return String(left.id || '').localeCompare(String(right.id || ''));
+  });
+}
+
+async function loadChatWithMessageSendOperations(chatId, messagesLimit, options = {}) {
+  const [chat, operationResult] = await Promise.all([
+    api(chatMessagesRequestUrl(chatId, messagesLimit), options),
+    api(`/api/chats/${Number(chatId)}/message-send-operations`, options),
+  ]);
+  return {
+    ...chat,
+    messages: mergeMessagesWithSendOperations(chat?.messages || [], operationResult?.operations || []),
+  };
 }
 
 function shouldKeepMessagesAtBottom(box) {
@@ -3602,7 +3690,7 @@ async function refreshCurrentChatMessagesOnly(options = {}) {
   try {
     const readStateRequestContext = chatReadStateController.captureRequestContext();
     const pinStateRequestContext = chatPinStateController.captureRequestContext();
-    const serverChat = await api(chatMessagesRequestUrl(chatId, messagesLimit), { timeoutMs: 15000 });
+    const serverChat = await loadChatWithMessageSendOperations(chatId, messagesLimit, { timeoutMs: 15000 });
     if (Number(serverChat?.id || 0) !== chatId) return null;
     const chat = chatPinStateController.reconcile(
       chatReadStateController.reconcile(serverChat, readStateRequestContext),
@@ -3757,7 +3845,7 @@ async function openChat(chatId, options = {}) {
   const pinStateRequestContext = chatPinStateController.captureRequestContext();
   chatOpenInFlight = true;
   try {
-    const serverChat = await api(chatMessagesRequestUrl(chatId, messagesLimit));
+    const serverChat = await loadChatWithMessageSendOperations(chatId, messagesLimit);
     if (Number(serverChat?.id || 0) !== Number(chatId)) {
       throw new Error('Read-state response chat ID mismatch');
     }
@@ -4088,13 +4176,22 @@ function renderMessages(messages) {
       timeEl.textContent = formatMessageTime(message.created_at || message.updated_at || '');
       footer.appendChild(timeEl);
 
-      const receipt = messageReceiptInfo(message, receiptContext);
-      if (receipt && message.direction === 'outbound') {
+      const operationStatus = String(message._send_operation_status || '');
+      if (operationStatus && message.direction === 'outbound') {
         const receiptEl = document.createElement('div');
-        receiptEl.className = `message-receipt ${receipt.read ? 'is-read' : 'is-sent'}`;
-        receiptEl.title = receipt.title || receipt.label;
-        receiptEl.innerHTML = `<span class="receipt-checks">${escapeHtml(receipt.icon)}</span><span class="receipt-label">${escapeHtml(receipt.label)}</span>`;
+        receiptEl.className = `message-receipt message-send-operation-status status-${operationStatus}`;
+        receiptEl.textContent = messageOperationStatusLabel(operationStatus);
+        receiptEl.title = String(message._send_operation_error?.summary || receiptEl.textContent);
         footer.appendChild(receiptEl);
+      } else {
+        const receipt = messageReceiptInfo(message, receiptContext);
+        if (receipt && message.direction === 'outbound') {
+          const receiptEl = document.createElement('div');
+          receiptEl.className = `message-receipt ${receipt.read ? 'is-read' : 'is-sent'}`;
+          receiptEl.title = receipt.title || receipt.label;
+          receiptEl.innerHTML = `<span class="receipt-checks">${escapeHtml(receipt.icon)}</span><span class="receipt-label">${escapeHtml(receipt.label)}</span>`;
+          footer.appendChild(receiptEl);
+        }
       }
 
       item.appendChild(footer);
@@ -8471,24 +8568,57 @@ function init() {
 
       outboundSendInFlight = true;
       suppressFrontendSyncUntil = Date.now() + 20000;
-      setStatus('Отправляем сообщение…');
+      setStatus('В очереди');
 
+      let captionAcceptedForFiles = false;
       try {
         const chatIdForSend = Number(currentChatId);
-        const operationId = createClientOperationId();
-        await sendCurrentChatMessageWithRetry(chatIdForSend, { text, imageFiles, operationId });
+        const messageOperationId = text ? createClientOperationId() : null;
+        const attachmentOperationId = imageFiles.length ? createClientOperationId() : null;
+        const { messageOperation, filesUnavailable } = await dispatchComposerCommands(
+          chatIdForSend,
+          {
+            text,
+            imageFiles,
+            messageOperationId,
+            attachmentOperationId,
+            areFilesAvailable: (files) => files.every((file) => (
+              typeof File !== 'undefined' && file instanceof File
+            )),
+            onCaptionAcceptedForFiles: () => {
+              captionAcceptedForFiles = true;
+            },
+          },
+        );
+        if (filesUnavailable) {
+          $('messageText').value = '';
+          autosizeComposerTextarea($('messageText'));
+          notify(
+            'Вложения не загружены',
+            'Подпись отправлена; вложения не загружены. Выберите файлы повторно.',
+          );
+          return;
+        }
 
         $('messageText').value = '';
         clearComposerAttachments();
         autosizeComposerTextarea($('messageText'));
-        setStatus('Сообщение отправлено');
+        if (messageOperation) {
+          setStatus(messageOperationStatusLabel(messageOperation.status));
+        } else {
+          setStatus('Вложения отправлены');
+        }
 
         await loadChats();
         if (Number(currentChatId) === chatIdForSend) {
           await openChat(chatIdForSend);
         }
       } catch (err) {
-        notify('Сообщение не отправлено', friendlySendError(err));
+        const detail = String(err?.detail || err?.message || err || '');
+        notify(
+          captionAcceptedForFiles ? 'Вложения не загружены' : 'Операция отправки не завершена',
+          detail,
+        );
       } finally {
         outboundSendInFlight = false;
         suppressFrontendSyncUntil = Date.now() + 6000;

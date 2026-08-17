@@ -9,7 +9,14 @@ from typing import Any
 
 import httpx
 
-from app.connectors.base import MarketplaceConnector, UnifiedChat, UnifiedMessage
+from app.connectors.base import (
+    MarketplaceConnector,
+    MarketplaceSendError,
+    MarketplaceSendOutcome,
+    UnifiedChat,
+    UnifiedMessage,
+    sanitize_provider_payload,
+)
 
 
 class WildberriesConnector(MarketplaceConnector):
@@ -25,6 +32,12 @@ class WildberriesConnector(MarketplaceConnector):
 
     marketplace = "wildberries"
     base_url = "https://buyer-chat-api.wildberries.ru"
+
+    def normalize_text_command(self, text: str) -> str:
+        normalized = super().normalize_text_command(text)
+        if len(normalized) > 1000:
+            raise ValueError("Wildberries message text must not exceed 1000 characters")
+        return normalized
 
     def __init__(self) -> None:
         self.token = os.getenv("WB_BUYERS_CHAT_TOKEN") or os.getenv("WB_API_TOKEN", "")
@@ -605,7 +618,11 @@ class WildberriesConnector(MarketplaceConnector):
         text = self._extract_message_text(item)
         # Chat list lastMessage often has no messageID, so use deterministic ID to
         # avoid duplicates on every background sync.
-        raw = {**item, "_chat_item": chat_item, "_crm_source": "wb_lastMessage"}
+        raw = {
+            **sanitize_provider_payload(item),
+            "_chat_item": sanitize_provider_payload(chat_item),
+            "_crm_source": "wb_lastMessage",
+        }
         if has_client_marker:
             raw["_crm_wb_client_name_direction_marker"] = {
                 "scope": marker_scope,
@@ -647,7 +664,10 @@ class WildberriesConnector(MarketplaceConnector):
             or self._first_value(msg_obj, "clientName", "client_name", "buyerName", "buyer_name", "customerName", "customer_name")
             or "customer"
         )
-        raw = {**event, "_crm_wb_msg_obj": msg_obj}
+        raw = {
+            **sanitize_provider_payload(event),
+            "_crm_wb_msg_obj": sanitize_provider_payload(msg_obj),
+        }
         has_client_marker, client_marker_value, client_marker_key = self._direct_client_name_marker(msg_obj)
         if not has_client_marker:
             has_client_marker, client_marker_value, client_marker_key = self._direct_client_name_marker(event)
@@ -695,21 +715,63 @@ class WildberriesConnector(MarketplaceConnector):
         messages.sort(key=lambda m: m.created_at or "")
         return messages
 
-    async def send_message(self, external_chat_id: str, text: str) -> dict[str, Any]:
+    async def send_message(
+        self,
+        external_chat_id: str,
+        text: str,
+    ) -> MarketplaceSendOutcome:
         if not self.token:
-            raise RuntimeError("WB_BUYERS_CHAT_TOKEN/WB_API_TOKEN is not configured")
+            raise MarketplaceSendError(
+                category="configuration",
+                safe_summary="Wildberries connector is not configured",
+                side_effect_possible=False,
+            )
         reply_sign = self.reply_signs.get(str(external_chat_id))
         if not reply_sign:
-            raise RuntimeError("WB replySign is missing. Дождитесь фоновой синхронизации WB или обновите чаты, чтобы CRM получила актуальный replySign.")
-        async with httpx.AsyncClient(timeout=35) as client:
-            response = await client.post(
-                f"{self.base_url}/api/v1/seller/message",
-                headers={"Authorization": self.token, "Accept": "application/json"},
-                data={"replySign": reply_sign, "message": text[:1000]},
+            raise MarketplaceSendError(
+                category="invalid_target",
+                safe_summary="Wildberries reply token is unavailable; refresh the chat first",
+                side_effect_possible=False,
             )
         try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise RuntimeError(f"WB API error {response.status_code} at /api/v1/seller/message: {response.text[:1500]}") from exc
-        data = response.json()
-        return data if isinstance(data, dict) else {"ok": True}
+            async with httpx.AsyncClient(timeout=35) as client:
+                response = await client.post(
+                    f"{self.base_url}/api/v1/seller/message",
+                    headers={"Authorization": self.token, "Accept": "application/json"},
+                    data={"replySign": reply_sign, "message": text},
+                )
+        except httpx.TimeoutException as exc:
+            raise MarketplaceSendError(
+                category="ambiguous_timeout",
+                safe_summary="Wildberries send timed out; provider outcome is unknown",
+                side_effect_possible=True,
+            ) from exc
+        except httpx.RequestError as exc:
+            raise MarketplaceSendError(
+                category="ambiguous_transport",
+                safe_summary="Wildberries transport failed; provider outcome is unknown",
+                side_effect_possible=True,
+            ) from exc
+        correlation_id = response.headers.get("x-request-id") or response.headers.get("request-id")
+        if response.status_code >= 400:
+            raise MarketplaceSendError(
+                category="provider_http_error",
+                safe_summary="Wildberries did not confirm the send request",
+                side_effect_possible=True,
+                http_status=response.status_code,
+                correlation_id=correlation_id,
+            )
+        try:
+            data = response.json()
+        except Exception as exc:
+            raise MarketplaceSendError(
+                category="ambiguous_response",
+                safe_summary="Wildberries returned an unreadable send response",
+                side_effect_possible=True,
+                http_status=response.status_code,
+                correlation_id=correlation_id,
+            ) from exc
+        return MarketplaceSendOutcome(
+            response=data if isinstance(data, dict) else {"ok": True},
+            provider_external_message_id=None,
+        )

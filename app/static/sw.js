@@ -1,4 +1,4 @@
-const ARTI_CRM_SW_VERSION = 'v95-6-ozon-review-link-only-20260806';
+const ARTI_CRM_SW_VERSION = 'v95-7-durable-message-send-outbox-20260814';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
