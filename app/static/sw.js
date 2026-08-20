@@ -1,4 +1,4 @@
-const ARTI_CRM_SW_VERSION = 'v95-7-durable-message-send-outbox-20260814';
+const ARTI_CRM_SW_VERSION = 'v95-8-dark-form-focus-20260820';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();

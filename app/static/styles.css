@@ -1301,7 +1301,6 @@ textarea {
   color: #ededed;
   font-size: 12px;
   font-weight: 400;
-  box-shadow: none;
 }
 
 #chatsView .chat-list {
@@ -3565,7 +3564,6 @@ html[data-theme="dark"] #chatsView .filters button {
   background: #253448 !important;
   color: #edf3ff !important;
   border: 1px solid rgba(255,255,255,.06) !important;
-  box-shadow: none !important;
 }
 
 html[data-theme="dark"] #chatsView .filters select:hover,
@@ -3843,6 +3841,9 @@ html[data-theme="dark"] :is(
   background: #182234 !important;
   border-color: var(--crm-line) !important;
   color: var(--crm-text) !important;
+}
+
+html[data-theme="dark"] :is(.chat-search-box, .composer-input, .message-editor) {
   box-shadow: none !important;
 }
 
