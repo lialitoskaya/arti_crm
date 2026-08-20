@@ -1,4 +1,4 @@
-const ARTI_CRM_SW_VERSION = 'v95-8-dark-form-focus-20260820';
+const ARTI_CRM_SW_VERSION = 'v95-9-responsive-chat-header-20260820';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
