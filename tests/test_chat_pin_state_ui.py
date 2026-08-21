@@ -18,6 +18,85 @@ class ChatPinStateUiTests(unittest.TestCase):
         cls.styles = STYLES_PATH.read_text(encoding="utf-8")
         cls.controller = _extract_function(cls.source, "createChatPinStateController")
 
+    def test_search_open_state_releases_reserved_space_on_close_and_clear(self) -> None:
+        current_search = _extract_function(self.source, "currentChatMessageSearch")
+        update_search = _extract_function(self.source, "updateChatSearchUi")
+        set_search_open = _extract_function(self.source, "setChatSearchOpen")
+        clear_search = _extract_function(self.source, "clearChatMessageSearch")
+
+        _run_node(
+            f"""
+            {current_search}
+            {update_search}
+            {set_search_open}
+            {clear_search}
+
+            function classes(initial = []) {{
+              const values = new Set(initial);
+              return {{
+                contains(name) {{ return values.has(name); }},
+                toggle(name, force) {{
+                  const enabled = force === undefined ? !values.has(name) : Boolean(force);
+                  if (enabled) values.add(name); else values.delete(name);
+                  return enabled;
+                }},
+              }};
+            }}
+
+            const filters = {{ classList: classes() }};
+            const box = {{
+              classList: classes(['hidden']),
+              closest(selector) {{ return selector === '.filters' ? filters : null; }},
+            }};
+            const input = {{ value: '', focus() {{}}, select() {{}} }};
+            const toggle = {{
+              classList: classes(),
+              setAttribute(name, value) {{ this[name] = value; }},
+            }};
+            const clearButton = {{ classList: classes(['hidden']) }};
+            const elements = {{
+              chatSearchBox: box,
+              chatSearchInput: input,
+              chatSearchToggleBtn: toggle,
+              chatSearchClearBtn: clearButton,
+            }};
+            function $(id) {{ return elements[id] || null; }}
+
+            let chatMessageSearch = '';
+            let chatSearchTimer = null;
+            let dateCloseCount = 0;
+            let loadCount = 0;
+            function setDateRangePopover(open) {{
+              if (open) throw new Error('search opened the date popover');
+              dateCloseCount += 1;
+            }}
+            function resetChatListFeed() {{}}
+            function loadChats() {{ loadCount += 1; return Promise.resolve([]); }}
+            function notify() {{}}
+            function clearTimeout() {{}}
+            const window = {{ setTimeout(callback) {{ callback(); }} }};
+
+            setChatSearchOpen(true);
+            if (!filters.classList.contains('chat-search-open')) throw new Error('open state missing');
+            if (toggle['aria-expanded'] !== 'true') throw new Error('expanded state missing');
+            if (dateCloseCount !== 1) throw new Error('date popover was not closed once');
+
+            input.value = 'needle';
+            updateChatSearchUi();
+            setChatSearchOpen(false);
+            if (filters.classList.contains('chat-search-open')) throw new Error('close left reserved space');
+            if (toggle['aria-expanded'] !== 'false') throw new Error('collapsed state missing');
+            if (!toggle.classList.contains('active')) throw new Error('active query state was lost');
+
+            setChatSearchOpen(true);
+            clearChatMessageSearch();
+            if (filters.classList.contains('chat-search-open')) throw new Error('clear left reserved space');
+            if (!box.classList.contains('hidden')) throw new Error('clear left search visible');
+            if (input.value !== '') throw new Error('clear left query text');
+            if (loadCount !== 1) throw new Error('clear did not refresh the list once');
+            """
+        )
+
     def test_pin_controller_is_single_flight_and_protects_against_stale_get(self) -> None:
         _run_node(
             f"""

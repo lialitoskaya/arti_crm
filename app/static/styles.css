@@ -2917,6 +2917,10 @@ textarea {
   position: relative;
 }
 
+#chatsView .filters.chat-search-open {
+  margin-bottom: 51px;
+}
+
 .chat-filter-actions {
   display: flex;
   align-items: center;
@@ -2926,7 +2930,7 @@ textarea {
 }
 
 .chat-search-wrap {
-  position: relative;
+  position: static;
   min-width: 36px;
 }
 
@@ -2961,9 +2965,10 @@ textarea {
 .chat-search-box {
   position: absolute;
   top: calc(100% + 7px);
+  left: 0;
   right: 0;
   z-index: 60;
-  width: min(322px, calc(100vw - 48px));
+  width: auto;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 30px;
   align-items: center;
@@ -3018,9 +3023,6 @@ textarea {
     flex-direction: column;
   }
 
-  .chat-search-box {
-    width: min(290px, calc(100vw - 44px));
-  }
 }
 
 

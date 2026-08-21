@@ -2846,6 +2846,7 @@ function updateChatSearchUi() {
   toggle?.classList.toggle('active', Boolean(query));
   toggle?.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
   clearBtn?.classList.toggle('hidden', !query);
+  box?.closest('.filters')?.classList.toggle('chat-search-open', isOpen);
 }
 
 function setChatSearchOpen(open = true) {
@@ -2853,6 +2854,13 @@ function setChatSearchOpen(open = true) {
   const input = $('chatSearchInput');
   if (!box) return;
 
+  if (open) {
+    setDateRangePopover(false, {
+      popoverId: 'chatDateFilterPopover',
+      buttonId: 'chatDateFilterBtn',
+      focusInputId: 'chatDateFilterFromInput',
+    });
+  }
   box.classList.toggle('hidden', !open);
   updateChatSearchUi();
 
@@ -2903,9 +2911,8 @@ function clearChatMessageSearch() {
   const input = $('chatSearchInput');
   if (input) input.value = '';
   resetChatListFeed();
-  updateChatSearchUi();
+  setChatSearchOpen(false);
   loadChats({ withStats: false }).catch(err => notify('Поиск по сообщениям', String(err.message || err)));
-  input?.focus();
 }
 
 function chatListIsNearEnd(list) {
@@ -7178,6 +7185,7 @@ function showView(view, options = {}) {
   if (normalizedView !== 'chats') {
     mobileChatClosedByUser = false;
     setMobileChatOpen(false);
+    setChatSearchOpen(false);
   }
   if (normalizedView !== 'knowledge') {
     closeKnowledgeModal();
@@ -8149,8 +8157,10 @@ function init() {
     event.preventDefault();
     event.stopPropagation();
     const popover = $('chatDateFilterPopover');
+    const willOpen = Boolean(popover?.classList.contains('hidden'));
     syncChatDateFilterUi();
-    setDateRangePopover(Boolean(popover?.classList.contains('hidden')), {
+    if (willOpen) setChatSearchOpen(false);
+    setDateRangePopover(willOpen, {
       popoverId: 'chatDateFilterPopover',
       buttonId: 'chatDateFilterBtn',
       focusInputId: 'chatDateFilterFromInput',
@@ -8203,11 +8213,7 @@ function init() {
     event.preventDefault();
     const box = $('chatSearchBox');
     const isOpen = Boolean(box && !box.classList.contains('hidden'));
-    if (isOpen && !currentChatMessageSearch()) {
-      setChatSearchOpen(false);
-    } else {
-      setChatSearchOpen(true);
-    }
+    setChatSearchOpen(!isOpen);
   });
   bind('chatSearchClearBtn', 'click', (event) => {
     event.preventDefault();

@@ -1,4 +1,4 @@
-const ARTI_CRM_SW_VERSION = 'v95-9-responsive-chat-header-20260820';
+const ARTI_CRM_SW_VERSION = 'v95-10-chat-search-pin-access-20260820';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
