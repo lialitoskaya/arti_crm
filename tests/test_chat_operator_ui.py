@@ -11,8 +11,35 @@ APP_JS_PATH = ROOT / "app" / "static" / "app.js"
 
 def _extract_function(source: str, name: str) -> str:
     marker = f"function {name}("
-    start = source.index(marker)
-    opening_brace = source.index("{", start)
+    function_start = source.index(marker)
+    start = function_start
+    if source[max(0, function_start - len("async ")) : function_start] == "async ":
+        start -= len("async ")
+    signature_depth = 0
+    signature_quote = ""
+    signature_escaped = False
+    signature_index = function_start + len(marker) - 1
+    while signature_index < len(source):
+        char = source[signature_index]
+        if signature_quote:
+            if signature_escaped:
+                signature_escaped = False
+            elif char == "\\":
+                signature_escaped = True
+            elif char == signature_quote:
+                signature_quote = ""
+        elif char in {"'", '"', "`"}:
+            signature_quote = char
+        elif char == "(":
+            signature_depth += 1
+        elif char == ")":
+            signature_depth -= 1
+            if signature_depth == 0:
+                break
+        signature_index += 1
+    else:
+        raise AssertionError(f"unterminated JavaScript signature: {name}")
+    opening_brace = source.index("{", signature_index + 1)
     depth = 0
     quote = ""
     escaped = False
@@ -145,6 +172,169 @@ class ChatOperatorUiTests(unittest.TestCase):
             const oldValue = formatMessageTime(old.toISOString());
             if (todayValue !== '12:34') throw new Error('today format: ' + todayValue);
             if (oldValue !== '02.01.2020, 03:04') throw new Error('old format: ' + oldValue);
+            """
+        )
+
+    def test_extra_panel_geometry_is_coalesced_guarded_and_recomputed(self) -> None:
+        cancel = _extract_function(self.source, "cancelExtraPanelGeometrySync")
+        sync = _extract_function(self.source, "syncExtraPanelGeometry")
+        schedule = _extract_function(self.source, "scheduleExtraPanelGeometrySync")
+        bind_geometry = _extract_function(self.source, "bindExtraPanelGeometry")
+        close_panel = _extract_function(self.source, "closeActiveExtraPanel")
+        show_panel = _extract_function(self.source, "showExtraPanel")
+
+        _run_node(
+            f"""
+            const EXTRA_PANEL_GAP_PX = 8;
+            let activeExtraPanel = '';
+            let extraPanelGeometryFrame = 0;
+            let extraPanelResizeObserver = null;
+            let nextFrameId = 1;
+            const frames = new Map();
+            const windowListeners = {{}};
+            const viewportListeners = {{}};
+            let resizeObserverInstances = 0;
+            let resizeObserverInstance = null;
+            let observedNodes = [];
+            let headerBottom = 80;
+            let headerReads = 0;
+            let containingReads = 0;
+            let composerReads = 0;
+
+            function classList(initial = []) {{
+              const values = new Set(initial);
+              return {{
+                add(...names) {{ names.forEach((name) => values.add(name)); }},
+                remove(...names) {{ names.forEach((name) => values.delete(name)); }},
+                contains(name) {{ return values.has(name); }},
+                toggle(name, force) {{
+                  if (force === undefined) force = !values.has(name);
+                  if (force) values.add(name); else values.delete(name);
+                  return force;
+                }},
+              }};
+            }}
+
+            const header = {{
+              getBoundingClientRect() {{ headerReads += 1; return {{ bottom: headerBottom }}; }},
+            }};
+            const conversation = {{}};
+            const chatPanel = {{
+              dataset: {{}},
+              querySelector(selector) {{ return selector === '.chat-header' ? header : null; }},
+              closest(selector) {{ return selector === '.conversation' ? conversation : null; }},
+              getBoundingClientRect() {{ containingReads += 1; return {{ top: 0, bottom: 600 }}; }},
+            }};
+            const composer = {{
+              getBoundingClientRect() {{ composerReads += 1; return {{ top: 550 }}; }},
+            }};
+            const styleValues = new Map();
+            const panel = {{
+              classList: classList(['hidden']),
+              offsetParent: chatPanel,
+              style: {{
+                getPropertyValue(name) {{ return styleValues.get(name) || ''; }},
+                setProperty(name, value) {{ styleValues.set(name, value); }},
+              }},
+            }};
+            const sections = {{
+              tasksSection: {{ classList: classList(['hidden']) }},
+              noteSection: {{ classList: classList(['hidden']) }},
+              customerSection: {{ classList: classList(['hidden']) }},
+            }};
+            const elements = {{ chatPanel, extraPanel: panel, messageForm: composer, ...sections }};
+            function $(id) {{ return elements[id] || null; }}
+            function pauseMobileChatBackgroundWork() {{}}
+            function toggleExtraMenu() {{}}
+            const window = {{
+              innerHeight: 700,
+              visualViewport: {{
+                offsetTop: 0,
+                height: 700,
+                addEventListener(name, handler) {{
+                  (viewportListeners[name] ||= []).push(handler);
+                }},
+              }},
+              requestAnimationFrame(callback) {{
+                const id = nextFrameId++;
+                frames.set(id, callback);
+                return id;
+              }},
+              cancelAnimationFrame(id) {{ frames.delete(id); }},
+              addEventListener(name, handler) {{
+                (windowListeners[name] ||= []).push(handler);
+              }},
+            }};
+            class ResizeObserver {{
+              constructor(callback) {{
+                this.callback = callback;
+                resizeObserverInstance = this;
+                resizeObserverInstances += 1;
+              }}
+              observe(node) {{ observedNodes.push(node); }}
+            }}
+            function flushFrame() {{
+              const pending = [...frames.values()];
+              frames.clear();
+              pending.forEach((callback) => callback());
+            }}
+
+            {cancel}
+            {sync}
+            {schedule}
+            {bind_geometry}
+            {close_panel}
+            {show_panel}
+
+            bindExtraPanelGeometry();
+            bindExtraPanelGeometry();
+            if (resizeObserverInstances !== 1) throw new Error('duplicate ResizeObserver');
+            if (observedNodes.length !== 4 || !observedNodes.includes(header)
+                || !observedNodes.includes(chatPanel) || !observedNodes.includes(conversation)
+                || !observedNodes.includes(composer)) throw new Error('wrong observed geometry nodes');
+            if ((windowListeners.resize || []).length !== 1) throw new Error('duplicate window resize');
+            if ((viewportListeners.resize || []).length !== 1
+                || (viewportListeners.scroll || []).length !== 1) throw new Error('duplicate visual viewport listeners');
+
+            showExtraPanel('tasks');
+            showExtraPanel('note');
+            scheduleExtraPanelGeometrySync();
+            if (frames.size !== 1) throw new Error('geometry work was not coalesced');
+            flushFrame();
+            if (headerReads !== 1 || containingReads !== 1 || composerReads !== 1) {{
+              throw new Error('geometry was read more than once per frame');
+            }}
+            if (styleValues.get('--extra-panel-top') !== '88px') throw new Error('wrong top');
+            if (styleValues.get('--extra-panel-max-height') !== '454px') throw new Error('wrong max height');
+            if (!sections.tasksSection.classList.contains('hidden')
+                || sections.noteSection.classList.contains('hidden')) throw new Error('note panel path diverged');
+
+            showExtraPanel('customer');
+            flushFrame();
+            if (sections.customerSection.classList.contains('hidden')) throw new Error('customer panel path diverged');
+            showExtraPanel('customer');
+            if (!panel.classList.contains('hidden') || frames.size !== 0) throw new Error('toggle close left geometry work');
+
+            headerBottom = 120;
+            showExtraPanel('tasks');
+            flushFrame();
+            if (styleValues.get('--extra-panel-top') !== '128px') throw new Error('reopen did not remeasure');
+
+            headerBottom = 140;
+            resizeObserverInstance.callback();
+            resizeObserverInstance.callback();
+            if (frames.size !== 1) throw new Error('ResizeObserver callbacks were not coalesced');
+            flushFrame();
+            if (styleValues.get('--extra-panel-top') !== '148px') throw new Error('ResizeObserver did not remeasure');
+
+            scheduleExtraPanelGeometrySync();
+            const staleFrame = [...frames.values()][0];
+            const readsBeforeClose = headerReads + containingReads + composerReads;
+            closeActiveExtraPanel();
+            staleFrame();
+            if (headerReads + containingReads + composerReads !== readsBeforeClose) {{
+              throw new Error('closed panel performed stale layout reads');
+            }}
             """
         )
 

@@ -195,6 +195,9 @@ const ROUTE_VIEWS = {
   profile: 'profile',
 };
 let activeExtraPanel = '';
+const EXTRA_PANEL_GAP_PX = 8;
+let extraPanelGeometryFrame = 0;
+let extraPanelResizeObserver = null;
 let extraMenuPointerHandledAt = 0;
 let extraActionPointerHandledAt = 0;
 let chatScope = 'active';
@@ -5813,8 +5816,83 @@ document.addEventListener('click', event => {
 });
 
 
+function cancelExtraPanelGeometrySync() {
+  if (!extraPanelGeometryFrame) return;
+  window.cancelAnimationFrame(extraPanelGeometryFrame);
+  extraPanelGeometryFrame = 0;
+}
+
+function syncExtraPanelGeometry() {
+  extraPanelGeometryFrame = 0;
+  const panel = $('extraPanel');
+  if (!activeExtraPanel || !panel || panel.classList.contains('hidden')) return;
+
+  const chatPanel = $('chatPanel');
+  const header = chatPanel?.querySelector('.chat-header');
+  const containingBlock = panel.offsetParent || chatPanel;
+  if (!header || !containingBlock) return;
+
+  const composer = $('messageForm');
+  const headerRect = header.getBoundingClientRect();
+  const containingRect = containingBlock.getBoundingClientRect();
+  const composerRect = composer?.getBoundingClientRect() || null;
+  const viewport = window.visualViewport;
+  const viewportBottom = viewport
+    ? viewport.offsetTop + viewport.height
+    : window.innerHeight;
+
+  const panelTop = Math.ceil(headerRect.bottom - containingRect.top + EXTRA_PANEL_GAP_PX);
+  const availableBottom = Math.min(
+    containingRect.bottom,
+    composerRect?.top ?? containingRect.bottom,
+    viewportBottom,
+  );
+  const panelMaxHeight = Math.max(
+    0,
+    Math.floor(availableBottom - (containingRect.top + panelTop) - EXTRA_PANEL_GAP_PX),
+  );
+  const topValue = `${panelTop}px`;
+  const maxHeightValue = `${panelMaxHeight}px`;
+
+  if (panel.style.getPropertyValue('--extra-panel-top') !== topValue) {
+    panel.style.setProperty('--extra-panel-top', topValue);
+  }
+  if (panel.style.getPropertyValue('--extra-panel-max-height') !== maxHeightValue) {
+    panel.style.setProperty('--extra-panel-max-height', maxHeightValue);
+  }
+}
+
+function scheduleExtraPanelGeometrySync() {
+  const panel = $('extraPanel');
+  if (!activeExtraPanel || !panel || panel.classList.contains('hidden')) {
+    cancelExtraPanelGeometrySync();
+    return;
+  }
+  if (extraPanelGeometryFrame) return;
+  extraPanelGeometryFrame = window.requestAnimationFrame(syncExtraPanelGeometry);
+}
+
+function bindExtraPanelGeometry() {
+  const chatPanel = $('chatPanel');
+  if (!chatPanel || chatPanel.dataset.extraPanelGeometryBound === '1') return;
+  chatPanel.dataset.extraPanelGeometryBound = '1';
+
+  const header = chatPanel.querySelector('.chat-header');
+  const conversation = chatPanel.closest('.conversation');
+  const composer = $('messageForm');
+  extraPanelResizeObserver = new ResizeObserver(scheduleExtraPanelGeometrySync);
+  [header, chatPanel, conversation, composer].forEach((element) => {
+    if (element) extraPanelResizeObserver.observe(element);
+  });
+
+  window.addEventListener('resize', scheduleExtraPanelGeometrySync);
+  window.visualViewport?.addEventListener('resize', scheduleExtraPanelGeometrySync);
+  window.visualViewport?.addEventListener('scroll', scheduleExtraPanelGeometrySync);
+}
+
 function closeActiveExtraPanel() {
   activeExtraPanel = '';
+  cancelExtraPanelGeometrySync();
   const panel = $('extraPanel');
   if (panel) {
     panel.classList.add('hidden');
@@ -5876,6 +5954,8 @@ function showExtraPanel(panelName) {
   $('tasksSection')?.classList.toggle('hidden', activeExtraPanel !== 'tasks');
   $('noteSection')?.classList.toggle('hidden', activeExtraPanel !== 'note');
   $('customerSection')?.classList.toggle('hidden', activeExtraPanel !== 'customer');
+  if (activeExtraPanel) scheduleExtraPanelGeometrySync();
+  else cancelExtraPanelGeometrySync();
   toggleExtraMenu(false);
 }
 
@@ -8141,6 +8221,7 @@ function init() {
   if (appInitialized) return;
   appInitialized = true;
   updateCrmThemeUi();
+  bindExtraPanelGeometry();
   bind('themeToggleBtn', 'click', toggleCrmTheme);
   activeView = getInitialRouteView();
   const initialRouteChatId = getChatIdFromLocationHash();

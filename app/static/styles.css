@@ -617,11 +617,11 @@ label { display: grid; gap: 6px; color: var(--crm-text-soft); font-size: 13px; }
 .extra-menu button:hover { background: var(--crm-hover); transform: none; }
 .extra-panel {
   position: absolute;
-  top: 68px;
+  top: var(--extra-panel-top, 68px);
   right: 14px;
   z-index: 35;
   width: min(324px, calc(100% - 28px));
-  max-height: min(620px, calc(100% - 92px));
+  max-height: min(620px, var(--extra-panel-max-height, calc(100% - 92px)));
   overflow: auto;
   padding: 12px;
   border-radius: var(--crm-radius-lg);
@@ -1295,7 +1295,7 @@ html[data-theme="dark"] button.reply-template-delete-action:focus-visible {
   .chat-item,
   .review-item { padding: 10px; }
   .message { max-width: 94%; }
-  .extra-panel { right: 8px; top: 74px; width: calc(100% - 16px); }
+  .extra-panel { right: 8px; width: calc(100% - 16px); }
   .composer-main-row { grid-template-columns: 32px minmax(0, 1fr) 32px  38px; gap: 6px; }
   .composer-attach-btn,
   .composer-template-btn { width: 32px; height: 34px; }
