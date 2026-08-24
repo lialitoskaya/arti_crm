@@ -1,4 +1,4 @@
-const ARTI_CRM_SW_VERSION = 'v95-12-adaptive-chat-extra-panel-20260824';
+const ARTI_CRM_SW_VERSION = 'v95-13-message-meta-inside-bubble-20260824';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();

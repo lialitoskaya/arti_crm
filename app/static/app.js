@@ -4166,25 +4166,17 @@ function renderMessages(messages) {
       bubble.appendChild(gallery);
     }
 
-    item.appendChild(bubble);
-
     if (message.direction !== 'internal') {
-      const footer = document.createElement('div');
-      footer.className = 'message-footer';
+      const bubbleMeta = document.createElement('div');
+      bubbleMeta.className = 'message-bubble-meta';
 
-      const crmAuthorLabel = crmMessageAuthorLabel(message);
-      if (crmAuthorLabel) {
-        const authorEl = document.createElement('span');
-        authorEl.className = 'message-crm-author';
-        authorEl.textContent = crmAuthorLabel;
-        authorEl.title = `Отправлено через CRM: ${crmAuthorLabel}`;
-        footer.appendChild(authorEl);
+      const formattedTime = formatMessageTime(message.created_at || message.updated_at || '');
+      if (formattedTime) {
+        const timeEl = document.createElement('span');
+        timeEl.className = 'message-time';
+        timeEl.textContent = formattedTime;
+        bubbleMeta.appendChild(timeEl);
       }
-
-      const timeEl = document.createElement('span');
-      timeEl.className = 'message-time';
-      timeEl.textContent = formatMessageTime(message.created_at || message.updated_at || '');
-      footer.appendChild(timeEl);
 
       const operationStatus = String(message._send_operation_status || '');
       if (operationStatus && message.direction === 'outbound') {
@@ -4192,7 +4184,7 @@ function renderMessages(messages) {
         receiptEl.className = `message-receipt message-send-operation-status status-${operationStatus}`;
         receiptEl.textContent = messageOperationStatusLabel(operationStatus);
         receiptEl.title = String(message._send_operation_error?.summary || receiptEl.textContent);
-        footer.appendChild(receiptEl);
+        bubbleMeta.appendChild(receiptEl);
       } else {
         const receipt = messageReceiptInfo(message, receiptContext);
         if (receipt && message.direction === 'outbound') {
@@ -4200,11 +4192,27 @@ function renderMessages(messages) {
           receiptEl.className = `message-receipt ${receipt.read ? 'is-read' : 'is-sent'}`;
           receiptEl.title = receipt.title || receipt.label;
           receiptEl.innerHTML = `<span class="receipt-checks">${escapeHtml(receipt.icon)}</span><span class="receipt-label">${escapeHtml(receipt.label)}</span>`;
-          footer.appendChild(receiptEl);
+          bubbleMeta.appendChild(receiptEl);
         }
       }
 
-      item.appendChild(footer);
+      if (bubbleMeta.children.length) bubble.appendChild(bubbleMeta);
+    }
+
+    item.appendChild(bubble);
+
+    if (message.direction !== 'internal') {
+      const crmAuthorLabel = crmMessageAuthorLabel(message);
+      if (crmAuthorLabel) {
+        const footer = document.createElement('div');
+        footer.className = 'message-footer';
+        const authorEl = document.createElement('span');
+        authorEl.className = 'message-crm-author';
+        authorEl.textContent = crmAuthorLabel;
+        authorEl.title = `Отправлено через CRM: ${crmAuthorLabel}`;
+        footer.appendChild(authorEl);
+        item.appendChild(footer);
+      }
     }
 
     box.appendChild(item);

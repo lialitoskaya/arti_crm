@@ -2578,6 +2578,25 @@ textarea {
   font-size: 10px;
 }
 
+.message-bubble-meta {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  flex-wrap: wrap;
+  color: var(--crm-muted-2);
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.message.inbound .message-bubble-meta {
+  justify-content: flex-start;
+}
+
+.message.outbound .message-bubble-meta {
+  justify-content: flex-end;
+}
+
 .message.inbound .message-footer {
   justify-content: flex-start;
   padding-left: 4px;
@@ -2589,6 +2608,7 @@ textarea {
 }
 
 .message-time {
+  flex: 0 0 auto;
   line-height: 1;
 }
 
@@ -2601,13 +2621,6 @@ textarea {
   color: var(--crm-muted);
   font-weight: 600;
   line-height: 1;
-}
-
-.message-crm-author::after {
-  content: '·';
-  margin-left: 8px;
-  color: var(--crm-muted-2);
-  font-weight: 400;
 }
 
 .message-actions-menu-wrap {
@@ -2644,6 +2657,13 @@ textarea {
   gap: 4px;
   color: var(--crm-muted-2);
   font-size: 10px;
+}
+
+.message-bubble-meta .message-receipt {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .message-receipt .receipt-label {

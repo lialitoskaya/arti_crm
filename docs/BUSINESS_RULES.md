@@ -198,5 +198,10 @@ unread metadata and the global CRM workflow status are not personal read state.
    and `мы` are never displayed as employee names.
 5. User-ID fallback is resolved in one bulk query per opened chat, not one query
    per message.
-6. The frontend shows the employee label in the outbound message footer next to
-   the timestamp. Inbound and internal messages are unchanged.
+6. The frontend shows the employee label in a separate outbound message footer below
+   the bubble. The footer is rendered only for a trusted CRM author; inbound and
+   internal messages are unchanged.
+7. The timestamp and exactly one current delivery state are rendered inside the
+   message bubble. A durable send-operation status takes precedence over the
+   canonical marketplace sent/read receipt, so an unresolved operation is never
+   presented as sent by a generic receipt fallback.
