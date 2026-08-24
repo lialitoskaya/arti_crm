@@ -1,4 +1,4 @@
-const ARTI_CRM_SW_VERSION = 'v95-10-chat-search-pin-access-20260820';
+const ARTI_CRM_SW_VERSION = 'v95-11-extra-panel-accessibility-20260824';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();

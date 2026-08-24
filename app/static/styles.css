@@ -2481,7 +2481,6 @@ textarea {
   #chatsView.mobile-chat-mode > .conversation .extra-panel,
   #chatsView > .conversation.mobile-chat-open .extra-panel {
     z-index: 30010 !important;
-    background: #fff !important;
   }
 
   #chatsView.mobile-chat-mode > .conversation .composer,
@@ -5768,23 +5767,29 @@ html[data-theme] .message.internal .message-text {
 }
 
 html[data-theme] .internal-note-editor,
-html[data-theme] .internal-note-edit-text,
-html[data-theme] #noteText {
+html[data-theme] .internal-note-edit-text {
   background: transparent !important;
   border-color: transparent !important;
   box-shadow: none !important;
 }
 
 html[data-theme] #noteText {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
   padding-inline: 0 !important;
   resize: vertical;
 }
 
-html[data-theme] #noteText:focus,
 html[data-theme] .internal-note-edit-text:focus {
   outline: none !important;
   border-color: transparent !important;
   box-shadow: none !important;
+}
+
+html[data-theme] #noteText:focus-visible {
+  border-color: var(--crm-line-strong);
+  box-shadow: var(--crm-focus);
 }
 
 /* Mobile analytics: date filters must stay inside the card/container. */
