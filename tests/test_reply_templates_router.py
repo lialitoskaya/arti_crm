@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import sys
 import unittest
 from pathlib import Path
@@ -25,7 +26,6 @@ from app.schemas import ReplyTemplateCreate, ReplyTemplateUpdate  # noqa: E402
 main = foundation.main
 db = foundation.db
 repo = foundation.repo
-_TEST_EVENT_LOOP = foundation._TEST_EVENT_LOOP
 
 
 def _request_without_user() -> Request:
@@ -361,7 +361,7 @@ class ReplyTemplatesHttpSecurityTests(unittest.TestCase):
                 listed = await client.get("/api/reply-templates")
                 return created, updated, deleted, listed, template_id
 
-        created, updated, deleted, listed, template_id = _TEST_EVENT_LOOP.run_until_complete(exercise())
+        created, updated, deleted, listed, template_id = asyncio.run(exercise())
         self.assertEqual(200, created.status_code)
         self.assertEqual(200, updated.status_code)
         self.assertEqual("Updated greeting", updated.json()["title"])
@@ -389,7 +389,7 @@ class ReplyTemplatesHttpSecurityTests(unittest.TestCase):
 
         for user in (self.viewer, self.manager):
             with self.subTest(role=user["role"]):
-                updated, deleted = _TEST_EVENT_LOOP.run_until_complete(exercise(user))
+                updated, deleted = asyncio.run(exercise(user))
                 self.assertEqual(403, updated.status_code)
                 self.assertEqual(403, deleted.status_code)
 
@@ -409,7 +409,7 @@ class ReplyTemplatesHttpSecurityTests(unittest.TestCase):
                 deleted = await client.delete(f"/api/reply-templates/{template['id']}")
                 return updated, deleted
 
-        updated, deleted = _TEST_EVENT_LOOP.run_until_complete(exercise())
+        updated, deleted = asyncio.run(exercise())
         self.assertEqual(403, updated.status_code)
         self.assertEqual(403, deleted.status_code)
         self.assertIn("CSRF", updated.json()["detail"])
