@@ -160,6 +160,51 @@ unread metadata and the global CRM workflow status are not personal read state.
 7. The same due-date ordering applies to the all-tasks view and tasks shown
    inside an individual chat.
 
+## Task-type chat-status automation
+
+1. A task type may map to one existing active chat status. `null` means that the
+   task does not change chat status. Invalid or inactive mappings are rejected in
+   the same transaction as the task-type mutation.
+   Deactivating a task type preserves its existing mapping as dormant configuration,
+   releases its active effects, and prevents new acquisition. Reactivating the type
+   does not apply that mapping to existing tasks retroactively.
+2. Changing a mapping is not retroactive. An effect snapshot is acquired only on
+   task creation, an explicit task-type change, or reactivation of a terminal task.
+   An unrelated task edit never reacquires or refreshes an effect.
+3. `done`, `archived`, and `cancelled` are terminal. Terminal transition or task
+   deletion releases that task's effect atomically. Reactivation starts a new cycle
+   and records a new snapshot.
+4. When several active effects exist in a cycle, the most recently explicitly
+   acquired effect wins; task id and then effect id are stable tie breakers.
+5. When the winner is released, the next active effect wins. If no effect remains,
+   the saved baseline may be restored only when no manual/provider override exists
+   and that status is still active. A deleted or inactive baseline is never restored;
+   the active default status is used instead.
+6. A manual CRM status change invalidates task ownership in the current cycle.
+   Completing or deleting an old task afterwards must not restore the old baseline.
+7. New provider activity reopens a chat only when the stored canonical status key
+   is exactly `closed` and the latest direction is exactly `inbound`, including a
+   task-owned `closed` chat. Archive-like, translated, custom, outbound, internal,
+   missing, and unknown values are no-ops. Reopen, effect release, and
+   provider-override recording are one transaction. Repeated provider activity for
+   an already-open chat does not create a cycle or alter task state.
+8. After a manual or provider override, only a later task creation, type change, or
+   terminal-task reactivation may acquire ownership in a new cycle. Old snapshots
+   are never dispatchable or restorable.
+9. All existing-chat workflow status writes use the same transaction-local arbiter
+   under `BEGIN IMMEDIATE`; update/delete operations validate their affected row.
+   Marketplace upsert cannot bypass the arbiter.
+10. Deployment is dormant until an administrator saves mappings. Forward
+    reconciliation and rollback release are explicit, idempotent repository routines;
+    neither routine reverses a manual/provider override and neither uses a background
+    worker.
+11. Deactivating or deleting a mapped chat status atomically releases effects that
+    reference it, recalculates every affected chat, and clears every mapping to that
+    status before the status becomes unavailable. Manual/provider ownership is not
+    replaced by an old task effect, inactive baselines are never restored, and the
+    whole mutation fails when no active fallback status is available. Reactivating
+    the status does not restore cleared mappings.
+
 ## Ozon message product context
 
 1. Ozon transport markers such as the leading `errorText` token are not user-visible

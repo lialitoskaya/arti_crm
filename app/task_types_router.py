@@ -34,7 +34,10 @@ def create_task_types_router(
     @router.patch("/api/task-types/{type_id}")
     def api_update_task_type(type_id: int, payload: TaskTypeUpdate, request: Request) -> dict[str, Any]:
         require_admin_dependency(request)
-        task_type = repo.update_task_type(type_id, payload)
+        try:
+            task_type = repo.update_task_type(type_id, payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
         if not task_type:
             raise HTTPException(status_code=404, detail="Task type not found")
         return task_type

@@ -1123,10 +1123,17 @@ html[data-theme="dark"] button.reply-template-delete-action:focus-visible {
 .task-type-create-form,
 .settings-form,
 .user-create-form { display: grid; gap: 9px; }
-.status-settings-header,
-.task-type-settings-header {
+.status-settings-header {
   display: grid;
   grid-template-columns: 1.4fr 1fr .7fr .7fr auto;
+  gap: 8px;
+  color: var(--crm-muted);
+  font-size: 12px;
+  padding: 0 6px;
+}
+.task-type-settings-header {
+  display: grid;
+  grid-template-columns: minmax(140px, 1.2fr) minmax(120px, 1fr) minmax(160px, 1.2fr) 64px 82px auto;
   gap: 8px;
   color: var(--crm-muted);
   font-size: 12px;
@@ -1136,12 +1143,22 @@ html[data-theme="dark"] button.reply-template-delete-action:focus-visible {
 .task-type-settings-list,
 .users-list { display: grid; gap: 7px; }
 .status-settings-row,
-.task-type-settings-row,
 .user-row {
   display: grid;
   grid-template-columns: 1.4fr 1fr .7fr .7fr auto;
   gap: 8px;
   align-items: center;
+  padding: 8px;
+  border: 1px solid var(--crm-line);
+  border-radius: var(--crm-radius-md);
+  background: #fff;
+}
+.task-type-settings-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1.2fr) minmax(120px, 1fr) minmax(160px, 1.2fr) 64px 82px auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
   padding: 8px;
   border: 1px solid var(--crm-line);
   border-radius: var(--crm-radius-md);
@@ -2042,6 +2059,11 @@ textarea {
   gap: 10px;
 }
 
+.tech-settings-page .task-type-settings-card {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
 .tech-settings-page .settings-card h3 {
   font-size: 14px;
 }
@@ -2062,17 +2084,27 @@ textarea {
   gap: 8px;
 }
 
-.tech-settings-page .status-settings-header,
-.tech-settings-page .task-type-settings-header {
+.tech-settings-page .status-settings-header {
   grid-template-columns: minmax(124px, 1fr) 56px 34px auto;
   gap: 8px;
   padding: 0 4px;
   font-size: 11px;
 }
+.tech-settings-page .task-type-settings-header {
+  grid-template-columns: minmax(140px, 1.2fr) minmax(120px, 1fr) minmax(160px, 1.2fr) 56px 82px auto;
+  gap: 8px;
+  padding: 0 4px;
+  font-size: 11px;
+}
 
-.tech-settings-page .status-settings-row,
-.tech-settings-page .task-type-settings-row {
+.tech-settings-page .status-settings-row {
   grid-template-columns: minmax(124px, 1fr) 56px 34px auto;
+  gap: 8px;
+  padding: 8px;
+  align-items: center;
+}
+.tech-settings-page .task-type-settings-row {
+  grid-template-columns: minmax(140px, 1.2fr) minmax(120px, 1fr) minmax(160px, 1.2fr) 56px 82px auto;
   gap: 8px;
   padding: 8px;
   align-items: center;
@@ -2097,6 +2129,19 @@ textarea {
   font-size: 13px;
 }
 
+.tech-settings-page .task-type-settings-row select {
+  min-width: 0;
+  font-size: 13px;
+}
+
+.tech-settings-page .task-type-active-toggle,
+.tech-settings-page .task-type-settings-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .tech-settings-page .status-settings-row input[type="checkbox"],
 .tech-settings-page .task-type-settings-row input[type="checkbox"],
 .tech-settings-page .user-edit-active-row input[type="checkbox"] {
@@ -2118,6 +2163,15 @@ textarea {
 
 /* ---------- Mobile: fullscreen chat controlled by mobile_chat_fix_v10.js ---------- */
 @media (max-width: 900px) {
+  .tech-settings-page .task-type-settings-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tech-settings-page .task-type-settings-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   html,
   body,
   .app-shell,

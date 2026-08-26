@@ -56,6 +56,7 @@ class _RecordingRepository:
         self.update_result: Any = {"id": 12, "name": "Updated"}
         self.delete_result = True
         self.create_error: ValueError | None = None
+        self.update_error: ValueError | None = None
 
     def list_task_types(self, include_inactive: bool = False) -> list[dict[str, Any]]:
         self.calls.append(("list_task_types", include_inactive))
@@ -69,6 +70,8 @@ class _RecordingRepository:
 
     def update_task_type(self, type_id: int, payload: TaskTypeUpdate) -> dict[str, Any] | None:
         self.calls.append(("update_task_type", type_id, payload))
+        if self.update_error is not None:
+            raise self.update_error
         return self.update_result
 
     def delete_task_type(self, type_id: int) -> bool:
@@ -139,11 +142,13 @@ class TaskTypesRouterTests(unittest.TestCase):
         self.assertEqual([("create_task_type", payload)], self.repo.calls)
 
     def test_update_preserves_repository_call_payload_and_not_found_contract(self) -> None:
-        payload = TaskTypeUpdate.model_construct()
+        payload = TaskTypeUpdate(is_active=False, chat_status_id=12)
         endpoint = _route(self.router, "/api/task-types/{type_id}", "PATCH").endpoint
         result = endpoint(12, payload, _request_without_user())
         self.assertIs(self.repo.update_result, result)
         self.assertEqual([("update_task_type", 12, payload)], self.repo.calls)
+        self.assertFalse(payload.is_active)
+        self.assertEqual(12, payload.chat_status_id)
 
         self.repo.calls.clear()
         self.repo.update_result = None
@@ -152,6 +157,15 @@ class TaskTypesRouterTests(unittest.TestCase):
         self.assertEqual(404, error.exception.status_code)
         self.assertEqual("Task type not found", error.exception.detail)
         self.assertEqual([("update_task_type", 404, payload)], self.repo.calls)
+
+        self.repo.calls.clear()
+        self.repo.update_result = {"id": 12}
+        self.repo.update_error = ValueError("inactive chat status")
+        with self.assertRaises(HTTPException) as error:
+            endpoint(12, payload, _request_without_user())
+        self.assertEqual(400, error.exception.status_code)
+        self.assertEqual("inactive chat status", error.exception.detail)
+        self.assertEqual([("update_task_type", 12, payload)], self.repo.calls)
 
     def test_delete_preserves_repository_call_payload_and_not_found_contract(self) -> None:
         endpoint = _route(self.router, "/api/task-types/{type_id}", "DELETE").endpoint

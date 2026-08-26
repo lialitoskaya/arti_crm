@@ -1993,6 +1993,7 @@ async function loadChatSettings(options = {}) {
     (chatSettings.statuses || []).forEach(s => { nextNames[s.key] = s.title; });
     statusNames = { ...statusNames, ...nextNames };
     renderChatSettingsControls(options);
+    if (Array.isArray(taskTypes) && taskTypes.length) renderTaskTypeSettingsList();
   } catch (err) {
     console.warn('chat settings failed', err);
   }
@@ -2147,6 +2148,20 @@ function taskTypeStatusLabel(type) {
   return (type?.is_active === false || type?.is_active === 0) ? 'скрыт' : 'активен';
 }
 
+function taskTypeChatStatusOptions(selectedId = '') {
+  const selected = selectedId ? String(selectedId) : '';
+  const statuses = activeChatStatuses(true);
+  const options = statuses.map(status => {
+    const value = String(status.id || '');
+    return `<option value="${escapeHtml(value)}" ${value === selected ? 'selected' : ''}>${escapeHtml(status.title || status.key || 'Статус')}</option>`;
+  });
+  if (selected && !statuses.some(status => String(status.id || '') === selected)) {
+    const unavailable = (chatSettings.statuses || []).find(status => String(status.id || '') === selected);
+    options.unshift(`<option value="${escapeHtml(selected)}" selected disabled>${escapeHtml(unavailable?.title || 'Недоступный статус')}</option>`);
+  }
+  return `<option value="">Не менять статус чата</option>${options.join('')}`;
+}
+
 function activeTaskTypesList() {
   return (Array.isArray(taskTypes) ? taskTypes : [])
     .filter(type => type && type.is_active !== false && type.is_active !== 0);
@@ -2279,11 +2294,18 @@ async function submitStandaloneTaskCreate(event) {
 function renderTaskTypeSettingsList() {
   const list = $('taskTypesSettingsList');
   if (!list) return;
+  const createStatusSelect = $('taskTypeChatStatus');
+  if (createStatusSelect) {
+    const selected = createStatusSelect.value || '';
+    createStatusSelect.innerHTML = taskTypeChatStatusOptions(selected);
+    createStatusSelect.value = selected;
+  }
   const rows = Array.isArray(taskTypes) ? taskTypes : [];
   list.innerHTML = rows.length ? rows.map(type => `
     <article class="task-type-settings-row" data-task-type-id="${escapeHtml(type.id)}">
       <input class="task-type-title-input" data-task-type-title value="${escapeHtml(type.title || type.name || '')}" aria-label="Название типа задачи" />
       <input class="task-type-label-input" data-task-type-label value="${escapeHtml(type.comment_label || type.field_label || 'Комментарий')}" aria-label="Название поля комментария" />
+      <select class="task-type-chat-status-select" data-task-type-chat-status aria-label="Статус чата для типа задачи">${taskTypeChatStatusOptions(type.chat_status_id)}</select>
       <input class="task-type-sort-input" data-task-type-sort type="number" value="${Number(type.sort_order || 0)}" aria-label="Порядок" />
       <label class="task-type-active-toggle">
         <input data-task-type-active type="checkbox" ${(type.is_active === false || type.is_active === 0) ? '' : 'checked'} />
@@ -2301,6 +2323,7 @@ async function submitTaskTypeCreate(event) {
   event?.preventDefault?.();
   const titleInput = $('taskTypeTitle');
   const labelInput = $('taskTypeCommentLabel');
+  const chatStatusSelect = $('taskTypeChatStatus');
   const sortInput = $('taskTypeSort');
   const title = titleInput?.value?.trim() || '';
   const commentLabel = labelInput?.value?.trim() || 'Комментарий';
@@ -2317,12 +2340,14 @@ async function submitTaskTypeCreate(event) {
       body: JSON.stringify({
         title,
         comment_label: commentLabel,
+        chat_status_id: chatStatusSelect?.value ? Number(chatStatusSelect.value) : null,
         sort_order: Number(sortInput?.value || 0),
         is_active: true,
       }),
     });
     if (titleInput) titleInput.value = '';
     if (labelInput) labelInput.value = 'Комментарий';
+    if (chatStatusSelect) chatStatusSelect.value = '';
     if (sortInput) sortInput.value = '0';
     await loadTaskTypes({ silent: true });
     notify('Тип задачи', 'Тип задачи добавлен.');
@@ -2348,6 +2373,9 @@ async function saveTaskTypeRow(row) {
     body: JSON.stringify({
       title,
       comment_label: commentLabel,
+      chat_status_id: row.querySelector('[data-task-type-chat-status]')?.value
+        ? Number(row.querySelector('[data-task-type-chat-status]').value)
+        : null,
       sort_order: Number(row.querySelector('[data-task-type-sort]')?.value || 0),
       is_active: Boolean(row.querySelector('[data-task-type-active]')?.checked),
     }),

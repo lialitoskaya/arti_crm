@@ -6,6 +6,7 @@
 app/
   main.py                 FastAPI app, API routes, sync orchestration
   repository.py           SQLite repository layer
+  task_chat_status_automation.py  Transaction-local chat-status arbiter
   db.py                   schema/migrations/init
   schemas.py              Pydantic DTO
   services/
@@ -282,3 +283,59 @@ descending `due_at`, with undated tasks last and descending `id` as the
 deterministic tie breaker. Workflow status does not create a second sort group. The explicit
 `assigned_user_id` query parameter filters by responsible employee; `mine=true`
 intentionally takes precedence and resolves to the authenticated user's id.
+
+## Task-type chat-status automation
+
+`task_chat_status_automation.py` is the single transaction-local arbiter for
+changes to an existing `chats.status` caused by manual CRM edits, task lifecycle,
+or confirmed provider activity. Repository entry points acquire `BEGIN IMMEDIATE`
+before reading the chat, task, task type, mapping, effect, or arbitration state;
+all writes and winner calculation then use the same SQLite connection. No network
+call or nested transaction occurs inside this boundary.
+
+The additive `20260824_task_type_chat_status_automation` migration runs after the
+preserved message-identity and durable-outbox migrations and after active chat
+statuses are seeded. It creates:
+
+- `task_type_chat_status_links`, one optional active-status mapping per task type;
+- `chat_task_status_state`, the chat baseline, current cycle, override source, and
+  current winning task/status;
+- `task_chat_status_effects`, immutable acquisition snapshots with task, mapped
+  status, cycle and application time plus explicit release metadata.
+
+The winner query is indexed by chat and cycle and orders active snapshots by the
+latest application time, then task id and effect id. Existing tasks are not
+backfilled: a snapshot is created only by task creation, type change, or terminal
+task reactivation. Terminal transition and deletion release their snapshot in the
+same transaction and recalculate the remaining winner or a still-active baseline.
+
+Deactivating a task type keeps its mapping as dormant configuration while the
+arbiter releases every active effect owned by tasks of that type and recalculates
+the affected chats under the same write lock. Reactivating the type never backfills
+effects; a later task creation, type change, or terminal-task reactivation is still
+required. Deactivating or deleting a chat status uses the same arbiter: active
+effects are released, affected chats move to an active baseline/fallback, and all
+task-type mappings to that status are cleared before the status becomes inactive
+or is deleted. Reactivating the status does not recreate those mappings. If no
+active fallback exists, the complete configuration mutation rolls back.
+
+Manual status changes and a provider reopen invalidate every task-owned effect in
+the current cycle. Provider reopen is fail-closed: it requires the stored canonical
+status key to equal `closed` and the latest direction to equal `inbound`. A later
+explicit task lifecycle event starts a new cycle; old snapshots can never restore a
+pre-override status. Repeated provider activity for an already-open chat is a no-op.
+Marketplace upsert preserves the current workflow status and never performs a
+competing status write.
+
+Migration validation runs on every `init_db()`: compatible empty partial tables
+may be rebuilt with the canonical audit columns and indexes, while a nonempty
+partial table without trustworthy acquisition timestamps fails closed. Column
+types, nullability, defaults, primary/unique keys, foreign-key actions and ordered
+cycle indexes are revalidated before the migration marker is written. Forward
+reconciliation
+is available as `repository.reconcile_task_chat_status_automation()`.
+Before rolling application code back, operators must run the idempotent
+`repository.release_task_chat_status_automation_for_rollback()` routine; it
+releases task ownership and restores only an active baseline (or the active default)
+without undoing manual or provider overrides. A plain code rollback while effects
+remain active is unsupported.

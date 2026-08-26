@@ -111,6 +111,7 @@ class TaskTypeCreate(BaseModel):
     title: str = Field(min_length=1, max_length=120)
     comment_label: str = Field(default="Комментарий", min_length=1, max_length=80)
     sort_order: int = 0
+    chat_status_id: int | None = Field(default=None, ge=1)
 
 
 class TaskTypeUpdate(BaseModel):
@@ -118,6 +119,7 @@ class TaskTypeUpdate(BaseModel):
     comment_label: str | None = Field(default=None, min_length=1, max_length=80)
     sort_order: int | None = None
     is_active: bool | None = None
+    chat_status_id: int | None = Field(default=None, ge=1)
 
 
 class ReviewReplyCreate(BaseModel):

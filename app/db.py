@@ -10,6 +10,7 @@ from typing import Any, Iterator
 from dotenv import load_dotenv
 
 from app.message_outbox_migration import apply_message_send_operation_migration
+from app.task_chat_status_automation import apply_task_chat_status_automation_migration
 
 load_dotenv()
 
@@ -864,6 +865,11 @@ def init_db() -> None:
                 """,
                 (key, title, default_funnel_id, color, sort_order),
             )
+
+        # This additive migration depends on the complete slice-09 identity
+        # migration, the durable outbox schema, and the seeded workflow statuses.
+        # It deliberately runs here (not before chat_statuses exists).
+        apply_task_chat_status_automation_migration(conn)
 
         conn.executescript(
             """

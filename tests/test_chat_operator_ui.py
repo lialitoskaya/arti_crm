@@ -175,6 +175,80 @@ class ChatOperatorUiTests(unittest.TestCase):
             """
         )
 
+    def test_task_type_status_mapping_uses_existing_renderer_and_save_lifecycle(self) -> None:
+        active_statuses = _extract_function(self.source, "activeChatStatuses")
+        options = _extract_function(self.source, "taskTypeChatStatusOptions")
+        label = _extract_function(self.source, "taskTypeStatusLabel")
+        render = _extract_function(self.source, "renderTaskTypeSettingsList")
+        save = _extract_function(self.source, "saveTaskTypeRow")
+        escape = _extract_function(self.source, "escapeHtml")
+
+        _run_node(
+            f"""
+            let taskTypes = [{{
+              id: 7,
+              title: 'Длинный тип задачи',
+              comment_label: 'Подробное поле',
+              sort_order: 4,
+              is_active: true,
+              chat_status_id: 12,
+            }}];
+            let chatSettings = {{ statuses: [
+              {{ id: 11, key: 'new', title: 'Новый', is_active: 1 }},
+              {{ id: 12, key: 'waiting_customer', title: 'Очень длинный статус ожидания покупателя', is_active: 1 }},
+              {{ id: 13, key: 'disabled', title: 'Скрытый', is_active: 0 }},
+            ] }};
+            const list = {{ innerHTML: '' }};
+            const createSelect = {{ value: '', innerHTML: '' }};
+            function $(id) {{
+              if (id === 'taskTypesSettingsList') return list;
+              if (id === 'taskTypeChatStatus') return createSelect;
+              return null;
+            }}
+            {escape}
+            {active_statuses}
+            {options}
+            {label}
+            {render}
+            renderTaskTypeSettingsList();
+            if (!list.innerHTML.includes('data-task-type-chat-status')) throw new Error('mapping select missing');
+            if (!list.innerHTML.includes('value="12" selected')) throw new Error('saved mapping did not reload');
+            if (list.innerHTML.includes('value="13"')) throw new Error('inactive status was offered');
+            if (!createSelect.innerHTML.includes('Не менять статус чата')) throw new Error('null mapping option missing');
+
+            const calls = [];
+            let rejectSave = false;
+            async function api(url, options) {{
+              calls.push({{ url, body: JSON.parse(options.body) }});
+              if (rejectSave) throw new Error('server validation');
+              return {{ ok: true }};
+            }}
+            function rowWithMapping(value, isActive = true) {{
+              const elements = {{
+                '[data-task-type-title]': {{ value: 'Длинный тип задачи', focus() {{}} }},
+                '[data-task-type-label]': {{ value: 'Подробное поле' }},
+                '[data-task-type-chat-status]': {{ value }},
+                '[data-task-type-sort]': {{ value: '4' }},
+                '[data-task-type-active]': {{ checked: isActive }},
+              }};
+              return {{ dataset: {{ taskTypeId: '7' }}, querySelector(selector) {{ return elements[selector] || null; }} }};
+            }}
+            {save}
+            (async () => {{
+              await saveTaskTypeRow(rowWithMapping('12'));
+              await saveTaskTypeRow(rowWithMapping(''));
+              await saveTaskTypeRow(rowWithMapping('12', false));
+              if (calls[0].body.chat_status_id !== 12) throw new Error('status mapping not saved');
+              if (calls[1].body.chat_status_id !== null) throw new Error('null mapping not saved');
+              if (calls[2].body.chat_status_id !== 12 || calls[2].body.is_active !== false) throw new Error('dormant mapping not saved atomically');
+              rejectSave = true;
+              let rejected = false;
+              try {{ await saveTaskTypeRow(rowWithMapping('12')); }} catch (error) {{ rejected = error.message === 'server validation'; }}
+              if (!rejected) throw new Error('server validation error was hidden');
+            }})().catch((error) => {{ console.error(error); process.exit(1); }});
+            """
+        )
+
     def test_extra_panel_geometry_is_coalesced_guarded_and_recomputed(self) -> None:
         cancel = _extract_function(self.source, "cancelExtraPanelGeometrySync")
         sync = _extract_function(self.source, "syncExtraPanelGeometry")

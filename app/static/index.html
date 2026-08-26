@@ -10,12 +10,12 @@
   <meta name="apple-mobile-web-app-title" content="Arti CRM" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <link rel="apple-touch-icon" href="/static/icons/app-icon-180.png?v=v57-mobile-questions-inline-and-dark-analytics-20260701" />
-  <meta name="arti-build-version" content="v95-13-message-meta-inside-bubble-20260824" />
+  <meta name="arti-build-version" content="v95-14-task-type-chat-status-automation-20260824" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <script src="/static/theme-init.js?v=v79-strict-csp-secure-cookie-20260708"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=v95-13-message-meta-inside-bubble-20260824" />
+  <link rel="stylesheet" href="/static/styles.css?v=v95-14-task-type-chat-status-automation-20260824" />
 
 </head>
 <body class="auth-pending">
@@ -921,13 +921,16 @@
             <div class="settings-card-head">
               <div>
                 <h3>Типы задач</h3>
-                <p class="muted">Добавляйте и удаляйте типы задач. Для каждого типа можно задать своё название поля вместо “Комментарий”.</p>
+                <p class="muted">Для типа задачи можно задать поле комментария и активный статус, который применяется к связанному чату.</p>
               </div>
             </div>
 
             <form id="taskTypeForm" class="task-type-create-form">
               <input id="taskTypeTitle" placeholder="Тип задачи, например: Доставки" required />
               <input id="taskTypeCommentLabel" placeholder="Название поля, например: Адрес" value="Комментарий" />
+              <select id="taskTypeChatStatus" aria-label="Статус чата для нового типа задачи">
+                <option value="">Не менять статус чата</option>
+              </select>
               <input id="taskTypeSort" type="number" placeholder="Порядок" value="0" />
               <button id="taskTypeCreateBtn" class="crm-light-btn" type="submit">Добавить тип</button>
             </form>
@@ -935,6 +938,7 @@
             <div class="task-type-settings-header" aria-hidden="true">
               <span>Тип задачи</span>
               <span>Поле в карточке</span>
+              <span>Статус чата</span>
               <span>Порядок</span>
               <span>Активен</span>
               <span></span>
@@ -1021,6 +1025,6 @@
 
   <div id="notificationToasts" class="notification-toast-stack" aria-live="polite"></div>
 
-  <script src="/static/app.js?v=v95-13-message-meta-inside-bubble-20260824"></script>
+  <script src="/static/app.js?v=v95-14-task-type-chat-status-automation-20260824"></script>
 </body>
 </html>

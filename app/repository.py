@@ -14,6 +14,19 @@ from app.marketplace_sender import (
     system_sender_matches as _shared_system_sender_matches,
 )
 from app.schemas import ChatCreate, ChatUpdate, TaskCreate, TaskUpdate, TaskTypeCreate, TaskTypeUpdate
+from app.task_chat_status_automation import (
+    TERMINAL_TASK_STATUSES,
+    acquire_task_effect_conn,
+    apply_manual_status_conn,
+    apply_provider_reopen_conn,
+    reconcile_automation_state_conn,
+    rebind_task_effect_conn,
+    release_all_task_effects_for_rollback_conn,
+    release_chat_status_automation_conn,
+    release_task_effect_conn,
+    release_task_type_effects_conn,
+    set_task_type_mapping_conn,
+)
 
 
 STANDALONE_TASK_MARKETPLACE = 'internal_tasks'
@@ -871,10 +884,6 @@ def upsert_chat(chat: ChatCreate) -> int:
             for key, value in existing_metadata.items():
                 if str(key).startswith("_crm_"):
                     incoming_metadata[key] = value
-            if _is_closed_status_key_conn(conn, existing["status"]):
-                incoming_metadata["_crm_status_manual"] = True
-                incoming_metadata.setdefault("_crm_status_manual_value", "closed")
-                incoming_metadata.setdefault("_crm_status_manual_source_value", existing["status"])
         conn.execute(
             """
             INSERT INTO chats (
@@ -888,33 +897,6 @@ def upsert_chat(chat: ChatCreate) -> int:
                 END,
                 customer_public_id=COALESCE(NULLIF(excluded.customer_public_id, ''), chats.customer_public_id),
                 order_id=COALESCE(NULLIF(excluded.order_id, ''), order_id),
-                -- Marketplace sync must not erase operator workflow fields, except
-                -- when a marketplace explicitly reports unread activity. In that case
-                -- a previously archived/closed chat must return to the active inbox.
-                status=CASE
-                    -- Manual CRM status and closed-like workflow statuses have priority
-                    -- over marketplace sync. Without this, background sync could reset
-                    -- closed dialogs back to "new" when marketplace metadata contains
-                    -- unread flags from an already imported message.
-                    WHEN chats.metadata_json LIKE '%"_crm_status_manual": true%' THEN chats.status
-                    WHEN chats.status='closed' THEN chats.status
-                    WHEN lower(chats.status) IN ('closed', 'archive', 'archived', 'zakryt', 'zakryto') THEN chats.status
-                    WHEN chats.status LIKE '%Закры%' OR chats.status LIKE '%закры%' THEN chats.status
-                    WHEN chats.status IN (
-                        SELECT key FROM chat_statuses
-                        WHERE key='closed'
-                           OR lower(key) IN ('closed', 'archive', 'archived', 'zakryt', 'zakryto')
-                           OR title LIKE '%Закры%'
-                           OR title LIKE '%закры%'
-                    ) THEN chats.status
-                    -- Custom statuses are not known to marketplace sync, so never
-                    -- overwrite them from unread_count / first_unread_message_id.
-                    WHEN chats.status NOT IN ('new', 'in_progress', 'waiting_customer', 'closed') THEN chats.status
-                    WHEN excluded.metadata_json LIKE '%"unread_count": 0%' THEN chats.status
-                    WHEN excluded.metadata_json LIKE '%"unread_count":%' THEN 'new'
-                    WHEN excluded.metadata_json LIKE '%"first_unread_message_id":%' AND excluded.metadata_json NOT LIKE '%"first_unread_message_id": null%' THEN 'new'
-                    ELSE chats.status
-                END,
                 assigned_to=chats.assigned_to,
                 metadata_json=excluded.metadata_json,
                 updated_at=CURRENT_TIMESTAMP
@@ -1501,16 +1483,9 @@ def reopen_closed_chat_for_new_activity(chat_id: int, latest_direction: str | No
     We only call this after a sync pass has confirmed newer messages for that chat,
     so old historical imports will not reopen archived conversations accidentally.
     """
-    new_status = "new" if latest_direction == "inbound" else "in_progress"
     with get_connection() as conn:
-        row = conn.execute("SELECT status FROM chats WHERE id=?", (chat_id,)).fetchone()
-        if not row or row["status"] != "closed":
-            return False
-        conn.execute(
-            "UPDATE chats SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-            (new_status, chat_id),
-        )
-        return True
+        conn.execute("BEGIN IMMEDIATE")
+        return apply_provider_reopen_conn(conn, int(chat_id), latest_direction)
 
 
 def get_latest_message_for_chat(chat_id: int) -> dict[str, Any] | None:
@@ -3258,7 +3233,8 @@ def update_chat(chat_id: int, payload: ChatUpdate) -> dict[str, Any] | None:
         return get_chat_summary(chat_id)
 
     with get_connection() as conn:
-        current = conn.execute("SELECT metadata_json FROM chats WHERE id=?", (chat_id,)).fetchone()
+        conn.execute("BEGIN IMMEDIATE")
+        current = conn.execute("SELECT status, metadata_json FROM chats WHERE id=?", (chat_id,)).fetchone()
         if not current:
             return None
         try:
@@ -3282,12 +3258,16 @@ def update_chat(chat_id: int, payload: ChatUpdate) -> dict[str, Any] | None:
             status_value = str(fields.get("status") or "").strip()
             if status_value:
                 canonical_status = _canonical_workflow_status_conn(conn, status_value)
-                fields["status"] = canonical_status
+                apply_manual_status_conn(conn, int(chat_id), canonical_status)
+                for key in tuple(metadata):
+                    if str(key).startswith("_crm_status_provider_override"):
+                        metadata.pop(key, None)
                 metadata["_crm_status_manual"] = True
                 metadata["_crm_status_manual_value"] = canonical_status
                 metadata["_crm_status_manual_source_value"] = status_value
                 metadata["_crm_status_manual_at"] = __import__("datetime").datetime.utcnow().isoformat(timespec="seconds") + "Z"
                 fields["metadata_json"] = json.dumps(metadata, ensure_ascii=False)
+            fields.pop("status", None)
 
         if "assigned_user_id" in fields:
             assigned_user_id = fields.get("assigned_user_id")
@@ -3313,15 +3293,18 @@ def update_chat(chat_id: int, payload: ChatUpdate) -> dict[str, Any] | None:
         elif "assigned_to" in fields and fields.get("assigned_to") == "":
             fields["assigned_to"] = None
 
-        allowed = {"status", "assigned_to", "assigned_user_id", "customer_name", "metadata_json"}
+        allowed = {"assigned_to", "assigned_user_id", "customer_name", "metadata_json"}
         fields = {k: v for k, v in fields.items() if k in allowed}
 
-        assignments = ", ".join([f"{key}=?" for key in fields])
-        params = list(fields.values()) + [chat_id]
-        conn.execute(
-            f"UPDATE chats SET {assignments}, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-            params,
-        )
+        if fields:
+            assignments = ", ".join([f"{key}=?" for key in fields])
+            params = list(fields.values()) + [chat_id]
+            cursor = conn.execute(
+                f"UPDATE chats SET {assignments}, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                params,
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("Chat update lost its target row")
     return get_chat_summary(chat_id)
 
 
@@ -3484,11 +3467,27 @@ def update_chat_status(status_id: int, fields: dict[str, Any]) -> dict[str, Any]
     if "is_active" in fields and fields["is_active"] is not None:
         allowed["is_active"] = 1 if fields["is_active"] else 0
     with get_connection() as conn:
-        if not conn.execute("SELECT 1 FROM chat_statuses WHERE id=?", (status_id,)).fetchone():
+        conn.execute("BEGIN IMMEDIATE")
+        preimage = conn.execute(
+            "SELECT id, key, is_active FROM chat_statuses WHERE id=?", (int(status_id),)
+        ).fetchone()
+        if not preimage:
             return None
+        deactivating = bool(int(preimage["is_active"] or 0)) and allowed.get("is_active") == 0
+        if deactivating:
+            release_chat_status_automation_conn(conn, int(status_id), str(preimage["key"]))
         if allowed:
             assignments = ", ".join([f"{key}=?" for key in allowed])
-            conn.execute(f"UPDATE chat_statuses SET {assignments}, updated_at=CURRENT_TIMESTAMP WHERE id=?", list(allowed.values()) + [status_id])
+            cursor = conn.execute(
+                f"""
+                UPDATE chat_statuses
+                SET {assignments}, updated_at=CURRENT_TIMESTAMP
+                WHERE id=? AND is_active=?
+                """,
+                list(allowed.values()) + [int(status_id), int(preimage["is_active"] or 0)],
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("Chat status update lost its locked preimage")
         row = conn.execute(
             """
             SELECT s.*, f.title AS funnel_title
@@ -3503,15 +3502,31 @@ def update_chat_status(status_id: int, fields: dict[str, Any]) -> dict[str, Any]
 
 def delete_chat_status(status_id: int) -> bool:
     with get_connection() as conn:
-        row = conn.execute("SELECT key, is_system FROM chat_statuses WHERE id=?", (status_id,)).fetchone()
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT key, is_system, is_active FROM chat_statuses WHERE id=?", (int(status_id),)
+        ).fetchone()
         if not row:
             return False
+        release_chat_status_automation_conn(conn, int(status_id), str(row["key"]))
         in_use = conn.execute("SELECT COUNT(*) AS c FROM chats WHERE status=?", (row["key"],)).fetchone()["c"]
         # System/in-use statuses are deactivated so old chats do not break.
         if int(row["is_system"] or 0) or int(in_use or 0) > 0:
-            conn.execute("UPDATE chat_statuses SET is_active=0, updated_at=CURRENT_TIMESTAMP WHERE id=?", (status_id,))
+            cursor = conn.execute(
+                """
+                UPDATE chat_statuses
+                SET is_active=0, updated_at=CURRENT_TIMESTAMP
+                WHERE id=? AND is_active=?
+                """,
+                (int(status_id), int(row["is_active"] or 0)),
+            )
         else:
-            conn.execute("DELETE FROM chat_statuses WHERE id=?", (status_id,))
+            cursor = conn.execute(
+                "DELETE FROM chat_statuses WHERE id=? AND is_active=?",
+                (int(status_id), int(row["is_active"] or 0)),
+            )
+        if cursor.rowcount != 1:
+            raise RuntimeError("Chat status delete lost its locked preimage")
         return True
 
 
@@ -3561,13 +3576,18 @@ def _ensure_task_types_table(conn) -> None:
 def list_task_types(include_inactive: bool = False) -> list[dict[str, Any]]:
     with get_connection() as conn:
         _ensure_task_types_table(conn)
-        where = "" if include_inactive else "WHERE is_active=1"
+        where = "" if include_inactive else "WHERE tt.is_active=1"
         rows = conn.execute(
             f"""
-            SELECT id, title, comment_label, sort_order, is_active, created_at, updated_at
-            FROM task_types
+            SELECT tt.id, tt.title, tt.comment_label, tt.sort_order, tt.is_active,
+                   tt.created_at, tt.updated_at, l.chat_status_id,
+                   s.key AS chat_status_key, s.title AS chat_status_title
+            FROM task_types tt
+            LEFT JOIN task_type_chat_status_links l ON l.task_type_id=tt.id
+            LEFT JOIN chat_statuses s ON s.id=l.chat_status_id
             {where}
-            ORDER BY is_active DESC, sort_order ASC, title COLLATE NOCASE ASC, id ASC
+            ORDER BY tt.is_active DESC, tt.sort_order ASC,
+                     tt.title COLLATE NOCASE ASC, tt.id ASC
             """
         ).fetchall()
         return [row_to_dict(r) for r in rows]
@@ -3579,6 +3599,7 @@ def create_task_type(payload: TaskTypeCreate) -> dict[str, Any]:
     if not title:
         raise ValueError("Название типа задачи обязательно")
     with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         _ensure_task_types_table(conn)
         cur = conn.execute(
             """
@@ -3587,12 +3608,26 @@ def create_task_type(payload: TaskTypeCreate) -> dict[str, Any]:
             """,
             (title, comment_label, int(payload.sort_order or 0)),
         )
-        row = conn.execute("SELECT * FROM task_types WHERE id=?", (cur.lastrowid,)).fetchone()
+        task_type_id = int(cur.lastrowid)
+        set_task_type_mapping_conn(conn, task_type_id, payload.chat_status_id)
+        row = conn.execute(
+            """
+            SELECT tt.*, l.chat_status_id, s.key AS chat_status_key,
+                   s.title AS chat_status_title
+            FROM task_types tt
+            LEFT JOIN task_type_chat_status_links l ON l.task_type_id=tt.id
+            LEFT JOIN chat_statuses s ON s.id=l.chat_status_id
+            WHERE tt.id=?
+            """,
+            (task_type_id,),
+        ).fetchone()
         return row_to_dict(row)
 
 
 def update_task_type(type_id: int, payload: TaskTypeUpdate) -> dict[str, Any] | None:
     fields = payload.model_dump(exclude_unset=True)
+    mapping_was_set = "chat_status_id" in fields
+    chat_status_id = fields.pop("chat_status_id", None)
     allowed = {"title", "comment_label", "sort_order", "is_active"}
     updates: dict[str, Any] = {}
     for key, value in fields.items():
@@ -3606,31 +3641,72 @@ def update_task_type(type_id: int, payload: TaskTypeUpdate) -> dict[str, Any] | 
             value = 1 if value else 0
         updates[key] = value
     with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         _ensure_task_types_table(conn)
-        exists = conn.execute("SELECT id FROM task_types WHERE id=?", (type_id,)).fetchone()
-        if not exists:
+        preimage = conn.execute(
+            "SELECT id, is_active FROM task_types WHERE id=?", (int(type_id),)
+        ).fetchone()
+        if not preimage:
             return None
         if updates:
             assignments = ", ".join([f"{key}=?" for key in updates])
-            conn.execute(
-                f"UPDATE task_types SET {assignments}, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                list(updates.values()) + [type_id],
+            cursor = conn.execute(
+                f"""
+                UPDATE task_types
+                SET {assignments}, updated_at=CURRENT_TIMESTAMP
+                WHERE id=? AND is_active=?
+                """,
+                list(updates.values()) + [int(type_id), int(preimage["is_active"] or 0)],
             )
-        row = conn.execute("SELECT * FROM task_types WHERE id=?", (type_id,)).fetchone()
+            if cursor.rowcount != 1:
+                raise RuntimeError("Task type update lost its locked preimage")
+        if mapping_was_set:
+            set_task_type_mapping_conn(conn, int(type_id), chat_status_id)
+        next_active = int(updates.get("is_active", preimage["is_active"]) or 0)
+        if next_active == 0:
+            release_task_type_effects_conn(conn, int(type_id))
+        row = conn.execute(
+            """
+            SELECT tt.*, l.chat_status_id, s.key AS chat_status_key,
+                   s.title AS chat_status_title
+            FROM task_types tt
+            LEFT JOIN task_type_chat_status_links l ON l.task_type_id=tt.id
+            LEFT JOIN chat_statuses s ON s.id=l.chat_status_id
+            WHERE tt.id=?
+            """,
+            (type_id,),
+        ).fetchone()
         return row_to_dict(row) if row else None
 
 
 def delete_task_type(type_id: int) -> bool:
     with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         _ensure_task_types_table(conn)
-        row = conn.execute("SELECT id FROM task_types WHERE id=?", (type_id,)).fetchone()
+        row = conn.execute(
+            "SELECT id, is_active FROM task_types WHERE id=?", (int(type_id),)
+        ).fetchone()
         if not row:
             return False
         in_use = conn.execute("SELECT COUNT(*) AS c FROM tasks WHERE task_type_id=?", (type_id,)).fetchone()["c"]
         if int(in_use or 0) > 0:
-            conn.execute("UPDATE task_types SET is_active=0, updated_at=CURRENT_TIMESTAMP WHERE id=?", (type_id,))
+            cursor = conn.execute(
+                """
+                UPDATE task_types SET is_active=0, updated_at=CURRENT_TIMESTAMP
+                WHERE id=? AND is_active=?
+                """,
+                (int(type_id), int(row["is_active"] or 0)),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("Task type deactivate lost its locked preimage")
+            release_task_type_effects_conn(conn, int(type_id))
         else:
-            conn.execute("DELETE FROM task_types WHERE id=?", (type_id,))
+            cursor = conn.execute(
+                "DELETE FROM task_types WHERE id=? AND is_active=?",
+                (int(type_id), int(row["is_active"] or 0)),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("Task type delete lost its locked preimage")
         return True
 
 
@@ -3696,6 +3772,7 @@ def create_standalone_task(
     if not title:
         raise ValueError("Task title is required")
     with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         _ensure_task_types_table(conn)
         chat_id = _ensure_standalone_task_chat_conn(conn)
         normalized_task_type_id = _normalize_task_type_id_for_insert(conn, task_type_id)
@@ -3721,6 +3798,7 @@ def create_standalone_task(
 
 def create_task(payload: TaskCreate) -> int:
     with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         _ensure_task_types_table(conn)
         assigned_user_id = payload.assigned_user_id
         assignee = payload.assignee
@@ -3734,7 +3812,9 @@ def create_task(payload: TaskCreate) -> int:
             """,
             (payload.chat_id, task_type_id, payload.title, payload.description, assignee, assigned_user_id, payload.due_at),
         )
-        return int(cur.lastrowid)
+        task_id = int(cur.lastrowid)
+        acquire_task_effect_conn(conn, task_id)
+        return task_id
 
 
 def _load_task_comments(conn, task_id: int) -> list[dict[str, Any]]:
@@ -3809,10 +3889,21 @@ def update_task(task_id: int, payload: TaskUpdate) -> dict[str, Any] | None:
     fields = {k: v for k, v in fields.items() if k in allowed}
 
     with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         _ensure_task_types_table(conn)
-        exists = conn.execute("SELECT id FROM tasks WHERE id=?", (task_id,)).fetchone()
-        if not exists:
+        previous = conn.execute(
+            "SELECT id, chat_id, task_type_id, status FROM tasks WHERE id=?",
+            (int(task_id),),
+        ).fetchone()
+        if not previous:
             return None
+        previous_type_id = previous["task_type_id"]
+        previous_status = str(previous["status"] or "").strip().lower()
+
+        if "task_type_id" in fields:
+            fields["task_type_id"] = _normalize_task_type_id_for_insert(
+                conn, fields.get("task_type_id")
+            )
         if "assigned_user_id" in fields:
             assigned_user_id = fields.get("assigned_user_id")
             if assigned_user_id:
@@ -3821,11 +3912,31 @@ def update_task(task_id: int, payload: TaskUpdate) -> dict[str, Any] | None:
                 fields["assignee"] = None
         if fields:
             assignments = ", ".join([f"{key}=?" for key in fields])
-            params = list(fields.values()) + [task_id]
-            conn.execute(
-                f"UPDATE tasks SET {assignments}, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            params = list(fields.values()) + [int(task_id), previous_type_id, previous_status]
+            cursor = conn.execute(
+                f"""
+                UPDATE tasks
+                SET {assignments}, updated_at=CURRENT_TIMESTAMP
+                WHERE id=? AND task_type_id IS ? AND lower(status)=?
+                """,
                 params,
             )
+            if cursor.rowcount != 1:
+                raise RuntimeError("Task update lost its locked preimage")
+
+        next_status = str(fields.get("status", previous_status) or "").strip().lower()
+        next_type_id = fields.get("task_type_id", previous_type_id)
+        previous_terminal = previous_status in TERMINAL_TASK_STATUSES
+        next_terminal = next_status in TERMINAL_TASK_STATUSES
+        type_changed = "task_type_id" in fields and next_type_id != previous_type_id
+        reactivated = previous_terminal and not next_terminal
+        if next_terminal:
+            release_task_effect_conn(conn, int(task_id), f"task_{next_status}")
+        elif reactivated:
+            rebind_task_effect_conn(conn, int(task_id), reactivation=True)
+        elif type_changed:
+            rebind_task_effect_conn(conn, int(task_id))
+
         if comment:
             conn.execute(
                 "INSERT INTO task_comments (task_id, comment, author) VALUES (?, ?, ?)",
@@ -3867,15 +3978,33 @@ def get_task(task_id: int) -> dict[str, Any] | None:
 def delete_task(task_id: int) -> bool:
     task_id = int(task_id)
     with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         exists = conn.execute("SELECT id FROM tasks WHERE id=?", (task_id,)).fetchone()
         if not exists:
             return False
+        release_task_effect_conn(conn, task_id, "task_deleted")
         # Explicitly remove child records first. This keeps deletion stable even if
         # the current SQLite database was created by an older schema without ON DELETE CASCADE.
         conn.execute("DELETE FROM task_comments WHERE task_id=?", (task_id,))
         conn.execute("DELETE FROM notifications WHERE task_id=?", (task_id,))
         cur = conn.execute("DELETE FROM tasks WHERE id=?", (task_id,))
-        return bool(cur.rowcount)
+        if cur.rowcount != 1:
+            raise RuntimeError("Task delete lost its locked target")
+        return True
+
+
+def reconcile_task_chat_status_automation() -> None:
+    """Repair an interrupted task/status transition under one SQLite write lock."""
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        reconcile_automation_state_conn(conn)
+
+
+def release_task_chat_status_automation_for_rollback() -> int:
+    """Release task-owned effects before rolling application code back."""
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        return release_all_task_effects_for_rollback_conn(conn)
 
 
 def list_tasks(
