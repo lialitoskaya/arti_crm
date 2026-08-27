@@ -4154,7 +4154,6 @@ html[data-theme="dark"] input[type="reset"] {
   background: var(--crm-button-bg) !important;
   border-color: var(--crm-line) !important;
   color: var(--crm-text) !important;
-  box-shadow: none !important;
 }
 
 html[data-theme="dark"] button:hover,

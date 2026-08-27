@@ -1,4 +1,4 @@
-const ARTI_CRM_SW_VERSION = 'v95-14-task-type-chat-status-automation-20260824';
+const ARTI_CRM_SW_VERSION = 'v95-15-dark-icon-button-focus-20260826';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
