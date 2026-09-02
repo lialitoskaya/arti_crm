@@ -139,6 +139,19 @@ button.icon-btn:hover,
 .notification-close-btn:hover,
 .message-actions-btn:hover { background: var(--crm-hover); color: var(--crm-text); }
 
+#extraMenuBtn {
+  --crm-button-bg: transparent;
+  --crm-line: transparent;
+  --crm-line-strong: transparent;
+  background: transparent;
+  border-color: transparent;
+}
+
+#extraMenuBtn:hover {
+  --crm-button-bg-hover: var(--crm-hover);
+  background: var(--crm-hover);
+}
+
 input, select, textarea {
   width: 100%;
   min-height: 34px;

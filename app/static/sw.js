@@ -1,4 +1,4 @@
-const ARTI_CRM_SW_VERSION = 'v95-15-dark-icon-button-focus-20260826';
+const ARTI_CRM_SW_VERSION = 'v95-16-borderless-chat-menu-20260826';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
