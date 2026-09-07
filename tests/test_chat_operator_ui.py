@@ -175,6 +175,198 @@ class ChatOperatorUiTests(unittest.TestCase):
             """
         )
 
+    def test_notification_toast_keeps_context_and_uses_time_only_subtitle(self) -> None:
+        render = _extract_function(self.source, "renderNotifications")
+        unread = _extract_function(self.source, "currentUnreadNotifications")
+        escape = _extract_function(self.source, "escapeHtml")
+        parse_date = _extract_function(self.source, "parseDate")
+        format_date_time = _extract_function(self.source, "formatDateTime")
+
+        _run_node(
+            f"""
+            class NotificationElement {{
+              constructor(kind, id) {{
+                this.kind = kind;
+                this.dataset = kind === 'open'
+                  ? {{ notificationOpen: String(id) }}
+                  : {{ notificationClose: String(id) }};
+                this.listeners = new Map();
+              }}
+              addEventListener(type, handler) {{
+                const handlers = this.listeners.get(type) || [];
+                handlers.push(handler);
+                this.listeners.set(type, handlers);
+              }}
+              async dispatch(type, key = '') {{
+                const event = {{
+                  type,
+                  key,
+                  prevented: false,
+                  propagationStopped: false,
+                  preventDefault() {{ this.prevented = true; }},
+                  stopPropagation() {{ this.propagationStopped = true; }},
+                }};
+                for (const handler of this.listeners.get(type) || []) {{
+                  await handler(event);
+                }}
+                return event;
+              }}
+            }}
+
+            const stack = {{
+              html: '',
+              openElements: [],
+              closeElements: [],
+              classes: new Set(),
+              classList: {{
+                add(name) {{ stack.classes.add(name); }},
+                remove(name) {{ stack.classes.delete(name); }},
+              }},
+              set innerHTML(value) {{
+                this.html = String(value);
+                this.openElements = [...this.html.matchAll(/data-notification-open="(\\d+)"/g)]
+                  .map((match) => new NotificationElement('open', match[1]));
+                this.closeElements = [...this.html.matchAll(/data-notification-close="(\\d+)"/g)]
+                  .map((match) => new NotificationElement('close', match[1]));
+              }},
+              get innerHTML() {{ return this.html; }},
+              querySelectorAll(selector) {{
+                if (selector === '[data-notification-open]') return this.openElements;
+                if (selector === '[data-notification-close]') return this.closeElements;
+                return [];
+              }},
+            }};
+
+            const createdAt = '2026-08-26T09:15:00Z';
+            let notifications = [{{
+              id: 17,
+              type: 'new_message',
+              title: 'Клиент <Тест> & "VIP"',
+              body: 'Ozon <script>alert("x")</script> & товар',
+              created_at: createdAt,
+              chat_id: 42,
+              is_read: false,
+            }}];
+            let notificationToastIds = [17];
+            let notificationsPanelOpen = true;
+            let openCalls = [];
+            let closeCalls = [];
+            function $(id) {{ return id === 'notificationToasts' ? stack : null; }}
+            function openNotification(id) {{ openCalls.push(id); }}
+            async function markNotificationRead(id) {{ closeCalls.push(id); }}
+            function notify() {{ throw new Error('unexpected notification error'); }}
+            function notificationTypeLabel() {{ return 'Сообщение'; }}
+
+            {escape}
+            {parse_date}
+            {format_date_time}
+            {unread}
+            {render}
+
+            (async () => {{
+              renderNotifications();
+              const firstOpenElement = stack.openElements[0];
+              renderNotifications();
+              const secondOpenElement = stack.openElements[0];
+              if (firstOpenElement === secondOpenElement) throw new Error('innerHTML replacement did not recreate toast nodes');
+              if (stack.openElements.length !== 1 || stack.closeElements.length !== 1) throw new Error('toast copy duplicated');
+
+              const expectedTitle = escapeHtml(notifications[0].title);
+              const expectedBody = escapeHtml(notifications[0].body);
+              if (!stack.innerHTML.includes(expectedTitle) || !stack.innerHTML.includes(expectedBody)) {{
+                throw new Error('contextual title or body was lost');
+              }}
+              if (stack.innerHTML.includes('<script>') || stack.innerHTML.includes('<Тест>')) {{
+                throw new Error('notification content bypassed escaping');
+              }}
+
+              const subtitleMatch = stack.innerHTML.match(/<span class="notification-toast-subtitle">([^<]*)<\\/span>/);
+              if (!subtitleMatch) throw new Error('subtitle was not rendered');
+              const expectedTime = escapeHtml(formatDateTime(createdAt) || '');
+              if (subtitleMatch[1] !== expectedTime) throw new Error(`unexpected subtitle: ${{subtitleMatch[1]}}`);
+              if (['Сообщение', 'Вопрос', 'Задача'].some((label) => subtitleMatch[1].includes(label))) {{
+                throw new Error('type label remained in subtitle');
+              }}
+              if (subtitleMatch[1].includes(' · ')) throw new Error('type separator remained in subtitle');
+
+              await secondOpenElement.dispatch('click');
+              if (openCalls.length !== 1 || openCalls[0] !== 17) throw new Error('click did not open linked object once');
+              await secondOpenElement.dispatch('keydown', 'Escape');
+              if (openCalls.length !== 1) throw new Error('unsupported key opened notification');
+              await secondOpenElement.dispatch('keydown', 'Enter');
+              await secondOpenElement.dispatch('keydown', ' ');
+              if (openCalls.length !== 3 || openCalls.some((id) => id !== 17)) {{
+                throw new Error('keyboard activation did not reuse the open handler exactly once');
+              }}
+
+              const closeEvent = await stack.closeElements[0].dispatch('click');
+              if (closeCalls.length !== 1 || closeCalls[0] !== 17) throw new Error('close handler duplicated');
+              if (!closeEvent.prevented || !closeEvent.propagationStopped) throw new Error('close event leaked into open handler');
+            }})().catch((error) => {{ console.error(error); process.exit(1); }});
+            """
+        )
+
+    def test_question_notification_keeps_first_poll_baseline_and_context(self) -> None:
+        sound_key = _extract_function(self.source, "questionSoundKey")
+        track = _extract_function(self.source, "trackQuestionSounds")
+
+        _run_node(
+            f"""
+            let questionSoundBaselineDone = false;
+            let knownQuestionSoundKeys = new Set();
+            const soundCalls = [];
+            const browserCalls = [];
+            function questionNeedsAnswer() {{ return true; }}
+            function questionProductName(question) {{ return question.product_name; }}
+            function previewText(value) {{ return String(value || '').trim(); }}
+            function crmNotificationUrl(kind, id) {{ return `/crm/${{kind}}/${{id}}`; }}
+            function playNotificationSound(kind) {{ soundCalls.push(kind); }}
+            function showCrmBrowserNotification(kind, title, body, options) {{
+              browserCalls.push({{ kind, title, body, options }});
+            }}
+
+            {sound_key}
+            {track}
+
+            const existingQuestion = {{
+              id: 101,
+              product_name: 'Старый товар',
+              text: 'Старый вопрос',
+            }};
+            const newQuestion = {{
+              id: 202,
+              product_name: 'Ozon Super Product',
+              text: 'Когда будет доставка?',
+            }};
+
+            trackQuestionSounds([existingQuestion]);
+            if (!questionSoundBaselineDone || knownQuestionSoundKeys.size !== 1) {{
+              throw new Error('first poll did not establish the question baseline');
+            }}
+            if (soundCalls.length || browserCalls.length) {{
+              throw new Error('first poll emitted a notification');
+            }}
+
+            trackQuestionSounds([existingQuestion, newQuestion]);
+            if (soundCalls.length !== 1 || soundCalls[0] !== 'question') {{
+              throw new Error('new question sound was not emitted exactly once');
+            }}
+            if (browserCalls.length !== 1) throw new Error('browser notification was not emitted exactly once');
+            const call = browserCalls[0];
+            if (call.kind !== 'question' || call.title !== 'Новый вопрос Ozon') {{
+              throw new Error(`question notification title changed: ${{call.title}}`);
+            }}
+            if (!call.body.includes(newQuestion.product_name) || !call.body.includes(newQuestion.text)) {{
+              throw new Error(`question notification lost product or preview context: ${{call.body}}`);
+            }}
+            if (call.options.entityId !== newQuestion.id
+                || call.options.tag !== `arti-crm-question-${{newQuestion.id}}`
+                || call.options.url !== `/crm/question/${{newQuestion.id}}`) {{
+              throw new Error('question notification did not target the new question');
+            }}
+            """
+        )
+
     def test_task_type_status_mapping_uses_existing_renderer_and_save_lifecycle(self) -> None:
         active_statuses = _extract_function(self.source, "activeChatStatuses")
         options = _extract_function(self.source, "taskTypeChatStatusOptions")

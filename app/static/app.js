@@ -1103,17 +1103,6 @@ window.artiCrmRequestNotificationPermission = requestCrmNotificationPermission;
 window.artiCrmSubscribePushNotifications = subscribeCrmPushNotifications;
 
 
-function notificationTypeLabel(type) {
-  const labels = {
-    new_message: 'Сообщение',
-    assigned_chat: 'Ответственный',
-    new_task: 'Задача',
-    task_event: 'Задача',
-    event: 'Событие',
-  };
-  return labels[type] || 'Событие';
-}
-
 function updateNotificationsBadge() {
   const text = notificationsUnreadCount > 99 ? '99+' : String(notificationsUnreadCount || 0);
   ['notificationsBadge', 'mobileMoreBadge', 'mobileMoreNotificationsBadge'].forEach((id) => {
@@ -1169,7 +1158,6 @@ function renderNotifications() {
     const title = escapeHtml(item.title || 'Уведомление');
     const body = escapeHtml(item.body || '');
     const time = escapeHtml(formatDateTime(item.created_at) || '');
-    const typeLabel = escapeHtml(notificationTypeLabel(item.type));
     const icon = item.task_id ? '✓' : '✉';
     return `
       <article class="notification-toast" data-notification-open="${item.id}" role="button" tabindex="0">
@@ -1178,7 +1166,7 @@ function renderNotifications() {
           <span class="notification-toast-icon" aria-hidden="true">${icon}</span>
           <div class="notification-toast-meta">
             <strong class="notification-toast-title">${title}</strong>
-            <span class="notification-toast-subtitle">${typeLabel} · ${time}</span>
+            <span class="notification-toast-subtitle">${time}</span>
           </div>
         </div>
         ${body ? `<div class="notification-body">${body}</div>` : ''}
