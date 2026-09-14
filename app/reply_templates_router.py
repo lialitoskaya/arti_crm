@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
-from app.schemas import ReplyTemplateCreate
+from app.schemas import ReplyTemplateCreate, ReplyTemplateUpdate
 
 
 CurrentUserDependency = Callable[[Request], dict[str, Any]]
@@ -35,5 +35,34 @@ def create_reply_templates_router(
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+
+    @router.patch("/api/reply-templates/{template_id}")
+    def api_update_reply_template(
+        template_id: int,
+        payload: ReplyTemplateUpdate,
+        request: Request,
+    ) -> dict[str, Any]:
+        user = require_admin_dependency(request)
+        try:
+            template = repo.update_reply_template(
+                template_id,
+                title=payload.title,
+                content=payload.content,
+                sort_order=payload.sort_order,
+                is_active=payload.is_active,
+                user_id=int(user["id"]),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        if not template:
+            raise HTTPException(status_code=404, detail="Reply template not found")
+        return template
+
+    @router.delete("/api/reply-templates/{template_id}")
+    def api_delete_reply_template(template_id: int, request: Request) -> dict[str, Any]:
+        require_admin_dependency(request)
+        if not repo.delete_reply_template(template_id):
+            raise HTTPException(status_code=404, detail="Reply template not found")
+        return {"ok": True, "template_id": template_id}
 
     return router

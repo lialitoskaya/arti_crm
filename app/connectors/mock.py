@@ -5,12 +5,16 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.connectors.base import MarketplaceConnector, UnifiedChat, UnifiedMessage
+from app.message_send_models import MarketplaceSendOutcome
 
 _counter = itertools.count(1000)
 
 
 class MockConnector(MarketplaceConnector):
     marketplace = "mock"
+
+    def __init__(self) -> None:
+        self.sent_messages: dict[str, list[UnifiedMessage]] = {}
 
     async def list_chats(self) -> list[UnifiedChat]:
         return [
@@ -57,7 +61,7 @@ class MockConnector(MarketplaceConnector):
                 "Жду ответа, хочу заказать сегодня.",
             ],
         }
-        return [
+        messages = [
             UnifiedMessage(
                 external_message_id=f"mock-msg-{external_chat_id}-{idx}",
                 external_chat_id=external_chat_id,
@@ -69,12 +73,33 @@ class MockConnector(MarketplaceConnector):
             )
             for idx, text in enumerate(samples.get(external_chat_id, []), start=1)
         ]
+        messages.extend(self.sent_messages.get(str(external_chat_id), []))
+        return messages
 
-    async def send_message(self, external_chat_id: str, text: str) -> dict[str, Any]:
-        return {
+    async def send_message(
+        self,
+        external_chat_id: str,
+        text: str,
+    ) -> MarketplaceSendOutcome:
+        response = {
             "ok": True,
             "mock": True,
             "message_id": f"mock-out-{next(_counter)}",
             "external_chat_id": external_chat_id,
             "text": text,
         }
+        self.sent_messages.setdefault(str(external_chat_id), []).append(
+            UnifiedMessage(
+                external_message_id=response["message_id"],
+                external_chat_id=str(external_chat_id),
+                direction="outbound",
+                text=str(text),
+                author="seller",
+                created_at=datetime.now(timezone.utc).isoformat(),
+                raw={"mock": True},
+            )
+        )
+        return MarketplaceSendOutcome(
+            response=response,
+            provider_external_message_id=response["message_id"],
+        )

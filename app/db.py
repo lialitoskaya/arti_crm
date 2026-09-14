@@ -1,16 +1,362 @@
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 from dotenv import load_dotenv
+
+from app.message_outbox_migration import apply_message_send_operation_migration
+from app.task_chat_status_automation import apply_task_chat_status_automation_migration
 
 load_dotenv()
 
 DATABASE_PATH = os.getenv("DATABASE_PATH", "./crm.sqlite3")
+
+
+_TECHNICAL_MESSAGE_AUTHORS = {
+    "seller",
+    "manager",
+    "operator",
+    "admin",
+    "support",
+    "employee",
+    "staff",
+    "merchant",
+    "supplier",
+    "vendor",
+    "customer",
+    "buyer",
+    "client",
+    "outbound",
+    "продавец",
+    "менеджер",
+    "оператор",
+    "администратор",
+    "покупатель",
+    "клиент",
+    "мы",
+}
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    try:
+        payload = json.loads(value or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value or "").strip().casefold() in {"1", "true", "yes", "y", "on"}
+
+
+def _clean_author_label(value: Any) -> str | None:
+    label = str(value or "").strip()
+    if not label or label.casefold() in _TECHNICAL_MESSAGE_AUTHORS:
+        return None
+    return label
+
+
+def _raw_marks_crm_send(payload: dict[str, Any]) -> bool:
+    return bool(
+        _truthy(payload.get("_crm_sent_from_crm"))
+        or payload.get("_crm_sent_by_label")
+        or payload.get("_crm_sent_by_user_id")
+        or payload.get("_crm_client_operation_id")
+        or _truthy(payload.get("_crm_marketplace_attachment_sent"))
+        or _truthy(payload.get("_crm_local_attachment"))
+    )
+
+
+def _merge_raw_payloads(*payloads: dict[str, Any]) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for payload in payloads:
+        if isinstance(payload, dict):
+            merged.update(payload)
+    return merged
+
+
+def _message_row_priority(row: sqlite3.Row) -> tuple[int, int, int]:
+    return (
+        int(row["is_crm_sent"] or 0),
+        1 if str(row["crm_author_label"] or "").strip() else 0,
+        -int(row["id"]),
+    )
+
+
+def _merge_duplicate_message_rows(
+    conn: sqlite3.Connection,
+    canonical: sqlite3.Row,
+    duplicate: sqlite3.Row,
+    *,
+    prefer_duplicate_external_id: bool = False,
+) -> None:
+    canonical_raw = _json_object(canonical["raw_json"])
+    duplicate_raw = _json_object(duplicate["raw_json"])
+    canonical_is_crm = bool(canonical["is_crm_sent"])
+    duplicate_is_crm = bool(duplicate["is_crm_sent"])
+
+    # Marketplace payload enriches the CRM row, while CRM provenance always wins.
+    provider_raw = duplicate_raw if canonical_is_crm else canonical_raw
+    crm_raw = canonical_raw if canonical_is_crm else duplicate_raw
+    merged_raw = _merge_raw_payloads(provider_raw, crm_raw)
+
+    canonical_external_id = str(canonical["external_message_id"] or "").strip()
+    duplicate_external_id = str(duplicate["external_message_id"] or "").strip()
+    external_message_id = canonical_external_id or duplicate_external_id or None
+    if prefer_duplicate_external_id and duplicate_external_id:
+        external_message_id = duplicate_external_id
+        if canonical_external_id and canonical_external_id != duplicate_external_id:
+            merged_raw.setdefault("_crm_send_ack_message_id", canonical_external_id)
+
+    crm_author_label = (
+        _clean_author_label(canonical["crm_author_label"])
+        or _clean_author_label(duplicate["crm_author_label"])
+        or _clean_author_label(crm_raw.get("_crm_sent_by_label"))
+        or _clean_author_label(canonical["author"] if canonical_is_crm else duplicate["author"])
+    )
+    crm_author_user_id = canonical["crm_author_user_id"] or duplicate["crm_author_user_id"]
+    client_operation_id = canonical["client_operation_id"] or duplicate["client_operation_id"]
+    is_crm_sent = int(canonical_is_crm or duplicate_is_crm)
+    direction = "outbound" if is_crm_sent else str(canonical["direction"] or duplicate["direction"])
+    author = crm_author_label or canonical["author"] or duplicate["author"]
+
+    created_at = canonical["created_at"]
+    if prefer_duplicate_external_id and duplicate["created_at"]:
+        created_at = duplicate["created_at"]
+
+    # Remove the redundant row before assigning its unique provider identity to
+    # the canonical row. All values needed for the merge are already in memory.
+    conn.execute("DELETE FROM messages WHERE id=?", (int(duplicate["id"]),))
+    conn.execute(
+        """
+        UPDATE messages
+        SET external_message_id=?, direction=?, author=?, text=?, created_at=?, raw_json=?,
+            is_crm_sent=?, crm_author_user_id=?, crm_author_label=?, client_operation_id=?
+        WHERE id=?
+        """,
+        (
+            external_message_id,
+            direction,
+            author,
+            canonical["text"] or duplicate["text"] or "",
+            created_at,
+            json.dumps(merged_raw, ensure_ascii=False),
+            is_crm_sent,
+            crm_author_user_id,
+            crm_author_label,
+            client_operation_id,
+            int(canonical["id"]),
+        ),
+    )
+
+
+def _apply_message_identity_migration(conn: sqlite3.Connection) -> None:
+    """Move CRM message identity out of raw_json and repair old duplicates once."""
+    migration_name = "20260806_message_identity"
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            name TEXT PRIMARY KEY,
+            applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    already_applied = conn.execute(
+        "SELECT 1 FROM schema_migrations WHERE name=?",
+        (migration_name,),
+    ).fetchone()
+    if already_applied:
+        return
+
+    affected_chat_ids: set[int] = set()
+
+    rows = conn.execute(
+        """
+        SELECT id, chat_id, external_message_id, direction, author, text, created_at,
+               raw_json, is_crm_sent, crm_author_user_id, crm_author_label,
+               client_operation_id
+        FROM messages
+        ORDER BY id
+        """
+    ).fetchall()
+
+    sender_user_ids: set[int] = set()
+    for row in rows:
+        raw = _json_object(row["raw_json"])
+        try:
+            sender_user_id = int(row["crm_author_user_id"] or raw.get("_crm_sent_by_user_id") or 0)
+        except (TypeError, ValueError):
+            sender_user_id = 0
+        if sender_user_id > 0:
+            sender_user_ids.add(sender_user_id)
+
+    sender_labels: dict[int, str] = {}
+    if sender_user_ids:
+        placeholders = ",".join("?" for _ in sender_user_ids)
+        user_rows = conn.execute(
+            f"SELECT id, username, display_name FROM users WHERE id IN ({placeholders})",
+            tuple(sorted(sender_user_ids)),
+        ).fetchall()
+        for user_row in user_rows:
+            label = _clean_author_label(user_row["display_name"] or user_row["username"])
+            if label:
+                sender_labels[int(user_row["id"])] = label
+
+    for row in rows:
+        raw = _json_object(row["raw_json"])
+        is_crm_sent = bool(row["is_crm_sent"]) or _raw_marks_crm_send(raw)
+        if not is_crm_sent:
+            continue
+        try:
+            raw_user_id = int(raw.get("_crm_sent_by_user_id") or 0) or None
+        except (TypeError, ValueError):
+            raw_user_id = None
+        label = (
+            _clean_author_label(row["crm_author_label"])
+            or _clean_author_label(raw.get("_crm_sent_by_label"))
+            or sender_labels.get(int(row["crm_author_user_id"] or raw_user_id or 0))
+            or _clean_author_label(row["author"])
+        )
+        operation_id = str(
+            row["client_operation_id"] or raw.get("_crm_client_operation_id") or ""
+        ).strip() or None
+        conn.execute(
+            """
+            UPDATE messages
+            SET direction='outbound', is_crm_sent=1,
+                crm_author_user_id=COALESCE(crm_author_user_id, ?),
+                crm_author_label=COALESCE(NULLIF(crm_author_label, ''), ?),
+                client_operation_id=COALESCE(NULLIF(client_operation_id, ''), ?),
+                author=COALESCE(NULLIF(?, ''), author)
+            WHERE id=?
+            """,
+            (raw_user_id, label, operation_id, label, int(row["id"])),
+        )
+
+    # Exact provider identity duplicates are always the same logical message.
+    duplicate_external_ids = conn.execute(
+        """
+        SELECT chat_id, external_message_id
+        FROM messages
+        WHERE external_message_id IS NOT NULL AND TRIM(external_message_id)<>''
+        GROUP BY chat_id, external_message_id
+        HAVING COUNT(*) > 1
+        """
+    ).fetchall()
+    for group in duplicate_external_ids:
+        group_rows = conn.execute(
+            """
+            SELECT * FROM messages
+            WHERE chat_id=? AND external_message_id=?
+            ORDER BY id
+            """,
+            (group["chat_id"], group["external_message_id"]),
+        ).fetchall()
+        canonical = max(group_rows, key=_message_row_priority)
+        for duplicate in group_rows:
+            if int(duplicate["id"]) == int(canonical["id"]):
+                continue
+            affected_chat_ids.add(int(group["chat_id"]))
+            _merge_duplicate_message_rows(conn, canonical, duplicate)
+            canonical = conn.execute("SELECT * FROM messages WHERE id=?", (canonical["id"],)).fetchone()
+
+    # Old send ACK ids and history ids can differ. Merge only an unambiguous,
+    # near-in-time provider echo into the CRM row, then let the unique indexes
+    # prevent future races.
+    crm_rows = conn.execute(
+        """
+        SELECT * FROM messages
+        WHERE is_crm_sent=1 AND direction='outbound' AND TRIM(text)<>''
+        ORDER BY id
+        """
+    ).fetchall()
+    for crm_row in crm_rows:
+        candidates = conn.execute(
+            """
+            SELECT *, ABS(strftime('%s', created_at) - strftime('%s', ?)) AS time_delta
+            FROM messages
+            WHERE chat_id=? AND id<>? AND is_crm_sent=0 AND direction='outbound'
+              AND TRIM(text)=TRIM(?)
+              AND ABS(strftime('%s', created_at) - strftime('%s', ?)) <= 180
+            ORDER BY time_delta ASC, id ASC
+            LIMIT 2
+            """,
+            (crm_row["created_at"], crm_row["chat_id"], crm_row["id"], crm_row["text"], crm_row["created_at"]),
+        ).fetchall()
+        # Do not merge repeated identical replies by guesswork. Historical
+        # repair is allowed only when one provider echo is unambiguous.
+        if len(candidates) != 1:
+            continue
+        provider_row = candidates[0]
+        affected_chat_ids.add(int(crm_row["chat_id"]))
+        _merge_duplicate_message_rows(
+            conn,
+            crm_row,
+            provider_row,
+            prefer_duplicate_external_id=True,
+        )
+
+    # Operation retries are one logical CRM send.
+    duplicate_operations = conn.execute(
+        """
+        SELECT chat_id, client_operation_id
+        FROM messages
+        WHERE client_operation_id IS NOT NULL AND TRIM(client_operation_id)<>''
+        GROUP BY chat_id, client_operation_id
+        HAVING COUNT(*) > 1
+        """
+    ).fetchall()
+    for group in duplicate_operations:
+        group_rows = conn.execute(
+            """
+            SELECT * FROM messages
+            WHERE chat_id=? AND client_operation_id=?
+            ORDER BY id
+            """,
+            (group["chat_id"], group["client_operation_id"]),
+        ).fetchall()
+        canonical = max(group_rows, key=_message_row_priority)
+        for duplicate in group_rows:
+            if int(duplicate["id"]) == int(canonical["id"]):
+                continue
+            affected_chat_ids.add(int(group["chat_id"]))
+            _merge_duplicate_message_rows(conn, canonical, duplicate)
+            canonical = conn.execute("SELECT * FROM messages WHERE id=?", (canonical["id"],)).fetchone()
+
+    for chat_id in affected_chat_ids:
+        latest = conn.execute(
+            """
+            SELECT text, created_at
+            FROM messages
+            WHERE chat_id=?
+            ORDER BY julianday(created_at) DESC, id DESC
+            LIMIT 1
+            """,
+            (chat_id,),
+        ).fetchone()
+        conn.execute(
+            """
+            UPDATE chats
+            SET last_message_preview=?, last_message_at=?, updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (
+                (latest["text"] or "")[:200] if latest else None,
+                latest["created_at"] if latest else None,
+                chat_id,
+            ),
+        )
+
+    conn.execute("INSERT INTO schema_migrations(name) VALUES (?)", (migration_name,))
 
 
 def _resolve_db_path() -> str:
@@ -71,7 +417,12 @@ def init_db() -> None:
                 text TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 raw_json TEXT NOT NULL DEFAULT '{}',
-                FOREIGN KEY(chat_id) REFERENCES chats(id) ON DELETE CASCADE
+                is_crm_sent INTEGER NOT NULL DEFAULT 0 CHECK(is_crm_sent IN (0, 1)),
+                crm_author_user_id INTEGER,
+                crm_author_label TEXT,
+                client_operation_id TEXT,
+                FOREIGN KEY(chat_id) REFERENCES chats(id) ON DELETE CASCADE,
+                FOREIGN KEY(crm_author_user_id) REFERENCES users(id) ON DELETE SET NULL
             );
 
             CREATE TABLE IF NOT EXISTS task_types (
@@ -185,6 +536,20 @@ def init_db() -> None:
                 user_agent TEXT,
                 ip TEXT,
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS chat_user_states (
+                user_id INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL,
+                last_read_message_id INTEGER,
+                last_read_at TEXT,
+                is_marked_unread INTEGER NOT NULL DEFAULT 0 CHECK(is_marked_unread IN (0, 1)),
+                is_pinned INTEGER NOT NULL DEFAULT 0 CHECK(is_pinned IN (0, 1)),
+                pinned_at TEXT,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(user_id, chat_id),
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY(chat_id) REFERENCES chats(id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS yandex_oauth_links (
@@ -302,6 +667,29 @@ def init_db() -> None:
             conn.execute("ALTER TABLE chats ADD COLUMN assigned_user_id INTEGER")
         if "assigned_user_id" not in task_columns:
             conn.execute("ALTER TABLE tasks ADD COLUMN assigned_user_id INTEGER")
+
+        message_columns = _columns("messages")
+        if "is_crm_sent" not in message_columns:
+            conn.execute(
+                "ALTER TABLE messages ADD COLUMN is_crm_sent INTEGER NOT NULL DEFAULT 0 CHECK(is_crm_sent IN (0, 1))"
+            )
+        if "crm_author_user_id" not in message_columns:
+            conn.execute("ALTER TABLE messages ADD COLUMN crm_author_user_id INTEGER")
+        if "crm_author_label" not in message_columns:
+            conn.execute("ALTER TABLE messages ADD COLUMN crm_author_label TEXT")
+        if "client_operation_id" not in message_columns:
+            conn.execute("ALTER TABLE messages ADD COLUMN client_operation_id TEXT")
+
+        _apply_message_identity_migration(conn)
+        apply_message_send_operation_migration(conn)
+
+        chat_user_state_columns = _columns("chat_user_states")
+        if "is_pinned" not in chat_user_state_columns:
+            conn.execute(
+                "ALTER TABLE chat_user_states ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0 CHECK(is_pinned IN (0, 1))"
+            )
+        if "pinned_at" not in chat_user_state_columns:
+            conn.execute("ALTER TABLE chat_user_states ADD COLUMN pinned_at TEXT")
 
         conn.executescript(
             """
@@ -478,6 +866,11 @@ def init_db() -> None:
                 (key, title, default_funnel_id, color, sort_order),
             )
 
+        # This additive migration depends on the complete slice-09 identity
+        # migration, the durable outbox schema, and the seeded workflow statuses.
+        # It deliberately runs here (not before chat_statuses exists).
+        apply_task_chat_status_automation_migration(conn)
+
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS task_comments (
@@ -557,6 +950,18 @@ def init_db() -> None:
                 ON messages(chat_id, direction, created_at);
             CREATE INDEX IF NOT EXISTS idx_messages_chat_created_id
                 ON messages(chat_id, created_at DESC, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_messages_chat_direction_id
+                ON messages(chat_id, direction, id);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_chat_external_unique
+                ON messages(chat_id, external_message_id)
+                WHERE external_message_id IS NOT NULL AND TRIM(external_message_id)<>'';
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_chat_operation_unique
+                ON messages(chat_id, client_operation_id)
+                WHERE client_operation_id IS NOT NULL AND TRIM(client_operation_id)<>'';
+            CREATE INDEX IF NOT EXISTS idx_chat_user_states_chat_user
+                ON chat_user_states(chat_id, user_id);
+            CREATE INDEX IF NOT EXISTS idx_chat_user_states_user_pinned
+                ON chat_user_states(user_id, is_pinned, chat_id);
             CREATE INDEX IF NOT EXISTS idx_tasks_chat_created_id
                 ON tasks(chat_id, created_at DESC, id DESC);
             CREATE INDEX IF NOT EXISTS idx_chats_marketplace_status_last_message
@@ -579,6 +984,10 @@ def init_db() -> None:
                 ON push_outbox(user_id);
             CREATE INDEX IF NOT EXISTS idx_tasks_status_type
                 ON tasks(status, task_type_id);
+            CREATE INDEX IF NOT EXISTS idx_tasks_due_at_id
+                ON tasks(due_at, id);
+            CREATE INDEX IF NOT EXISTS idx_tasks_assigned_due_id
+                ON tasks(assigned_user_id, due_at, id);
             CREATE INDEX IF NOT EXISTS idx_task_types_active_sort
                 ON task_types(is_active, sort_order, title);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_dedupe

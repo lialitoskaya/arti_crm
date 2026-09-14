@@ -97,3 +97,17 @@ WB history идёт через events и может иметь строгий ho
 ## Связь с аналитикой
 
 Аналитика строится только по локальной SQLite-базе. Поэтому полнота отчётов напрямую зависит от того, насколько хорошо сработала синхронизация истории маркетплейсов.
+
+## Outbound echo reconciliation
+
+Synchronization treats a CRM send and its marketplace history echo as two
+observations of one domain message. CRM provenance and employee identity are
+structured local facts; marketplace payload and history id are provider facts.
+The repository merges those facts atomically at the message persistence boundary.
+It never lets an imported seller echo downgrade a CRM message to inbound.
+
+Provider ids and client operation ids are protected by partial unique indexes.
+Where a provider's send acknowledgement id differs from its history id, the
+repository may reconcile by same chat/text/close timestamp only when exactly one
+opposite-origin candidate exists. Ambiguity is preserved for review rather than
+risking loss of a legitimate repeated reply.

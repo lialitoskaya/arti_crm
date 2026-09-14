@@ -4,6 +4,12 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.message_send_models import (
+    MarketplaceSendError,
+    MarketplaceSendOutcome,
+    sanitize_provider_payload,
+)
+
 
 @dataclass
 class UnifiedChat:
@@ -30,6 +36,13 @@ class UnifiedMessage:
 class MarketplaceConnector(ABC):
     marketplace: str
 
+    def normalize_text_command(self, text: str) -> str:
+        """Return the exact text that this connector will dispatch."""
+        normalized = str(text or "").strip()
+        if not normalized:
+            raise ValueError("Message text must not be empty")
+        return normalized
+
     @abstractmethod
     async def list_chats(self) -> list[UnifiedChat]:
         """Return marketplace chats normalized to UnifiedChat."""
@@ -39,8 +52,12 @@ class MarketplaceConnector(ABC):
         """Return chat messages normalized to UnifiedMessage."""
 
     @abstractmethod
-    async def send_message(self, external_chat_id: str, text: str) -> dict[str, Any]:
-        """Send message back to marketplace and return raw response."""
+    async def send_message(
+        self,
+        external_chat_id: str,
+        text: str,
+    ) -> MarketplaceSendOutcome:
+        """Send text or raise a structured MarketplaceSendError."""
 
     async def send_file(
         self,

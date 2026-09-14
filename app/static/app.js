@@ -195,6 +195,9 @@ const ROUTE_VIEWS = {
   profile: 'profile',
 };
 let activeExtraPanel = '';
+const EXTRA_PANEL_GAP_PX = 8;
+let extraPanelGeometryFrame = 0;
+let extraPanelResizeObserver = null;
 let extraMenuPointerHandledAt = 0;
 let extraActionPointerHandledAt = 0;
 let chatScope = 'active';
@@ -212,12 +215,22 @@ let assignees = [];
 let usersCache = [];
 let chatOwnerScope = 'all';
 let chatMessageSearch = '';
+let currentChatListDateFrom = '';
+let currentChatListDateTo = '';
+let currentTaskDueDateFrom = '';
+let currentTaskDueDateTo = '';
 let chatSearchTimer = null;
-const CHAT_LIST_MOBILE_INITIAL_LIMIT = 90;
-const CHAT_LIST_MOBILE_PAGE_SIZE = 60;
-let chatListMobileRenderLimit = CHAT_LIST_MOBILE_INITIAL_LIMIT;
+const CHAT_LIST_BATCH_SIZE = 30;
+const CHAT_LIST_LOAD_THRESHOLD_PX = 360;
+let chatListNextOffset = 0;
+let chatListTotal = 0;
+let chatListUnreadTotal = 0;
+let chatListHasMore = false;
+let chatListBatchLoading = false;
+let chatListLoadingMode = '';
 let chatListLastRenderKey = '';
 let chatListInfiniteScrollBound = false;
+let chatListScrollFrame = 0;
 let knowledgeCategories = [];
 let knowledgeArticles = [];
 let currentKnowledgeCategoryId = null;
@@ -266,6 +279,7 @@ let taskTypes = [];
 let replyTemplatesLoaded = false;
 let replyTemplatesPanelOpen = false;
 let replyTemplateSaving = false;
+let replyTemplateEditingId = null;
 const REPLY_TEMPLATES_LOCAL_STORAGE_KEY = 'artiCrm.replyTemplates.fallback';
 // Mobile navigation: when an operator taps 'back to chat list', keep the selected
 // chat in memory but do not auto-open it again during background refresh.
@@ -278,6 +292,247 @@ let taskSearchTimer = null;
 let chatMetaControlsHydratedForChatId = null;
 let chatMetaControlsSignatureValue = '';
 let chatMetaControlBusyUntil = 0;
+function createChatReadStateController(options) {
+  const operations = new Map();
+  let operationVersion = 0;
+
+  function snapshot(chat) {
+    return {
+      is_unread: Boolean(chat?.is_unread),
+      is_marked_unread: Boolean(chat?.is_marked_unread),
+      last_read_message_id: chat?.last_read_message_id ?? null,
+      last_read_at: chat?.last_read_at ?? null,
+      unread_message_id: chat?.unread_message_id ?? null,
+    };
+  }
+
+  function captureRequestContext() {
+    return {
+      version: operationVersion,
+      pendingChatIds: new Set(
+        [...operations.entries()]
+          .filter(([, operation]) => operation.pending)
+          .map(([chatId]) => Number(chatId)),
+      ),
+    };
+  }
+
+  function reconcile(serverChat, context = {}) {
+    const chatId = Number(serverChat?.id ?? serverChat?.chat_id ?? 0);
+    if (!chatId) return serverChat;
+
+    const operation = operations.get(chatId);
+    const localChat = options.read(chatId);
+    if (!operation || !localChat) return serverChat;
+
+    const requestVersion = Number(context.version || 0);
+    const pendingAtStart = Boolean(context.pendingChatIds?.has?.(chatId));
+    if (operation.pending || operation.version > requestVersion || pendingAtStart) {
+      return { ...serverChat, ...snapshot(localChat) };
+    }
+    return serverChat;
+  }
+
+  function set(chatId, isUnread) {
+    const normalizedChatId = Number(chatId || 0);
+    const desiredUnread = Boolean(isUnread);
+    if (!normalizedChatId) return Promise.resolve(null);
+
+    const existingOperation = operations.get(normalizedChatId);
+    if (existingOperation?.pending) {
+      if (existingOperation.desiredUnread === desiredUnread) {
+        return existingOperation.promise;
+      }
+      return existingOperation.promise
+        .catch(() => null)
+        .then(() => set(normalizedChatId, desiredUnread));
+    }
+
+    const current = options.read(normalizedChatId);
+    if (!current) return Promise.resolve(null);
+    if (Boolean(current.is_unread) === desiredUnread) {
+      return Promise.resolve(snapshot(current));
+    }
+
+    const previous = snapshot(current);
+    const version = ++operationVersion;
+    const operation = {
+      version,
+      desiredUnread,
+      pending: true,
+      promise: null,
+    };
+    operations.set(normalizedChatId, operation);
+
+    options.apply(normalizedChatId, {
+      ...previous,
+      is_unread: desiredUnread,
+      is_marked_unread: desiredUnread,
+      unread_message_id: desiredUnread ? previous.unread_message_id : null,
+    });
+
+    let requestResult;
+    try {
+      requestResult = options.request(normalizedChatId, desiredUnread);
+    } catch (error) {
+      requestResult = Promise.reject(error);
+    }
+
+    operation.promise = Promise.resolve(requestResult)
+      .then((canonical) => {
+        if (Number(canonical?.chat_id || 0) !== normalizedChatId) {
+          throw new Error('Read-state response chat ID mismatch');
+        }
+        const activeOperation = operations.get(normalizedChatId);
+        if (!activeOperation || activeOperation.version !== version) return canonical;
+        activeOperation.pending = false;
+        options.apply(normalizedChatId, canonical);
+        return canonical;
+      })
+      .catch((error) => {
+        const activeOperation = operations.get(normalizedChatId);
+        if (activeOperation?.version === version) {
+          activeOperation.pending = false;
+          options.apply(normalizedChatId, previous);
+        }
+        throw error;
+      });
+    return operation.promise;
+  }
+
+  return { captureRequestContext, reconcile, set };
+}
+
+function createChatPinStateController(options) {
+  const operations = new Map();
+  let operationVersion = 0;
+
+  function snapshot(chat) {
+    return {
+      is_pinned: Boolean(chat?.is_pinned),
+      pinned_at: chat?.pinned_at ?? null,
+    };
+  }
+
+  function captureRequestContext() {
+    return {
+      version: operationVersion,
+      pendingChatIds: new Set(
+        [...operations.entries()]
+          .filter(([, operation]) => operation.pending)
+          .map(([chatId]) => Number(chatId)),
+      ),
+    };
+  }
+
+  function reconcile(serverChat, context = {}) {
+    const chatId = Number(serverChat?.id ?? serverChat?.chat_id ?? 0);
+    if (!chatId) return serverChat;
+
+    const operation = operations.get(chatId);
+    const localChat = options.read(chatId);
+    if (!operation || !localChat) return serverChat;
+
+    const requestVersion = Number(context.version || 0);
+    const pendingAtStart = Boolean(context.pendingChatIds?.has?.(chatId));
+    if (operation.pending || operation.version > requestVersion || pendingAtStart) {
+      return { ...serverChat, ...snapshot(localChat) };
+    }
+    return serverChat;
+  }
+
+  function set(chatId, isPinned) {
+    const normalizedChatId = Number(chatId || 0);
+    const desiredPinned = Boolean(isPinned);
+    if (!normalizedChatId) return Promise.resolve(null);
+
+    const existingOperation = operations.get(normalizedChatId);
+    if (existingOperation?.pending) {
+      if (existingOperation.desiredPinned === desiredPinned) return existingOperation.promise;
+      return existingOperation.promise
+        .catch(() => null)
+        .then(() => set(normalizedChatId, desiredPinned));
+    }
+
+    const current = options.read(normalizedChatId);
+    if (!current) return Promise.resolve(null);
+    if (Boolean(current.is_pinned) === desiredPinned) return Promise.resolve(snapshot(current));
+
+    const previous = snapshot(current);
+    const version = ++operationVersion;
+    const operation = {
+      version,
+      desiredPinned,
+      pending: true,
+      promise: null,
+    };
+    operations.set(normalizedChatId, operation);
+
+    options.apply(normalizedChatId, {
+      is_pinned: desiredPinned,
+      pinned_at: desiredPinned ? (previous.pinned_at || new Date().toISOString()) : null,
+    });
+
+    let requestResult;
+    try {
+      requestResult = options.request(normalizedChatId, desiredPinned);
+    } catch (error) {
+      requestResult = Promise.reject(error);
+    }
+
+    operation.promise = Promise.resolve(requestResult)
+      .then((canonical) => {
+        if (Number(canonical?.chat_id || 0) !== normalizedChatId) {
+          throw new Error('Pin-state response chat ID mismatch');
+        }
+        const activeOperation = operations.get(normalizedChatId);
+        if (!activeOperation || activeOperation.version !== version) return canonical;
+        activeOperation.pending = false;
+        options.apply(normalizedChatId, canonical);
+        return canonical;
+      })
+      .catch((error) => {
+        const activeOperation = operations.get(normalizedChatId);
+        if (activeOperation?.version === version) {
+          activeOperation.pending = false;
+          options.apply(normalizedChatId, previous);
+        }
+        throw error;
+      });
+    return operation.promise;
+  }
+
+  return { captureRequestContext, reconcile, set };
+}
+
+function readChatReadStateModel(chatId) {
+  const normalizedChatId = Number(chatId || 0);
+  return (chats || []).find((chat) => Number(chat.id) === normalizedChatId)
+    || (Number(currentChat?.id) === normalizedChatId ? currentChat : null);
+}
+
+const chatReadStateController = createChatReadStateController({
+  request(chatId, isUnread) {
+    return api(`/api/chats/${chatId}/read-state`, {
+      method: 'PATCH',
+      body: JSON.stringify({ is_unread: Boolean(isUnread) }),
+    });
+  },
+  read: readChatReadStateModel,
+  apply: applyChatReadStateLocally,
+});
+
+const chatPinStateController = createChatPinStateController({
+  request(chatId, isPinned) {
+    return api(`/api/chats/${chatId}/pin-state`, {
+      method: 'PATCH',
+      body: JSON.stringify({ is_pinned: Boolean(isPinned) }),
+    });
+  },
+  read: readChatReadStateModel,
+  apply: applyChatPinStateLocally,
+});
+
 
 function mergeChatSummary(updated) {
   if (!updated || !updated.id) return;
@@ -848,17 +1103,6 @@ window.artiCrmRequestNotificationPermission = requestCrmNotificationPermission;
 window.artiCrmSubscribePushNotifications = subscribeCrmPushNotifications;
 
 
-function notificationTypeLabel(type) {
-  const labels = {
-    new_message: 'Сообщение',
-    assigned_chat: 'Ответственный',
-    new_task: 'Задача',
-    task_event: 'Задача',
-    event: 'Событие',
-  };
-  return labels[type] || 'Событие';
-}
-
 function updateNotificationsBadge() {
   const text = notificationsUnreadCount > 99 ? '99+' : String(notificationsUnreadCount || 0);
   ['notificationsBadge', 'mobileMoreBadge', 'mobileMoreNotificationsBadge'].forEach((id) => {
@@ -914,7 +1158,6 @@ function renderNotifications() {
     const title = escapeHtml(item.title || 'Уведомление');
     const body = escapeHtml(item.body || '');
     const time = escapeHtml(formatDateTime(item.created_at) || '');
-    const typeLabel = escapeHtml(notificationTypeLabel(item.type));
     const icon = item.task_id ? '✓' : '✉';
     return `
       <article class="notification-toast" data-notification-open="${item.id}" role="button" tabindex="0">
@@ -923,7 +1166,7 @@ function renderNotifications() {
           <span class="notification-toast-icon" aria-hidden="true">${icon}</span>
           <div class="notification-toast-meta">
             <strong class="notification-toast-title">${title}</strong>
-            <span class="notification-toast-subtitle">${typeLabel} · ${time}</span>
+            <span class="notification-toast-subtitle">${time}</span>
           </div>
         </div>
         ${body ? `<div class="notification-body">${body}</div>` : ''}
@@ -1214,71 +1457,121 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function isMarketplaceRateLimitError(err) {
-  const message = String(err?.detail || err?.message || err || '');
-  const status = Number(err?.status || 0);
-  return status === 420
-    || status === 429
-    || /(too many requests|rate limit|hit rate limit|parallel requests|method_failure|businessId|METHOD_FAILURE)/i.test(message);
+function createClientOperationId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `crm-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function friendlySendError(err) {
-  const message = String(err?.detail || err?.message || err || '');
-  if (isMarketplaceRateLimitError(err)) {
-    return 'Яндекс временно ограничил параллельные запросы. CRM уже сделала несколько повторных попыток, но лимит ещё не освободился. Подождите 10–20 секунд и отправьте снова.';
-  }
-  return message;
+const MESSAGE_OPERATION_STATUS_LABELS = Object.freeze({
+  pending: 'В очереди',
+  sending: 'Отправляется',
+  retry_wait: 'Ожидает повторной попытки',
+  accepted: 'Принято, ожидается подтверждение',
+  confirmed: 'Подтверждено',
+  uncertain: 'Результат отправки неизвестен',
+  permanent_failed: 'Отправка отклонена',
+});
+
+function messageOperationStatusLabel(status) {
+  return MESSAGE_OPERATION_STATUS_LABELS[String(status || '')] || 'Статус отправки неизвестен';
 }
 
-class SerialQueue {
-  constructor() {
-    this.tail = Promise.resolve();
-  }
-
-  enqueue(task) {
-    const run = this.tail.catch(() => {}).then(task);
-    this.tail = run.catch(() => {});
-    return run;
-  }
+async function getMessageSendOperation(chatId, operationId) {
+  const encodedId = encodeURIComponent(String(operationId));
+  const result = await api(`/api/chats/${chatId}/message-send-operations/${encodedId}`, { timeoutMs: 15000 });
+  return result?.operation || null;
 }
 
-const outboundMessageQueue = new SerialQueue();
-
-async function sendCurrentChatMessageRequest(chatId, { text, imageFiles }) {
-  if (imageFiles?.length) {
-    const formData = new FormData();
-    imageFiles.forEach((file) => formData.append('images', file));
-    formData.append('caption', text || '');
-    return apiForm(`/api/chats/${chatId}/attachments`, formData);
+async function waitForMessageSendOperation(chatId, operationId) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const operation = await getMessageSendOperation(chatId, operationId);
+    if (!operation) throw new Error('Операция отправки не найдена');
+    setStatus(messageOperationStatusLabel(operation.status));
+    if (['accepted', 'confirmed', 'uncertain', 'permanent_failed'].includes(operation.status)) {
+      return operation;
+    }
+    await sleep(750);
   }
-
-  return api(`/api/chats/${chatId}/messages`, {
-    method: 'POST',
-    body: JSON.stringify({ text, author: 'manager' }),
-  });
+  throw new Error('Операция сохранена, но подтверждение ещё не получено');
 }
 
-async function sendCurrentChatMessageWithRetry(chatId, payload) {
-  const retryDelays = [1200, 2200, 4000, 6500];
+async function sendChatTextOperation(chatId, { text, operationId, intentOrigin = 'message' }) {
+  let result;
+  try {
+    result = await api(`/api/chats/${chatId}/messages`, {
+      method: 'POST',
+      timeoutMs: 65000,
+      body: JSON.stringify({
+        text,
+        operation_id: operationId,
+        intent_origin: intentOrigin,
+      }),
+    });
+  } catch (err) {
+    if (Number(err?.status || 0) !== 0) throw err;
+    return waitForMessageSendOperation(chatId, operationId);
+  }
 
-  return outboundMessageQueue.enqueue(async () => {
-    for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
-      try {
-        return await sendCurrentChatMessageRequest(chatId, payload);
-      } catch (err) {
-        const canRetry = isMarketplaceRateLimitError(err) && attempt < retryDelays.length;
-        if (!canRetry) throw err;
+  let operation = result?.operation;
+  if (!operation) throw new Error('CRM не вернула durable operation');
+  if (['pending', 'sending', 'retry_wait'].includes(operation.status)) {
+    operation = await waitForMessageSendOperation(chatId, operationId);
+  }
+  return operation;
+}
 
-        const waitMs = retryDelays[attempt];
-        const seconds = Math.ceil(waitMs / 1000);
-        setStatus(`Яндекс ограничил параллельные запросы — повтор через ${seconds}с`);
-        suppressFrontendSyncUntil = Date.now() + waitMs + 3500;
-        await sleep(waitMs);
+async function uploadCurrentChatImages(chatId, imageFiles, operationId) {
+  const formData = new FormData();
+  imageFiles.forEach((file) => formData.append('images', file));
+  formData.append('operation_id', operationId);
+  return apiForm(`/api/chats/${chatId}/attachments`, formData);
+}
+
+function assertMessageOperationAllowsAttachmentUpload(operation) {
+  const status = String(operation?.status || '');
+  if (status === 'accepted' || status === 'confirmed') return;
+  const summary = operation?.error?.summary;
+  throw new Error(summary || messageOperationStatusLabel(status));
+}
+
+async function dispatchComposerCommands(
+  chatId,
+  {
+    text,
+    imageFiles,
+    messageOperationId,
+    attachmentOperationId,
+    areFilesAvailable,
+    onCaptionAcceptedForFiles,
+  },
+) {
+  const files = Array.isArray(imageFiles) ? imageFiles : [];
+  let messageOperation = null;
+
+  if (text) {
+    messageOperation = await sendChatTextOperation(chatId, {
+      text,
+      operationId: messageOperationId,
+      intentOrigin: imageFiles.length ? 'attachment_caption' : 'message',
+    });
+    if (files.length) {
+      assertMessageOperationAllowsAttachmentUpload(messageOperation);
+      if (typeof onCaptionAcceptedForFiles === 'function') {
+        onCaptionAcceptedForFiles(messageOperation);
       }
     }
+  }
 
-    return null;
-  });
+  if (files.length) {
+    const filesStillAvailable = typeof areFilesAvailable !== 'function'
+      || Boolean(areFilesAvailable(files));
+    if (!filesStillAvailable) {
+      return { messageOperation, filesUnavailable: true };
+    }
+    await uploadCurrentChatImages(chatId, files, attachmentOperationId);
+  }
+
+  return { messageOperation, filesUnavailable: false };
 }
 
 
@@ -1313,6 +1606,19 @@ function formatChatTime(value) {
     return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
   }
   return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+}
+
+function formatMessageTime(value) {
+  const d = parseDate(value);
+  if (!d) return '';
+  const time = d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  if (d.toDateString() === new Date().toDateString()) return time;
+  const date = d.toLocaleDateString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+  return `${date}, ${time}`;
 }
 
 
@@ -1538,6 +1844,15 @@ function hydrateAssigneeSelects() {
     standaloneTaskSelect.innerHTML = assigneeOptions(current, true);
     standaloneTaskSelect.value = current;
   }
+  const taskAssigneeFilter = $('taskAssigneeFilter');
+  if (taskAssigneeFilter) {
+    const current = taskAssigneeFilter.value || '';
+    taskAssigneeFilter.innerHTML = '<option value="">Ответственный</option>' + (assignees || []).map(user => {
+      const value = String(user.id);
+      return `<option value="${escapeHtml(value)}" ${value === current ? 'selected' : ''}>${escapeHtml(assigneeDisplay(user))}</option>`;
+    }).join('');
+    taskAssigneeFilter.value = current;
+  }
 }
 
 function assigneeNameFromTask(task) {
@@ -1617,7 +1932,11 @@ function bindTaskCardActions(item, options = {}) {
       }
       btn.disabled = true;
       try {
-        await patchTask(taskId, body, options);
+        if (action === 'save') {
+          await saveTaskChatEditor(taskId, body, card, options);
+        } else {
+          await patchTask(taskId, body, options);
+        }
       } catch (err) {
         notify('Не удалось обновить задачу', String(err.message || err));
       } finally {
@@ -1662,6 +1981,7 @@ async function loadChatSettings(options = {}) {
     (chatSettings.statuses || []).forEach(s => { nextNames[s.key] = s.title; });
     statusNames = { ...statusNames, ...nextNames };
     renderChatSettingsControls(options);
+    if (Array.isArray(taskTypes) && taskTypes.length) renderTaskTypeSettingsList();
   } catch (err) {
     console.warn('chat settings failed', err);
   }
@@ -1804,7 +2124,6 @@ async function loadTaskTypes(options = {}) {
     taskTypes = await api(`/api/task-types?include_inactive=${includeInactive ? 'true' : 'false'}`);
     renderTaskTypeSettingsList();
     hydrateTaskTypeSelects();
-    updateTaskTypeFilterOptions(Array.isArray(window.lastLoadedTasks) ? window.lastLoadedTasks : []);
     return taskTypes;
   } catch (err) {
     console.warn('task types failed', err);
@@ -1815,6 +2134,20 @@ async function loadTaskTypes(options = {}) {
 
 function taskTypeStatusLabel(type) {
   return (type?.is_active === false || type?.is_active === 0) ? 'скрыт' : 'активен';
+}
+
+function taskTypeChatStatusOptions(selectedId = '') {
+  const selected = selectedId ? String(selectedId) : '';
+  const statuses = activeChatStatuses(true);
+  const options = statuses.map(status => {
+    const value = String(status.id || '');
+    return `<option value="${escapeHtml(value)}" ${value === selected ? 'selected' : ''}>${escapeHtml(status.title || status.key || 'Статус')}</option>`;
+  });
+  if (selected && !statuses.some(status => String(status.id || '') === selected)) {
+    const unavailable = (chatSettings.statuses || []).find(status => String(status.id || '') === selected);
+    options.unshift(`<option value="${escapeHtml(selected)}" selected disabled>${escapeHtml(unavailable?.title || 'Недоступный статус')}</option>`);
+  }
+  return `<option value="">Не менять статус чата</option>${options.join('')}`;
 }
 
 function activeTaskTypesList() {
@@ -1864,6 +2197,7 @@ function hydrateTaskTypeSelects() {
 
   hydrateSingleTaskTypeSelect($('taskTypeSelect'), updateTaskCreateCommentLabel);
   hydrateSingleTaskTypeSelect($('taskStandaloneType'), updateStandaloneTaskCreateCommentLabel);
+  hydrateSingleTaskTypeSelect($('taskTypeFilter'));
 
   document.querySelectorAll('[data-task-type]').forEach(typeSelect => {
     const current = typeSelect.value || typeSelect.dataset.currentTaskType || '';
@@ -1948,11 +2282,18 @@ async function submitStandaloneTaskCreate(event) {
 function renderTaskTypeSettingsList() {
   const list = $('taskTypesSettingsList');
   if (!list) return;
+  const createStatusSelect = $('taskTypeChatStatus');
+  if (createStatusSelect) {
+    const selected = createStatusSelect.value || '';
+    createStatusSelect.innerHTML = taskTypeChatStatusOptions(selected);
+    createStatusSelect.value = selected;
+  }
   const rows = Array.isArray(taskTypes) ? taskTypes : [];
   list.innerHTML = rows.length ? rows.map(type => `
     <article class="task-type-settings-row" data-task-type-id="${escapeHtml(type.id)}">
       <input class="task-type-title-input" data-task-type-title value="${escapeHtml(type.title || type.name || '')}" aria-label="Название типа задачи" />
       <input class="task-type-label-input" data-task-type-label value="${escapeHtml(type.comment_label || type.field_label || 'Комментарий')}" aria-label="Название поля комментария" />
+      <select class="task-type-chat-status-select" data-task-type-chat-status aria-label="Статус чата для типа задачи">${taskTypeChatStatusOptions(type.chat_status_id)}</select>
       <input class="task-type-sort-input" data-task-type-sort type="number" value="${Number(type.sort_order || 0)}" aria-label="Порядок" />
       <label class="task-type-active-toggle">
         <input data-task-type-active type="checkbox" ${(type.is_active === false || type.is_active === 0) ? '' : 'checked'} />
@@ -1970,6 +2311,7 @@ async function submitTaskTypeCreate(event) {
   event?.preventDefault?.();
   const titleInput = $('taskTypeTitle');
   const labelInput = $('taskTypeCommentLabel');
+  const chatStatusSelect = $('taskTypeChatStatus');
   const sortInput = $('taskTypeSort');
   const title = titleInput?.value?.trim() || '';
   const commentLabel = labelInput?.value?.trim() || 'Комментарий';
@@ -1986,12 +2328,14 @@ async function submitTaskTypeCreate(event) {
       body: JSON.stringify({
         title,
         comment_label: commentLabel,
+        chat_status_id: chatStatusSelect?.value ? Number(chatStatusSelect.value) : null,
         sort_order: Number(sortInput?.value || 0),
         is_active: true,
       }),
     });
     if (titleInput) titleInput.value = '';
     if (labelInput) labelInput.value = 'Комментарий';
+    if (chatStatusSelect) chatStatusSelect.value = '';
     if (sortInput) sortInput.value = '0';
     await loadTaskTypes({ silent: true });
     notify('Тип задачи', 'Тип задачи добавлен.');
@@ -2017,6 +2361,9 @@ async function saveTaskTypeRow(row) {
     body: JSON.stringify({
       title,
       comment_label: commentLabel,
+      chat_status_id: row.querySelector('[data-task-type-chat-status]')?.value
+        ? Number(row.querySelector('[data-task-type-chat-status]').value)
+        : null,
       sort_order: Number(row.querySelector('[data-task-type-sort]')?.value || 0),
       is_active: Boolean(row.querySelector('[data-task-type-active]')?.checked),
     }),
@@ -2518,6 +2865,7 @@ function updateChatSearchUi() {
   toggle?.classList.toggle('active', Boolean(query));
   toggle?.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
   clearBtn?.classList.toggle('hidden', !query);
+  box?.closest('.filters')?.classList.toggle('chat-search-open', isOpen);
 }
 
 function setChatSearchOpen(open = true) {
@@ -2525,6 +2873,13 @@ function setChatSearchOpen(open = true) {
   const input = $('chatSearchInput');
   if (!box) return;
 
+  if (open) {
+    setDateRangePopover(false, {
+      popoverId: 'chatDateFilterPopover',
+      buttonId: 'chatDateFilterBtn',
+      focusInputId: 'chatDateFilterFromInput',
+    });
+  }
   box.classList.toggle('hidden', !open);
   updateChatSearchUi();
 
@@ -2536,9 +2891,10 @@ function setChatSearchOpen(open = true) {
   }
 }
 
-function resetChatListMobileLimit() {
-  chatListMobileRenderLimit = CHAT_LIST_MOBILE_INITIAL_LIMIT;
+function resetChatListFeed() {
   chatListLastRenderKey = '';
+  chatListNextOffset = 0;
+  chatListHasMore = false;
 }
 
 function currentChatListRenderKey() {
@@ -2546,14 +2902,23 @@ function currentChatListRenderKey() {
   const status = $('statusFilter')?.value || '';
   const funnel = $('funnelFilter')?.value || '';
   const search = currentChatMessageSearch();
-  return [chatScope, chatOwnerScope, marketplace, status, funnel, search].join('|');
+  return [
+    chatScope,
+    chatOwnerScope,
+    marketplace,
+    status,
+    funnel,
+    search,
+    currentChatListDateFrom,
+    currentChatListDateTo,
+  ].join('|');
 }
 
 function scheduleChatMessageSearch() {
   clearTimeout(chatSearchTimer);
   chatSearchTimer = window.setTimeout(() => {
     chatMessageSearch = currentChatMessageSearch();
-    resetChatListMobileLimit();
+    resetChatListFeed();
     updateChatSearchUi();
     loadChats({ withStats: false }).catch(err => notify('Поиск по сообщениям', String(err.message || err)));
   }, 260);
@@ -2564,57 +2929,140 @@ function clearChatMessageSearch() {
   chatMessageSearch = '';
   const input = $('chatSearchInput');
   if (input) input.value = '';
-  resetChatListMobileLimit();
-  updateChatSearchUi();
+  resetChatListFeed();
+  setChatSearchOpen(false);
   loadChats({ withStats: false }).catch(err => notify('Поиск по сообщениям', String(err.message || err)));
-  input?.focus();
+}
+
+function chatListIsNearEnd(list) {
+  if (!list || list.clientHeight <= 0) return false;
+  return list.scrollHeight - list.scrollTop - list.clientHeight <= CHAT_LIST_LOAD_THRESHOLD_PX;
+}
+
+function scheduleChatListInfiniteLoad() {
+  if (chatListScrollFrame) return;
+  chatListScrollFrame = window.requestAnimationFrame(() => {
+    chatListScrollFrame = 0;
+    const list = $('chatList');
+    if (
+      !list
+      || activeView !== 'chats'
+      || isMobileChatOpen()
+      || chatListBatchLoading
+      || !chatListHasMore
+      || !chatListIsNearEnd(list)
+    ) {
+      return;
+    }
+    loadMoreChats().catch(err => notify('Список чатов', String(err.message || err)));
+  });
 }
 
 function bindChatListInfiniteScroll() {
   const list = $('chatList');
   if (!list || chatListInfiniteScrollBound) return;
   chatListInfiniteScrollBound = true;
-
-  list.addEventListener('scroll', () => {
-    if (!isMobileChatLayout() || isMobileChatOpen()) return;
-    if (!chats || !chats.length) return;
-
-    const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 220;
-    if (!nearBottom) return;
-
-    const visibleChats = (chats || []).filter(chat => chatScope === 'archive' || !isClosedWorkflowStatus(chat.status, chat.status_label));
-    if (chatListMobileRenderLimit >= visibleChats.length) return;
-
-    const previousScrollTop = list.scrollTop;
-    chatListMobileRenderLimit = Math.min(chatListMobileRenderLimit + CHAT_LIST_MOBILE_PAGE_SIZE, visibleChats.length);
-    renderChatList({ force: true, preserveScrollTop: previousScrollTop });
-  }, { passive: true });
+  list.addEventListener('click', handleChatListClick);
+  list.addEventListener('keydown', handleChatListKeydown);
+  list.addEventListener('scroll', scheduleChatListInfiniteLoad, { passive: true });
 }
 
-function renderLoadedChats() {
-  const chatCountLabel = $('chatCountLabel');
-  if (chatCountLabel) chatCountLabel.textContent = String((chats || []).length);
-  renderChatList();
+function renderLoadedChats(options = {}) {
+  updateChatCountLabel();
+  renderChatList({ preserveScrollTop: options.preserveScrollTop ?? null });
+  renderChatListLoadState();
   renderScopeTabs();
   updateChatSearchUi();
+  window.requestAnimationFrame(scheduleChatListInfiniteLoad);
+}
+
+function renderChatListLoadState() {
+  const state = $('chatListLoadState');
+  const label = $('chatListLoadLabel');
+  const list = $('chatList');
+  const visible = chatListBatchLoading && (chatListLoadingMode === 'append' || !(chats || []).length);
+  state?.classList.toggle('hidden', !visible);
+  if (label) label.textContent = visible ? 'Загружаем ещё диалоги…' : '';
+  list?.setAttribute('aria-busy', chatListBatchLoading ? 'true' : 'false');
+}
+
+function mergeChatListBatch(currentItems, incomingItems, mode = 'replace') {
+  const current = Array.isArray(currentItems) ? currentItems : [];
+  const incoming = Array.isArray(incomingItems) ? incomingItems : [];
+  if (mode === 'replace') return [...incoming];
+
+  if (mode === 'refresh') {
+    const incomingIds = new Set(incoming.map(item => Number(item?.id || 0)));
+    return [
+      ...incoming,
+      ...current.filter(item => !incomingIds.has(Number(item?.id || 0))),
+    ];
+  }
+
+  const seen = new Set(current.map(item => Number(item?.id || 0)));
+  const appended = incoming.filter((item) => {
+    const id = Number(item?.id || 0);
+    if (!id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+  return [...current, ...appended];
+}
+
+async function loadMoreChats() {
+  if (chatListBatchLoading || !chatListHasMore || activeView !== 'chats' || isMobileChatOpen()) {
+    return chats;
+  }
+  return loadChats({ withStats: false, append: true });
 }
 
 async function loadChats(options = {}) {
-  const { withStats = true, render = true } = options;
+  const { withStats = true, render = true, append = false } = options;
+  const requestedRenderKey = currentChatListRenderKey();
+  const requestedNextOffset = chatListNextOffset;
 
-  // v48: background alert polling can call loadChats({ render:false }).
-  // If the operator opens Chats while that request is still running, the old
-  // shared promise returned without rendering, so mobile/desktop looked like
-  // "nothing loads" until the next timer. Always render for visible callers
-  // after the shared promise resolves.
+  // Keep one chat-list request in flight. A scroll event that fires while its
+  // own batch is already loading is considered fulfilled when that request
+  // advances the offset; a filter change retries after the stale request ends.
   if (chatsLoadPromise) {
     const existing = await chatsLoadPromise;
+    if (requestedRenderKey !== chatListLastRenderKey) {
+      return loadChats({ ...options, append: false });
+    }
+    if (append && requestedNextOffset === chatListNextOffset && chatListHasMore) {
+      return loadChats(options);
+    }
     if (render) renderLoadedChats();
     if (withStats) await loadStats();
     return existing;
   }
 
+  const renderKey = currentChatListRenderKey();
+  const queryChanged = renderKey !== chatListLastRenderKey;
+  const requestMode = append && !queryChanged
+    ? 'append'
+    : (!queryChanged && (chats || []).length ? 'refresh' : 'replace');
+
+  if (queryChanged) {
+    chatListLastRenderKey = renderKey;
+    chatListNextOffset = 0;
+    chatListHasMore = false;
+  }
+
+  const list = $('chatList');
+  const preserveScrollTop = requestMode === 'replace' ? null : Number(list?.scrollTop || 0);
+  const previousLoadedCount = (chats || []).length;
+  const previousNextOffset = chatListNextOffset;
+  const requestOffset = requestMode === 'append' ? chatListNextOffset : 0;
+  const requestLimit = requestMode === 'refresh'
+    ? Math.min(Math.max(previousLoadedCount, CHAT_LIST_BATCH_SIZE), 200)
+    : CHAT_LIST_BATCH_SIZE;
+
   chatsLoadPromise = (async () => {
+    chatListBatchLoading = true;
+    chatListLoadingMode = requestMode;
+    renderChatListLoadState();
+
     const params = new URLSearchParams();
     const marketplaceEl = $('marketplaceFilter');
     const statusEl = $('statusFilter');
@@ -2624,11 +3072,7 @@ async function loadChats(options = {}) {
     const funnelId = funnelEl ? funnelEl.value : '';
     const searchQuery = currentChatMessageSearch();
     chatMessageSearch = searchQuery;
-    const renderKey = currentChatListRenderKey();
-    if (renderKey !== chatListLastRenderKey) {
-      resetChatListMobileLimit();
-      chatListLastRenderKey = renderKey;
-    }
+
     if (marketplace) params.set('marketplace', marketplace);
     if (chatScope === 'archive') {
       params.set('archived', 'true');
@@ -2639,19 +3083,74 @@ async function loadChats(options = {}) {
     }
 
     if (searchQuery.length >= 2) params.set('q', searchQuery);
+    if (currentChatListDateFrom && currentChatListDateTo) {
+      params.set('date_from', currentChatListDateFrom);
+      params.set('date_to', currentChatListDateTo);
+      params.set('timezone_offset_minutes', String(new Date().getTimezoneOffset()));
+    }
+    params.set('paginated', 'true');
+    params.set('limit', String(requestLimit));
+    params.set('offset', String(requestOffset));
 
-    chats = await api(`/api/chats?${params.toString()}`, { timeoutMs: 15000 });
-    trackChatMessageSounds(chats || []);
+    const readStateRequestContext = chatReadStateController.captureRequestContext();
+    const pinStateRequestContext = chatPinStateController.captureRequestContext();
+    const page = await api(`/api/chats?${params.toString()}`, { timeoutMs: 15000 });
 
-    if (render) renderLoadedChats();
+    // A response for a filter/search that is no longer active must not replace
+    // the current list. The waiting caller will retry with the current key.
+    if (currentChatListRenderKey() !== renderKey) return chats;
+
+    const rawServerChats = Array.isArray(page) ? page : (page?.items || []);
+    const serverChats = rawServerChats.map((chat) => chatPinStateController.reconcile(
+      chatReadStateController.reconcile(chat, readStateRequestContext),
+      pinStateRequestContext,
+    ));
+    chatListTotal = Number(Array.isArray(page) ? serverChats.length : (page?.total || 0));
+    chatListUnreadTotal = Number(Array.isArray(page)
+      ? serverChats.filter(chat => chat?.is_unread).length
+      : (page?.unread_total || 0));
+
+    const serverNextOffset = Number(
+      Array.isArray(page)
+        ? serverChats.length
+        : (page?.next_offset ?? (requestOffset + serverChats.length)),
+    );
+
+    if (requestMode === 'append') {
+      chats = mergeChatListBatch(chats, serverChats, 'append');
+      chatListNextOffset = Math.min(chatListTotal, serverNextOffset);
+    } else if (requestMode === 'refresh') {
+      const refreshed = mergeChatListBatch(chats, serverChats, 'refresh');
+      const targetCount = Math.min(previousLoadedCount, chatListTotal);
+      chats = refreshed.slice(0, targetCount);
+      chatListNextOffset = Math.min(
+        chatListTotal,
+        Math.max(previousNextOffset, serverNextOffset),
+      );
+    } else {
+      chats = mergeChatListBatch([], serverChats, 'replace');
+      chatListNextOffset = Math.min(chatListTotal, serverNextOffset);
+    }
+
+    chatListHasMore = Array.isArray(page)
+      ? false
+      : Boolean(page?.has_more) && chatListNextOffset < chatListTotal;
+    trackChatMessageSounds(serverChats || []);
+
+    if (render) renderLoadedChats({ preserveScrollTop });
 
     if (withStats) await loadStats();
     return chats;
   })();
+
   try {
     return await chatsLoadPromise;
   } finally {
     chatsLoadPromise = null;
+    chatListBatchLoading = false;
+    chatListLoadingMode = '';
+    renderChatListLoadState();
+    window.requestAnimationFrame(scheduleChatListInfiniteLoad);
   }
 }
 
@@ -2783,6 +3282,151 @@ function getChatSummaryById(chatId) {
   return (chats || []).find((chat) => Number(chat.id) === id) || null;
 }
 
+function updateChatCountLabel() {
+  const counter = $('chatCountLabel');
+  if (!counter) return;
+  const total = Number(chatListTotal || (chats || []).length);
+  const unread = Number(chatListUnreadTotal || 0);
+  counter.textContent = unread > 0 ? `${unread} / ${total}` : String(total);
+  counter.dataset.unreadCount = String(unread);
+  counter.title = `\u041d\u0435\u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043e: ${unread} \u00b7 \u0412\u0441\u0435\u0433\u043e: ${total}`;
+  counter.setAttribute('aria-label', counter.title);
+}
+
+function paintChatRowReadState(item, chat) {
+  if (!item || !chat) return;
+  const isUnread = Boolean(chat.is_unread);
+  item.classList.toggle('is-unread', isUnread);
+  item.dataset.unread = isUnread ? '1' : '0';
+
+  const control = item.querySelector('[data-chat-read-state]');
+  if (!control) return;
+  control.tabIndex = isUnread ? -1 : 0;
+  control.setAttribute('aria-label', isUnread ? '\u041d\u0435\u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043d\u044b\u0439 \u0447\u0430\u0442' : '\u041e\u0442\u043c\u0435\u0442\u0438\u0442\u044c \u0447\u0430\u0442 \u043d\u0435\u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043d\u044b\u043c');
+  control.setAttribute('aria-pressed', isUnread ? 'true' : 'false');
+  control.title = isUnread ? '\u041d\u0435\u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043d\u044b\u0439 \u0447\u0430\u0442' : '\u041e\u0442\u043c\u0435\u0442\u0438\u0442\u044c \u043d\u0435\u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043d\u044b\u043c';
+}
+
+function updateChatRowReadState(chatId) {
+  const normalizedChatId = Number(chatId || 0);
+  const list = $('chatList');
+  const chat = readChatReadStateModel(normalizedChatId);
+  if (!list || !chat || !normalizedChatId) return;
+  const item = list.querySelector(`[data-chat-id="${normalizedChatId}"]`);
+  paintChatRowReadState(item, chat);
+}
+
+function applyChatReadStateLocally(chatId, state) {
+  const normalizedChatId = Number(chatId || 0);
+  if (!normalizedChatId || !state) return;
+
+  const previous = (chats || []).find((chat) => Number(chat.id) === normalizedChatId);
+  const previousUnread = Boolean(previous?.is_unread);
+  const nextUnread = Boolean(state.is_unread);
+  if (previous && previousUnread !== nextUnread) {
+    chatListUnreadTotal = Math.max(0, chatListUnreadTotal + (nextUnread ? 1 : -1));
+  }
+
+  chats = (chats || []).map((chat) => (
+    Number(chat.id) === normalizedChatId ? { ...chat, ...state } : chat
+  ));
+  if (Number(currentChat?.id) === normalizedChatId) {
+    currentChat = { ...currentChat, ...state };
+  }
+  updateChatRowReadState(normalizedChatId);
+  updateChatCountLabel();
+}
+
+function chatListActivityValue(chat) {
+  const parsed = Date.parse(chat?.last_message_at || chat?.updated_at || chat?.created_at || '');
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function sortLoadedChatsByPinAndActivity() {
+  chats = [...(chats || [])].sort((left, right) => {
+    const pinDelta = Number(Boolean(right?.is_pinned)) - Number(Boolean(left?.is_pinned));
+    if (pinDelta) return pinDelta;
+    const activityDelta = chatListActivityValue(right) - chatListActivityValue(left);
+    if (activityDelta) return activityDelta;
+    return Number(right?.id || 0) - Number(left?.id || 0);
+  });
+}
+
+function applyChatPinStateLocally(chatId, state) {
+  const normalizedChatId = Number(chatId || 0);
+  if (!normalizedChatId || !state) return;
+
+  chats = (chats || []).map((chat) => (
+    Number(chat.id) === normalizedChatId ? { ...chat, ...state } : chat
+  ));
+  if (Number(currentChat?.id) === normalizedChatId) {
+    currentChat = { ...currentChat, ...state };
+  }
+  sortLoadedChatsByPinAndActivity();
+  renderChatList({ force: true });
+  renderChatListLoadState();
+}
+
+function markChatReadOnOpen(chatId) {
+  const chat = readChatReadStateModel(chatId);
+  if (!chat?.is_unread) return Promise.resolve(null);
+  return chatReadStateController.set(chatId, false).catch((error) => {
+    notify('\u0421\u0442\u0430\u0442\u0443\u0441 \u0447\u0430\u0442\u0430', `\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0442\u043c\u0435\u0442\u0438\u0442\u044c \u0447\u0430\u0442 \u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043d\u044b\u043c: ${String(error.message || error)}`);
+    return null;
+  });
+}
+
+function handleChatListClick(event) {
+  const list = $('chatList');
+  const target = event.target;
+  const item = target?.closest?.('.chat-item[data-chat-id]');
+  if (!list || !item || !list.contains(item)) return;
+
+  const chatId = Number(item.dataset.chatId || 0);
+  if (!chatId) return;
+
+  const pinStateControl = target.closest?.('[data-chat-pin-state]');
+  if (pinStateControl) {
+    event.preventDefault();
+    event.stopPropagation();
+    const chat = readChatReadStateModel(chatId);
+    const desiredPinned = !Boolean(chat?.is_pinned);
+    chatPinStateController.set(chatId, desiredPinned)
+      .then(() => {
+        return loadChats({ withStats: false });
+      })
+      .catch((error) => {
+        notify('Закрепление чата', `Не удалось изменить закрепление: ${String(error.message || error)}`);
+      });
+    return;
+  }
+
+  const readStateControl = target.closest?.('[data-chat-read-state]');
+  if (readStateControl) {
+    event.preventDefault();
+    event.stopPropagation();
+    const chat = readChatReadStateModel(chatId);
+    if (chat?.is_unread) {
+      openChat(chatId);
+      return;
+    }
+    chatReadStateController.set(chatId, true).catch((error) => {
+      notify('\u0421\u0442\u0430\u0442\u0443\u0441 \u0447\u0430\u0442\u0430', `\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0442\u043c\u0435\u0442\u0438\u0442\u044c \u0447\u0430\u0442 \u043d\u0435\u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043d\u044b\u043c: ${String(error.message || error)}`);
+    });
+    return;
+  }
+
+  openChat(chatId);
+}
+
+function handleChatListKeydown(event) {
+  if (!['Enter', ' '].includes(event.key)) return;
+  const item = event.target?.closest?.('.chat-item[data-chat-id]');
+  if (!item || event.target !== item) return;
+  event.preventDefault();
+  openChat(Number(item.dataset.chatId || 0));
+}
+
 function paintChatHeader(chat, options = {}) {
   if (!chat) return;
 
@@ -2844,10 +3488,203 @@ async function refreshChatListOnly(options = {}) {
   }
 }
 
+function normalizeDateRangeValue(value) {
+  const normalized = String(value || '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : '';
+}
+
+function formatDateRangeValue(value) {
+  return String(value || '').split('-').reverse().join('.');
+}
+
+function validateDateRangeValues(fromValue, toValue) {
+  const normalizedFrom = normalizeDateRangeValue(fromValue);
+  const normalizedTo = normalizeDateRangeValue(toValue);
+  if (!normalizedFrom || !normalizedTo) {
+    throw new Error('Укажите обе даты: «с» и «по».');
+  }
+  if (normalizedFrom > normalizedTo) {
+    throw new Error('Дата «с» не может быть позже даты «по».');
+  }
+  return [normalizedFrom, normalizedTo];
+}
+
+function dateRangeLabel(fromValue, toValue) {
+  if (!fromValue || !toValue) return '';
+  const fromLabel = formatDateRangeValue(fromValue);
+  const toLabel = formatDateRangeValue(toValue);
+  return fromValue === toValue ? fromLabel : `${fromLabel} — ${toLabel}`;
+}
+
+function syncDateRangeDraftBounds(fromInputId, toInputId) {
+  const fromInput = $(fromInputId);
+  const toInput = $(toInputId);
+  if (!fromInput || !toInput) return;
+  fromInput.max = toInput.value || '';
+  toInput.min = fromInput.value || '';
+}
+
+function setDateRangePopover(open, { popoverId, buttonId, focusInputId }) {
+  const popover = $(popoverId);
+  const button = $(buttonId);
+  if (!popover || !button) return;
+  document.querySelectorAll('.date-range-filter-popover').forEach((candidate) => {
+    if (candidate !== popover) candidate.classList.add('hidden');
+  });
+  document.querySelectorAll('.date-range-filter-btn[aria-expanded="true"]').forEach((candidate) => {
+    if (candidate !== button) candidate.setAttribute('aria-expanded', 'false');
+  });
+  popover.classList.toggle('hidden', !open);
+  button.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (open) $(focusInputId)?.focus();
+}
+
+function syncChatDateFilterUi() {
+  const fromInput = $('chatDateFilterFromInput');
+  const toInput = $('chatDateFilterToInput');
+  const button = $('chatDateFilterBtn');
+  if (fromInput && fromInput.value !== currentChatListDateFrom) fromInput.value = currentChatListDateFrom;
+  if (toInput && toInput.value !== currentChatListDateTo) toInput.value = currentChatListDateTo;
+  syncDateRangeDraftBounds('chatDateFilterFromInput', 'chatDateFilterToInput');
+  if (button) {
+    const active = Boolean(currentChatListDateFrom && currentChatListDateTo);
+    button.classList.toggle('is-active', active);
+    button.title = active
+      ? `Чаты за период ${dateRangeLabel(currentChatListDateFrom, currentChatListDateTo)}`
+      : 'Фильтр чатов по дате последнего сообщения';
+  }
+}
+
+async function applyChatDateFilter(fromValue, toValue) {
+  const [normalizedFrom, normalizedTo] = validateDateRangeValues(fromValue, toValue);
+  if (normalizedFrom === currentChatListDateFrom && normalizedTo === currentChatListDateTo) {
+    setDateRangePopover(false, {
+      popoverId: 'chatDateFilterPopover',
+      buttonId: 'chatDateFilterBtn',
+      focusInputId: 'chatDateFilterFromInput',
+    });
+    return;
+  }
+  currentChatListDateFrom = normalizedFrom;
+  currentChatListDateTo = normalizedTo;
+  resetChatListFeed();
+  syncChatDateFilterUi();
+  setDateRangePopover(false, {
+    popoverId: 'chatDateFilterPopover',
+    buttonId: 'chatDateFilterBtn',
+    focusInputId: 'chatDateFilterFromInput',
+  });
+  await loadChats({ withStats: false });
+}
+
+async function clearChatDateFilter() {
+  currentChatListDateFrom = '';
+  currentChatListDateTo = '';
+  resetChatListFeed();
+  syncChatDateFilterUi();
+  setDateRangePopover(false, {
+    popoverId: 'chatDateFilterPopover',
+    buttonId: 'chatDateFilterBtn',
+    focusInputId: 'chatDateFilterFromInput',
+  });
+  await loadChats({ withStats: false });
+}
+
+function syncTaskDueDateFilterUi() {
+  const fromInput = $('taskDueDateFromFilter');
+  const toInput = $('taskDueDateToFilter');
+  const button = $('taskDueDateFilterBtn');
+  if (fromInput && fromInput.value !== currentTaskDueDateFrom) fromInput.value = currentTaskDueDateFrom;
+  if (toInput && toInput.value !== currentTaskDueDateTo) toInput.value = currentTaskDueDateTo;
+  syncDateRangeDraftBounds('taskDueDateFromFilter', 'taskDueDateToFilter');
+  if (button) {
+    const active = Boolean(currentTaskDueDateFrom && currentTaskDueDateTo);
+    button.classList.toggle('is-active', active);
+    button.title = active
+      ? `Задачи за период ${dateRangeLabel(currentTaskDueDateFrom, currentTaskDueDateTo)}`
+      : 'Фильтр задач по диапазону дат';
+  }
+}
+
+async function applyTaskDueDateFilter(fromValue, toValue) {
+  const [normalizedFrom, normalizedTo] = validateDateRangeValues(fromValue, toValue);
+  currentTaskDueDateFrom = normalizedFrom;
+  currentTaskDueDateTo = normalizedTo;
+  syncTaskDueDateFilterUi();
+  setDateRangePopover(false, {
+    popoverId: 'taskDueDateFilterPopover',
+    buttonId: 'taskDueDateFilterBtn',
+    focusInputId: 'taskDueDateFromFilter',
+  });
+  await loadAllTasks();
+}
+
+async function clearTaskDueDateFilter() {
+  currentTaskDueDateFrom = '';
+  currentTaskDueDateTo = '';
+  syncTaskDueDateFilterUi();
+  setDateRangePopover(false, {
+    popoverId: 'taskDueDateFilterPopover',
+    buttonId: 'taskDueDateFilterBtn',
+    focusInputId: 'taskDueDateFromFilter',
+  });
+  await loadAllTasks();
+}
+
+function chatMessagesRequestUrl(chatId, messagesLimit) {
+  const params = new URLSearchParams();
+  params.set('messages_limit', String(messagesLimit));
+  return `/api/chats/${Number(chatId)}?${params.toString()}`;
+}
+
 function chatMessagesSignature(messages) {
   return (messages || [])
-    .map((message) => `${message.id || ''}:${message.direction || ''}:${message.created_at || ''}:${message.updated_at || ''}:${String(message.text || '').length}`)
+    .map((message) => `${message.id || ''}:${message.direction || ''}:${message.created_at || ''}:${message.updated_at || ''}:${message._send_operation_status || ''}:${String(message.text || '').length}`)
     .join('|');
+}
+
+function mergeMessagesWithSendOperations(messages, operations) {
+  const canonicalMessages = Array.isArray(messages) ? messages.slice() : [];
+  const canonicalOperationIds = new Set(
+    canonicalMessages
+      .map((message) => String(message?.client_operation_id || '').trim())
+      .filter(Boolean),
+  );
+  const transient = (Array.isArray(operations) ? operations : [])
+    .filter((operation) => {
+      if (operation?.canonical_message_id) return false;
+      if (String(operation?.status || '') === 'confirmed') return false;
+      return !canonicalOperationIds.has(String(operation?.client_operation_id || '').trim());
+    })
+    .map((operation) => ({
+      id: `send-operation:${operation.id}`,
+      direction: 'outbound',
+      text: String(operation.text || ''),
+      author: String(operation.author_label || 'manager'),
+      created_at: operation.requested_at,
+      is_crm_sent: true,
+      crm_author_label: String(operation.author_label || ''),
+      client_operation_id: String(operation.client_operation_id || ''),
+      raw: {},
+      _send_operation_status: String(operation.status || ''),
+      _send_operation_error: operation.error || null,
+    }));
+  return [...canonicalMessages, ...transient].sort((left, right) => {
+    const timeDelta = messageTimestampMs(left) - messageTimestampMs(right);
+    if (timeDelta) return timeDelta;
+    return String(left.id || '').localeCompare(String(right.id || ''));
+  });
+}
+
+async function loadChatWithMessageSendOperations(chatId, messagesLimit, options = {}) {
+  const [chat, operationResult] = await Promise.all([
+    api(chatMessagesRequestUrl(chatId, messagesLimit), options),
+    api(`/api/chats/${Number(chatId)}/message-send-operations`, options),
+  ]);
+  return {
+    ...chat,
+    messages: mergeMessagesWithSendOperations(chat?.messages || [], operationResult?.operations || []),
+  };
 }
 
 function shouldKeepMessagesAtBottom(box) {
@@ -2877,7 +3714,14 @@ async function refreshCurrentChatMessagesOnly(options = {}) {
   const messagesLimit = mobileLayout ? 35 : 120;
 
   try {
-    const chat = await api(`/api/chats/${chatId}?messages_limit=${messagesLimit}`, { timeoutMs: 15000 });
+    const readStateRequestContext = chatReadStateController.captureRequestContext();
+    const pinStateRequestContext = chatPinStateController.captureRequestContext();
+    const serverChat = await loadChatWithMessageSendOperations(chatId, messagesLimit, { timeoutMs: 15000 });
+    if (Number(serverChat?.id || 0) !== chatId) return null;
+    const chat = chatPinStateController.reconcile(
+      chatReadStateController.reconcile(serverChat, readStateRequestContext),
+      pinStateRequestContext,
+    );
 
     if (Number(currentChatId) !== chatId) return null;
 
@@ -2917,8 +3761,7 @@ function renderChatList(options = {}) {
   if (!list) return;
   bindChatListInfiniteScroll();
 
-  const chatCountLabel = $('chatCountLabel');
-  if (chatCountLabel) chatCountLabel.textContent = String((chats || []).length);
+  updateChatCountLabel();
 
   // Critical mobile performance fix:
   // while the fullscreen dialog is open the list is not visible. Rendering it
@@ -2938,19 +3781,16 @@ function renderChatList(options = {}) {
   }
 
   const visibleChats = (chats || []).filter(chat => chatScope === 'archive' || !isClosedWorkflowStatus(chat.status, chat.status_label));
-  const mobileListVisible = isMobileChatLayout() && !isMobileChatOpen();
-
-  // Large DOM lists are very expensive on mobile Safari. Render the newest
-  // portion first, then append the rest in chunks when the operator scrolls down.
-  const renderLimit = mobileListVisible ? Math.min(chatListMobileRenderLimit, visibleChats.length) : visibleChats.length;
-  const chatsToRender = visibleChats.slice(0, renderLimit);
+  const chatsToRender = visibleChats;
 
   const fragment = document.createDocumentFragment();
   for (const chat of chatsToRender) {
     const item = document.createElement('div');
     const showWaitingMarker = shouldShowWaitingMarker(chat);
-    item.className = `chat-item ${chat.id === currentChatId ? 'active' : ''} ${showWaitingMarker ? 'needs-response' : ''}`;
-    item.onclick = () => openChat(chat.id);
+    item.className = `chat-item ${chat.id === currentChatId ? 'active' : ''} ${showWaitingMarker ? 'needs-response' : ''} ${chat.is_unread ? 'is-unread' : ''} ${chat.is_pinned ? 'is-pinned' : ''}`;
+    item.dataset.chatId = String(chat.id);
+    item.dataset.unread = chat.is_unread ? '1' : '0';
+    item.dataset.pinned = chat.is_pinned ? '1' : '0';
     const slaBadge = waitingResponseBadge(chat);
     const assigneeBadge = chat.assigned_user_id ? `<span class="assignee-chip">${escapeHtml(chat.assigned_user_display_name || chat.assigned_user_username || chat.assigned_to || 'назначен')}</span>` : '';
     const time = formatChatTime(chat.last_message_at || chat.updated_at || chat.created_at);
@@ -2961,26 +3801,29 @@ function renderChatList(options = {}) {
       <div class="chat-item-topline">
         <div class="chat-item-title">
           <strong title="${escapeHtml(customerLabel(chat))}">${escapeHtml(customerLabel(chat))}</strong>
-          <span class="chat-time">${escapeHtml(time)}</span>
         </div>
-        <span class="badge ${chat.marketplace}">${marketplaceNames[chat.marketplace] || chat.marketplace}</span>
+        <div class="chat-item-actions">
+          <button class="chat-pin-control" type="button" data-chat-pin-state data-chat-id="${chat.id}" aria-label="${chat.is_pinned ? 'Открепить чат' : 'Закрепить чат'}" aria-pressed="${chat.is_pinned ? 'true' : 'false'}" title="${chat.is_pinned ? 'Открепить чат' : 'Закрепить чат'}">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3h8l-1 6 3 3v2H6v-2l3-3-1-6Z"></path><path d="M12 14v7"></path></svg>
+          </button>
+          <span class="badge ${chat.marketplace}">${marketplaceNames[chat.marketplace] || chat.marketplace}</span>
+        </div>
       </div>
       <p class="preview ${chat.search_match_text ? 'chat-search-match-preview' : ''}">${escapeHtml(searchMatch)}</p>
       <div class="chat-item-footer">
         <div class="chat-badges">${statusBadge(chat.status, chat.status_label, chat.status_color)}${slaBadge}${assigneeBadge}</div>
+        <div class="chat-item-read-meta">
+          <button class="chat-read-state-control" type="button" data-chat-read-state data-chat-id="${chat.id}" tabindex="${chat.is_unread ? '-1' : '0'}" aria-label="${chat.is_unread ? '\u041d\u0435\u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043d\u044b\u0439 \u0447\u0430\u0442' : '\u041e\u0442\u043c\u0435\u0442\u0438\u0442\u044c \u0447\u0430\u0442 \u043d\u0435\u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043d\u044b\u043c'}" aria-pressed="${chat.is_unread ? 'true' : 'false'}" title="${chat.is_unread ? '\u041d\u0435\u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043d\u044b\u0439 \u0447\u0430\u0442' : '\u041e\u0442\u043c\u0435\u0442\u0438\u0442\u044c \u043d\u0435\u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043d\u044b\u043c'}">
+            <span class="chat-read-state-checks" aria-hidden="true"></span>
+          </button>
+          <span class="chat-time">${escapeHtml(time)}</span>
+        </div>
       </div>
     `;
     fragment.appendChild(item);
   }
 
   list.appendChild(fragment);
-
-  if (mobileListVisible && visibleChats.length > chatsToRender.length) {
-    const note = document.createElement('div');
-    note.className = 'chat-item empty-chat-item chat-list-render-limit-note chat-list-load-more-note';
-    note.innerHTML = `<p>Показано ${chatsToRender.length} из ${visibleChats.length}. Прокрутите ниже, чтобы загрузить ещё.</p>`;
-    list.appendChild(note);
-  }
 
   if (typeof preserveScrollTop === 'number') {
     requestAnimationFrame(() => {
@@ -3012,6 +3855,7 @@ async function openChat(chatId, options = {}) {
   // Make the tap feel instant: show the chat screen before the API responds.
   $('emptyState')?.classList.add('hidden');
   $('chatPanel')?.classList.remove('hidden');
+  markChatReadOnOpen(chatId);
   setMobileChatOpen(true);
   paintChatShellFromSummary(chatId, previousChatId);
   requestAnimationFrame(() => setMobileChatOpen(true));
@@ -3023,9 +3867,18 @@ async function openChat(chatId, options = {}) {
   const messagesLimit = mobileLayout ? 35 : 120;
 
   let chat;
+  const readStateRequestContext = chatReadStateController.captureRequestContext();
+  const pinStateRequestContext = chatPinStateController.captureRequestContext();
   chatOpenInFlight = true;
   try {
-    chat = await api(`/api/chats/${chatId}?messages_limit=${messagesLimit}`);
+    const serverChat = await loadChatWithMessageSendOperations(chatId, messagesLimit);
+    if (Number(serverChat?.id || 0) !== Number(chatId)) {
+      throw new Error('Read-state response chat ID mismatch');
+    }
+    chat = chatPinStateController.reconcile(
+      chatReadStateController.reconcile(serverChat, readStateRequestContext),
+      pinStateRequestContext,
+    );
   } catch (err) {
     if (requestSeq === openChatRequestSeq) {
       notify('Не удалось открыть чат', String(err.message || err));
@@ -3048,6 +3901,7 @@ async function openChat(chatId, options = {}) {
   if (selectedAiMessageId && !(chat.messages || []).some(m => Number(m.id) === Number(selectedAiMessageId))) {
     selectedAiMessageId = null;
   }
+  markChatReadOnOpen(chatId);
 
   paintChatHeader(chat, { forceControls: true });
 
@@ -3130,10 +3984,73 @@ function buildMessageReceiptContext(messages) {
   };
 }
 
+function ozonProductContext(message) {
+  const rawContext = message?.raw?._crm_product_context;
+  if (!rawContext || rawContext.kind !== 'ozon_product') return null;
+  const sku = String(rawContext.sku || '').trim();
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(sku)) return null;
+  const url = String(rawContext.url || '').trim();
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(url);
+  } catch (error) {
+    return null;
+  }
+  if (parsedUrl.protocol !== 'https:' || parsedUrl.hostname !== 'www.ozon.ru' || parsedUrl.pathname !== `/product/${sku}`) return null;
+  const title = String(rawContext.title || '').trim();
+  return {
+    sku,
+    url: parsedUrl.href,
+    title,
+  };
+}
+
+function createOzonProductContextCard(context) {
+  const card = document.createElement('a');
+  card.className = 'message-product-context';
+  card.href = context.url;
+  card.target = '_blank';
+  card.rel = 'noreferrer noopener';
+  card.title = 'Открыть товар на Ozon';
+  card.setAttribute('aria-label', `Открыть товар SKU ${context.sku} на Ozon`);
+
+  const copy = document.createElement('span');
+  copy.className = 'message-product-context-copy';
+
+  const label = document.createElement('span');
+  label.className = 'message-product-context-label';
+  label.textContent = 'Товар';
+
+  const title = document.createElement('span');
+  title.className = 'message-product-context-title';
+  title.textContent = context.title || 'Открыть товар на Ozon';
+
+  const meta = document.createElement('span');
+  meta.className = 'message-product-context-meta';
+  meta.textContent = `SKU ${context.sku}`;
+
+  copy.appendChild(label);
+  copy.appendChild(title);
+  copy.appendChild(meta);
+  card.appendChild(copy);
+  return card;
+}
+
+function crmMessageAuthorLabel(message) {
+  if (!message || message.direction !== 'outbound') return '';
+  const isCrmSent = message.is_crm_sent === true || message.is_crm_sent === 1;
+  if (!isCrmSent) return '';
+  return String(message.crm_author_label || '').trim();
+}
+
 function renderMessages(messages) {
   const box = $('messages');
   if (!box) return;
   box.innerHTML = '';
+  if (!(messages || []).length) {
+    box.innerHTML = '<div class="empty-card">В этом диалоге пока нет сообщений.</div>';
+    return;
+  }
   const receiptContext = buildMessageReceiptContext(messages || []);
 
   for (const message of messages) {
@@ -3141,6 +4058,7 @@ function renderMessages(messages) {
     item.className = `message ${message.direction} ${Number(message.id) === Number(selectedAiMessageId) ? 'ai-selected-message' : ''}`;
     item.dataset.messageId = message.id;
 
+    const productContext = ozonProductContext(message);
     const images = extractImageUrls(message);
     if (images.length) item.classList.add('message-has-images');
     const displayText = cleanMessageTextForDisplay(message.text || '', images);
@@ -3225,6 +4143,10 @@ function renderMessages(messages) {
       item.appendChild(meta);
     }
 
+    if (productContext) {
+      bubble.appendChild(createOzonProductContextCard(productContext));
+    }
+
     if (displayText) {
       const text = document.createElement('div');
       text.className = 'message-text';
@@ -3260,27 +4182,53 @@ function renderMessages(messages) {
       bubble.appendChild(gallery);
     }
 
+    if (message.direction !== 'internal') {
+      const bubbleMeta = document.createElement('div');
+      bubbleMeta.className = 'message-bubble-meta';
+
+      const formattedTime = formatMessageTime(message.created_at || message.updated_at || '');
+      if (formattedTime) {
+        const timeEl = document.createElement('span');
+        timeEl.className = 'message-time';
+        timeEl.textContent = formattedTime;
+        bubbleMeta.appendChild(timeEl);
+      }
+
+      const operationStatus = String(message._send_operation_status || '');
+      if (operationStatus && message.direction === 'outbound') {
+        const receiptEl = document.createElement('div');
+        receiptEl.className = `message-receipt message-send-operation-status status-${operationStatus}`;
+        receiptEl.textContent = messageOperationStatusLabel(operationStatus);
+        receiptEl.title = String(message._send_operation_error?.summary || receiptEl.textContent);
+        bubbleMeta.appendChild(receiptEl);
+      } else {
+        const receipt = messageReceiptInfo(message, receiptContext);
+        if (receipt && message.direction === 'outbound') {
+          const receiptEl = document.createElement('div');
+          receiptEl.className = `message-receipt ${receipt.read ? 'is-read' : 'is-sent'}`;
+          receiptEl.title = receipt.title || receipt.label;
+          receiptEl.innerHTML = `<span class="receipt-checks">${escapeHtml(receipt.icon)}</span><span class="receipt-label">${escapeHtml(receipt.label)}</span>`;
+          bubbleMeta.appendChild(receiptEl);
+        }
+      }
+
+      if (bubbleMeta.children.length) bubble.appendChild(bubbleMeta);
+    }
+
     item.appendChild(bubble);
 
     if (message.direction !== 'internal') {
-      const footer = document.createElement('div');
-      footer.className = 'message-footer';
-
-      const timeEl = document.createElement('span');
-      timeEl.className = 'message-time';
-      timeEl.textContent = formatChatTime(message.created_at || message.updated_at || '');
-      footer.appendChild(timeEl);
-
-      const receipt = messageReceiptInfo(message, receiptContext);
-      if (receipt && message.direction === 'outbound') {
-        const receiptEl = document.createElement('div');
-        receiptEl.className = `message-receipt ${receipt.read ? 'is-read' : 'is-sent'}`;
-        receiptEl.title = receipt.title || receipt.label;
-        receiptEl.innerHTML = `<span class="receipt-checks">${escapeHtml(receipt.icon)}</span><span class="receipt-label">${escapeHtml(receipt.label)}</span>`;
-        footer.appendChild(receiptEl);
+      const crmAuthorLabel = crmMessageAuthorLabel(message);
+      if (crmAuthorLabel) {
+        const footer = document.createElement('div');
+        footer.className = 'message-footer';
+        const authorEl = document.createElement('span');
+        authorEl.className = 'message-crm-author';
+        authorEl.textContent = crmAuthorLabel;
+        authorEl.title = `Отправлено через CRM: ${crmAuthorLabel}`;
+        footer.appendChild(authorEl);
+        item.appendChild(footer);
       }
-
-      item.appendChild(footer);
     }
 
     box.appendChild(item);
@@ -3603,7 +4551,15 @@ function extractImageUrls(message) {
     const clean = url.replace(/[),.;]+$/, '');
     if (isLikelyImageUrl(clean, 'text')) found.add(clean);
   }
-  scanForImages(message.raw || {}, '', found);
+
+  const raw = message?.raw && typeof message.raw === 'object'
+    ? { ...message.raw }
+    : {};
+  if (ozonProductContext(message)) {
+    delete raw.context;
+    delete raw._crm_product_context;
+  }
+  scanForImages(raw, '', found);
   return Array.from(found).slice(0, 16);
 }
 
@@ -4427,9 +5383,31 @@ async function submitQuestionAnswer(event) {
 }
 
 
+function shouldPreserveTaskChatEditor(box, chatId = currentChatId) {
+  const renderedChatId = Number(box?.dataset?.chatId || 0);
+  if (!renderedChatId || renderedChatId !== Number(chatId || 0)) return false;
+  return Boolean(box.querySelector('[data-task-edit-panel]:not(.hidden)'));
+}
+
+function closeTaskChatEditor(card) {
+  const panel = card?.querySelector('[data-task-edit-panel]');
+  const toggle = card?.querySelector('[data-task-edit-toggle]');
+  panel?.classList.add('hidden');
+  if (toggle) toggle.textContent = 'Изменить';
+}
+
+async function saveTaskChatEditor(taskId, body, card, options = {}) {
+  const task = await patchTask(taskId, body, { ...options, refreshChat: false });
+  closeTaskChatEditor(card);
+  if (currentChatId && options.refreshChat !== false) await openChat(currentChatId);
+  return task;
+}
+
 function renderTasks(tasks) {
   const box = $('taskList');
   if (!box) return;
+  if (shouldPreserveTaskChatEditor(box)) return;
+  box.dataset.chatId = currentChatId ? String(currentChatId) : '';
   box.innerHTML = '';
   if (!currentChatId) {
     box.innerHTML = '<p class="muted">Выберите чат.</p>';
@@ -4450,6 +5428,7 @@ function renderTasks(tasks) {
     const dueLabel = formatDateTime(task.due_at) || 'Без даты';
     item.className = `task-card task-chat-card task-chat-status-${escapeHtml(statusClass)}`;
     item.dataset.taskCard = '1';
+    item.dataset.taskId = String(task.id);
     item.innerHTML = `
       <div class="task-chat-card-head">
         <div class="task-chat-card-badges">
@@ -4513,8 +5492,7 @@ function bindTaskChatEditToggle(item) {
   });
   if (cancel) {
     cancel.addEventListener('click', () => {
-      panel.classList.add('hidden');
-      toggle.textContent = 'Изменить';
+      closeTaskChatEditor(item);
     });
   }
 }
@@ -4742,53 +5720,36 @@ function bindTaskBoardCardActions(item) {
 }
 
 
-function taskMatchesDate(task, yyyyMmDd) {
-  if (!yyyyMmDd) return true;
-  const values = [task?.due_at, task?.created_at, task?.updated_at].filter(Boolean).map(String);
-  return values.some(value => value.startsWith(yyyyMmDd));
-}
-
-function updateTaskTypeFilterOptions(tasks) {
-  const select = $('taskTypeFilter');
-  if (!select) return;
-  const current = select.value || '';
-  const sourceLabels = Array.isArray(taskTypes) && taskTypes.length
-    ? taskTypes.filter(type => type.is_active !== false && type.is_active !== 0).map(type => type.title || type.name)
-    : (tasks || []).map(getTaskTypeLabel);
-  const labels = Array.from(new Set(sourceLabels.filter(Boolean).map(value => String(value).trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'ru'));
-  select.innerHTML = '<option value="">Тип задачи</option>' + labels.map(label => `<option value="${escapeHtml(label)}" ${label === current ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('');
-}
-
-function filterTasksForUi(tasks) {
-  const searchValue = ($('taskSearchInput')?.value || '').trim().toLowerCase();
-  const typeValue = $('taskTypeFilter')?.value || '';
-  const statusValue = $('taskStatusFilter')?.value || '';
-  const dateValue = $('taskDueDateFilter')?.value || '';
-  return (tasks || []).filter(task => {
-    const normalizedStatus = normalizeTaskStatus(task.status);
-    if (statusValue) {
-      const wanted = statusValue === 'archive' ? 'archive' : statusValue;
-      if (normalizedStatus !== wanted) return false;
-    }
-    if (typeValue && getTaskTypeLabel(task) !== typeValue) return false;
-    if (searchValue.length >= 3 && !getTaskPrimaryText(task).toLowerCase().includes(searchValue)) return false;
-    if (!taskMatchesDate(task, dateValue)) return false;
-    return true;
-  });
-}
-
-async function loadAllTasks() {
+function buildTaskListQuery() {
   const params = new URLSearchParams();
   const status = $('taskStatusFilter')?.value || '';
   const bucket = $('taskBucketFilter')?.value || 'active';
+  const searchValue = ($('taskSearchInput')?.value || '').trim();
+  const taskTypeId = $('taskTypeFilter')?.value || '';
+  const assignedUserId = $('taskAssigneeFilter')?.value || '';
+
   if (status === 'archive') params.set('bucket', 'archive');
   else if (status) params.set('status', status);
-  else if (bucket === 'mine') { params.set('bucket', 'active'); params.set('mine', 'true'); }
-  else if (bucket && bucket !== 'all') params.set('bucket', bucket);
-  const tasks = await api(`/api/tasks?${params.toString()}`);
-  window.lastLoadedTasks = tasks;
-  updateTaskTypeFilterOptions(tasks);
-  renderAllTasks(filterTasksForUi(tasks));
+  else if (bucket === 'mine') {
+    params.set('bucket', 'active');
+    params.set('mine', 'true');
+  } else if (bucket && bucket !== 'all') {
+    params.set('bucket', bucket);
+  }
+
+  if (searchValue.length >= 3) params.set('q', searchValue);
+  if (taskTypeId) params.set('task_type_id', taskTypeId);
+  if (currentTaskDueDateFrom && currentTaskDueDateTo) {
+    params.set('due_date_from', currentTaskDueDateFrom);
+    params.set('due_date_to', currentTaskDueDateTo);
+  }
+  if (assignedUserId) params.set('assigned_user_id', assignedUserId);
+  return params;
+}
+
+async function loadAllTasks() {
+  const tasks = await api(`/api/tasks?${buildTaskListQuery().toString()}`);
+  renderAllTasks(Array.isArray(tasks) ? tasks : []);
 }
 
 function renderAllTasks(tasks) {
@@ -4810,6 +5771,7 @@ function renderAllTasks(tasks) {
     const clientLabel = isStandaloneTask ? 'Без чата' : (customerLabel(task) || task.customer_id || task.external_chat_id || `ID ${task.chat_id || task.id || ''}`.trim());
     const primaryText = getTaskPrimaryText(task);
     const responsibleLabel = assigneeNameFromTask(task) || 'Не назначен';
+    const dueLabel = formatDateTime(task.due_at) || 'Без даты';
     item.classList.toggle('tasks-ref-card-standalone', isStandaloneTask);
     item.innerHTML = `
       <div class="tasks-ref-client">
@@ -4819,6 +5781,10 @@ function renderAllTasks(tasks) {
       <div class="tasks-ref-assignee">
         <span class="tasks-ref-field-title">Ответственный</span>
         <span class="tasks-ref-field-value">${escapeHtml(responsibleLabel)}</span>
+      </div>
+      <div class="tasks-ref-due">
+        <span class="tasks-ref-field-title">Дата</span>
+        <time class="tasks-ref-field-value" datetime="${escapeHtml(task.due_at || '')}">${escapeHtml(dueLabel)}</time>
       </div>
       <div class="tasks-ref-comment">
         <span class="tasks-ref-field-title">${escapeHtml(fieldLabel)}</span>
@@ -4843,9 +5809,13 @@ function renderAllTasks(tasks) {
           </div>
         </div>
         <div class="tasks-ref-actions" aria-label="Действия с задачей">
-          <button class="tasks-ref-icon-btn" type="button" data-task-ref-edit data-task-id="${escapeHtml(task.id)}" aria-expanded="false" title="Редактировать задачу">✎</button>
-          <button class="tasks-ref-icon-btn tasks-ref-delete-btn" type="button" data-task-ref-delete data-task-id="${escapeHtml(task.id)}" title="Удалить задачу">×</button>
-          ${task.chat_id && !isStandaloneTask ? `<button class="tasks-ref-chat-btn" type="button" data-open-chat="${escapeHtml(task.chat_id)}">в чат <span aria-hidden="true">→</span></button>` : ''}
+          <button class="tasks-ref-icon-btn" type="button" data-task-ref-edit data-task-id="${escapeHtml(task.id)}" aria-expanded="false" aria-label="Редактировать задачу" title="Редактировать задачу">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 20h4l10.5-10.5a2.12 2.12 0 0 0-3-3L5 17v3Zm10.5-12.5 3 3"/></svg>
+          </button>
+          <button class="tasks-ref-icon-btn tasks-ref-delete-btn" type="button" data-task-ref-delete data-task-id="${escapeHtml(task.id)}" aria-label="Удалить задачу" title="Удалить задачу">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13M10 11v5m4-5v5"/></svg>
+          </button>
+          ${task.chat_id && !isStandaloneTask ? `<button class="tasks-ref-icon-btn tasks-ref-chat-btn" type="button" data-open-chat="${escapeHtml(task.chat_id)}" aria-label="Открыть чат" title="Открыть чат"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 5h14v10H9l-4 4V5Z"/><path d="m13 8 3 3-3 3M16 11h-5"/></svg></button>` : ''}
         </div>
       </div>
       ${taskBoardEditPanelHtml(task, fieldLabel, primaryText)}
@@ -4870,8 +5840,83 @@ document.addEventListener('click', event => {
 });
 
 
+function cancelExtraPanelGeometrySync() {
+  if (!extraPanelGeometryFrame) return;
+  window.cancelAnimationFrame(extraPanelGeometryFrame);
+  extraPanelGeometryFrame = 0;
+}
+
+function syncExtraPanelGeometry() {
+  extraPanelGeometryFrame = 0;
+  const panel = $('extraPanel');
+  if (!activeExtraPanel || !panel || panel.classList.contains('hidden')) return;
+
+  const chatPanel = $('chatPanel');
+  const header = chatPanel?.querySelector('.chat-header');
+  const containingBlock = panel.offsetParent || chatPanel;
+  if (!header || !containingBlock) return;
+
+  const composer = $('messageForm');
+  const headerRect = header.getBoundingClientRect();
+  const containingRect = containingBlock.getBoundingClientRect();
+  const composerRect = composer?.getBoundingClientRect() || null;
+  const viewport = window.visualViewport;
+  const viewportBottom = viewport
+    ? viewport.offsetTop + viewport.height
+    : window.innerHeight;
+
+  const panelTop = Math.ceil(headerRect.bottom - containingRect.top + EXTRA_PANEL_GAP_PX);
+  const availableBottom = Math.min(
+    containingRect.bottom,
+    composerRect?.top ?? containingRect.bottom,
+    viewportBottom,
+  );
+  const panelMaxHeight = Math.max(
+    0,
+    Math.floor(availableBottom - (containingRect.top + panelTop) - EXTRA_PANEL_GAP_PX),
+  );
+  const topValue = `${panelTop}px`;
+  const maxHeightValue = `${panelMaxHeight}px`;
+
+  if (panel.style.getPropertyValue('--extra-panel-top') !== topValue) {
+    panel.style.setProperty('--extra-panel-top', topValue);
+  }
+  if (panel.style.getPropertyValue('--extra-panel-max-height') !== maxHeightValue) {
+    panel.style.setProperty('--extra-panel-max-height', maxHeightValue);
+  }
+}
+
+function scheduleExtraPanelGeometrySync() {
+  const panel = $('extraPanel');
+  if (!activeExtraPanel || !panel || panel.classList.contains('hidden')) {
+    cancelExtraPanelGeometrySync();
+    return;
+  }
+  if (extraPanelGeometryFrame) return;
+  extraPanelGeometryFrame = window.requestAnimationFrame(syncExtraPanelGeometry);
+}
+
+function bindExtraPanelGeometry() {
+  const chatPanel = $('chatPanel');
+  if (!chatPanel || chatPanel.dataset.extraPanelGeometryBound === '1') return;
+  chatPanel.dataset.extraPanelGeometryBound = '1';
+
+  const header = chatPanel.querySelector('.chat-header');
+  const conversation = chatPanel.closest('.conversation');
+  const composer = $('messageForm');
+  extraPanelResizeObserver = new ResizeObserver(scheduleExtraPanelGeometrySync);
+  [header, chatPanel, conversation, composer].forEach((element) => {
+    if (element) extraPanelResizeObserver.observe(element);
+  });
+
+  window.addEventListener('resize', scheduleExtraPanelGeometrySync);
+  window.visualViewport?.addEventListener('resize', scheduleExtraPanelGeometrySync);
+  window.visualViewport?.addEventListener('scroll', scheduleExtraPanelGeometrySync);
+}
+
 function closeActiveExtraPanel() {
   activeExtraPanel = '';
+  cancelExtraPanelGeometrySync();
   const panel = $('extraPanel');
   if (panel) {
     panel.classList.add('hidden');
@@ -4933,6 +5978,8 @@ function showExtraPanel(panelName) {
   $('tasksSection')?.classList.toggle('hidden', activeExtraPanel !== 'tasks');
   $('noteSection')?.classList.toggle('hidden', activeExtraPanel !== 'note');
   $('customerSection')?.classList.toggle('hidden', activeExtraPanel !== 'customer');
+  if (activeExtraPanel) scheduleExtraPanelGeometrySync();
+  else cancelExtraPanelGeometrySync();
   toggleExtraMenu(false);
 }
 
@@ -6242,6 +7289,7 @@ function showView(view, options = {}) {
   if (normalizedView !== 'chats') {
     mobileChatClosedByUser = false;
     setMobileChatOpen(false);
+    setChatSearchOpen(false);
   }
   if (normalizedView !== 'knowledge') {
     closeKnowledgeModal();
@@ -6388,16 +7436,24 @@ function renderReplyTemplates() {
     return;
   }
   list.innerHTML = items.map((template) => {
-    const updated = formatDateTime(template.updated_at) || formatDateTime(template.created_at) || '';
-    const metaParts = [];
-    if (template.updated_by || template.created_by) metaParts.push(escapeHtml(template.updated_by || template.created_by));
-    if (updated) metaParts.push(`обновлён ${escapeHtml(updated)}`);
-    const meta = metaParts.join(' · ');
-    return `<button class="reply-template-item" type="button" data-reply-template-id="${template.id}">
-      <span class="reply-template-item-title">${escapeHtml(template.title || 'Без названия')}</span>
-      <span class="reply-template-item-preview">${escapeHtml(summarizeReplyTemplate(template.content || ''))}</span>
-      ${meta ? `<span class="reply-template-item-meta">${meta}</span>` : ''}
-    </button>`;
+    const templateId = escapeHtml(String(template.id ?? ''));
+    const actions = currentUser?.role === 'admin'
+      ? `<span class="reply-template-actions" aria-label="Действия с шаблоном">
+          <button class="reply-template-action reply-template-edit-action icon-btn" type="button" data-reply-template-edit="${templateId}" aria-label="Редактировать шаблон" title="Редактировать">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 20h4l10.5-10.5a2.12 2.12 0 0 0-3-3L5 17v3Zm10.5-12.5 3 3"/></svg>
+          </button>
+          <button class="reply-template-action reply-template-delete-action icon-btn" type="button" data-reply-template-delete="${templateId}" aria-label="Удалить шаблон" title="Удалить">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13M10 11v5m4-5v5"/></svg>
+          </button>
+        </span>`
+      : '';
+    return `<div class="reply-template-row">
+      <button class="reply-template-item" type="button" data-reply-template-apply="${templateId}">
+        <span class="reply-template-item-title">${escapeHtml(template.title || 'Без названия')}</span>
+        <span class="reply-template-item-preview">${escapeHtml(summarizeReplyTemplate(template.content || ''))}</span>
+      </button>
+      ${actions}
+    </div>`;
   }).join('');
 }
 
@@ -6420,6 +7476,7 @@ async function loadReplyTemplates(force = false) {
 }
 
 function openReplyTemplateCreateBox() {
+  resetReplyTemplateCreateBox();
   setReplyTemplatesPanel(true);
   fillReplyTemplateFormFromComposer();
   $('replyTemplateCreateBox')?.classList.remove('hidden');
@@ -6427,13 +7484,32 @@ function openReplyTemplateCreateBox() {
 }
 
 function resetReplyTemplateCreateBox() {
+  replyTemplateEditingId = null;
   if ($('replyTemplateTitle')) $('replyTemplateTitle').value = '';
   if ($('replyTemplateContent')) $('replyTemplateContent').value = '';
+  if ($('replyTemplateSaveBtn')) $('replyTemplateSaveBtn').textContent = 'Сохранить';
   $('replyTemplateCreateBox')?.classList.add('hidden');
 }
 
+function replyTemplateById(templateId) {
+  return (replyTemplates || []).find((item) => String(item.id) === String(templateId)) || null;
+}
+
+function openReplyTemplateEditBox(templateId) {
+  if (currentUser?.role !== 'admin') return;
+  const template = replyTemplateById(templateId);
+  if (!template) return;
+  replyTemplateEditingId = String(template.id);
+  if ($('replyTemplateTitle')) $('replyTemplateTitle').value = String(template.title || '');
+  if ($('replyTemplateContent')) $('replyTemplateContent').value = String(template.content || '');
+  if ($('replyTemplateSaveBtn')) $('replyTemplateSaveBtn').textContent = 'Обновить';
+  setReplyTemplatesPanel(true);
+  $('replyTemplateCreateBox')?.classList.remove('hidden');
+  setTimeout(() => $('replyTemplateTitle')?.focus(), 30);
+}
+
 function applyReplyTemplate(templateId) {
-  const template = (replyTemplates || []).find((item) => Number(item.id) === Number(templateId));
+  const template = replyTemplateById(templateId);
   if (!template) return;
   const field = $('messageText');
   if (!field) return;
@@ -6446,6 +7522,25 @@ ${chunk}` : chunk;
   field.focus();
   field.selectionStart = field.selectionEnd = field.value.length;
   setReplyTemplatesPanel(false);
+}
+
+async function deleteReplyTemplate(templateId) {
+  if (currentUser?.role !== 'admin') return;
+  const template = replyTemplateById(templateId);
+  if (!template) return;
+  if (!window.confirm(`Удалить шаблон «${String(template.title || 'Без названия')}»?`)) return;
+
+  if (template._local) {
+    const localTemplates = readLocalReplyTemplates().filter((item) => String(item.id) !== String(template.id));
+    writeLocalReplyTemplates(localTemplates);
+    replyTemplates = (replyTemplates || []).filter((item) => String(item.id) !== String(template.id));
+    renderReplyTemplates();
+  } else {
+    await api(`/api/reply-templates/${encodeURIComponent(String(template.id))}`, { method: 'DELETE' });
+    replyTemplatesLoaded = false;
+    await loadReplyTemplates(true);
+  }
+  if (String(replyTemplateEditingId || '') === String(template.id)) resetReplyTemplateCreateBox();
 }
 
 async function saveReplyTemplateFromComposer() {
@@ -6466,21 +7561,47 @@ async function saveReplyTemplateFromComposer() {
   const saveBtn = $('replyTemplateSaveBtn');
   if (saveBtn) saveBtn.disabled = true;
   try {
-    try {
-      await api('/api/reply-templates', {
-        method: 'POST',
-        body: JSON.stringify({ title, content, sort_order: 0 }),
+    const editingTemplate = replyTemplateEditingId ? replyTemplateById(replyTemplateEditingId) : null;
+    if (replyTemplateEditingId && !editingTemplate) throw new Error('Шаблон больше не существует');
+    if (editingTemplate?._local) {
+      const updatedTemplate = {
+        ...editingTemplate,
+        title,
+        content,
+        updated_at: new Date().toISOString(),
+      };
+      const localTemplates = readLocalReplyTemplates().map((item) => (
+        String(item.id) === String(editingTemplate.id) ? updatedTemplate : item
+      ));
+      writeLocalReplyTemplates(localTemplates);
+      replyTemplates = (replyTemplates || []).map((item) => (
+        String(item.id) === String(editingTemplate.id) ? updatedTemplate : item
+      ));
+      renderReplyTemplates();
+    } else if (editingTemplate) {
+      await api(`/api/reply-templates/${encodeURIComponent(String(editingTemplate.id))}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ title, content }),
       });
       replyTemplatesLoaded = false;
       await loadReplyTemplates(true);
-    } catch (backendErr) {
-      console.warn('reply templates backend save failed, saving locally', backendErr);
-      const localTemplates = readLocalReplyTemplates();
-      const localItem = makeLocalReplyTemplate(title, content);
-      localTemplates.unshift(localItem);
-      writeLocalReplyTemplates(localTemplates);
-      replyTemplates = [localItem, ...(replyTemplates || [])];
-      renderReplyTemplates();
+    } else {
+      try {
+        await api('/api/reply-templates', {
+          method: 'POST',
+          body: JSON.stringify({ title, content, sort_order: 0 }),
+        });
+        replyTemplatesLoaded = false;
+        await loadReplyTemplates(true);
+      } catch (backendErr) {
+        console.warn('reply templates backend save failed, saving locally', backendErr);
+        const localTemplates = readLocalReplyTemplates();
+        const localItem = makeLocalReplyTemplate(title, content);
+        localTemplates.unshift(localItem);
+        writeLocalReplyTemplates(localTemplates);
+        replyTemplates = [localItem, ...(replyTemplates || [])];
+        renderReplyTemplates();
+      }
     }
     resetReplyTemplateCreateBox();
     setReplyTemplatesPanel(true);
@@ -7124,6 +8245,7 @@ function init() {
   if (appInitialized) return;
   appInitialized = true;
   updateCrmThemeUi();
+  bindExtraPanelGeometry();
   bind('themeToggleBtn', 'click', toggleCrmTheme);
   activeView = getInitialRouteView();
   const initialRouteChatId = getChatIdFromLocationHash();
@@ -7136,19 +8258,67 @@ function init() {
     await refreshVisibleData();
   });
   bind('mobileBackBtn', 'click', backToChatListMobile);
-  bind('marketplaceFilter', 'change', () => { resetChatListMobileLimit(); loadChats(); });
-  bind('statusFilter', 'change', () => { resetChatListMobileLimit(); loadChats(); });
-  if ($('funnelFilter')) bind('funnelFilter', 'change', () => { resetChatListMobileLimit(); renderChatSettingsControls({ keepValues: true }); loadChats(); });
-  bind('chatScopeSelect', 'change', (event) => { resetChatListMobileLimit(); handleChatScopeSelectChange(event); });
+  bind('chatDateFilterBtn', 'click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const popover = $('chatDateFilterPopover');
+    const willOpen = Boolean(popover?.classList.contains('hidden'));
+    syncChatDateFilterUi();
+    if (willOpen) setChatSearchOpen(false);
+    setDateRangePopover(willOpen, {
+      popoverId: 'chatDateFilterPopover',
+      buttonId: 'chatDateFilterBtn',
+      focusInputId: 'chatDateFilterFromInput',
+    });
+  });
+  bind('chatDateFilterFromInput', 'change', () => syncDateRangeDraftBounds('chatDateFilterFromInput', 'chatDateFilterToInput'));
+  bind('chatDateFilterToInput', 'change', () => syncDateRangeDraftBounds('chatDateFilterFromInput', 'chatDateFilterToInput'));
+  bind('chatDateFilterApplyBtn', 'click', (event) => {
+    event.preventDefault();
+    applyChatDateFilter(
+      $('chatDateFilterFromInput')?.value || '',
+      $('chatDateFilterToInput')?.value || '',
+    ).catch(err => notify('Фильтр чатов', String(err.message || err)));
+  });
+  bind('chatDateFilterClearBtn', 'click', (event) => {
+    event.preventDefault();
+    clearChatDateFilter().catch(err => notify('Фильтр чатов', String(err.message || err)));
+  });
+  bind('taskDueDateFilterBtn', 'click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const popover = $('taskDueDateFilterPopover');
+    syncTaskDueDateFilterUi();
+    setDateRangePopover(Boolean(popover?.classList.contains('hidden')), {
+      popoverId: 'taskDueDateFilterPopover',
+      buttonId: 'taskDueDateFilterBtn',
+      focusInputId: 'taskDueDateFromFilter',
+    });
+  });
+  bind('taskDueDateFromFilter', 'change', () => syncDateRangeDraftBounds('taskDueDateFromFilter', 'taskDueDateToFilter'));
+  bind('taskDueDateToFilter', 'change', () => syncDateRangeDraftBounds('taskDueDateFromFilter', 'taskDueDateToFilter'));
+  bind('taskDueDateFilterApplyBtn', 'click', (event) => {
+    event.preventDefault();
+    applyTaskDueDateFilter(
+      $('taskDueDateFromFilter')?.value || '',
+      $('taskDueDateToFilter')?.value || '',
+    ).catch(err => notify('Фильтр задач', String(err.message || err)));
+  });
+  bind('taskDueDateFilterClearBtn', 'click', (event) => {
+    event.preventDefault();
+    clearTaskDueDateFilter().catch(err => notify('Фильтр задач', String(err.message || err)));
+  });
+  syncChatDateFilterUi();
+  syncTaskDueDateFilterUi();
+  bind('marketplaceFilter', 'change', () => { resetChatListFeed(); loadChats(); });
+  bind('statusFilter', 'change', () => { resetChatListFeed(); loadChats(); });
+  if ($('funnelFilter')) bind('funnelFilter', 'change', () => { resetChatListFeed(); renderChatSettingsControls({ keepValues: true }); loadChats(); });
+  bind('chatScopeSelect', 'change', (event) => { resetChatListFeed(); handleChatScopeSelectChange(event); });
   bind('chatSearchToggleBtn', 'click', (event) => {
     event.preventDefault();
     const box = $('chatSearchBox');
     const isOpen = Boolean(box && !box.classList.contains('hidden'));
-    if (isOpen && !currentChatMessageSearch()) {
-      setChatSearchOpen(false);
-    } else {
-      setChatSearchOpen(true);
-    }
+    setChatSearchOpen(!isOpen);
   });
   bind('chatSearchClearBtn', 'click', (event) => {
     event.preventDefault();
@@ -7172,7 +8342,7 @@ function init() {
   bind('taskStatusFilter', 'change', loadAllTasks);
   bind('taskBucketFilter', 'change', loadAllTasks);
   bind('taskTypeFilter', 'change', loadAllTasks);
-  bind('taskDueDateFilter', 'change', loadAllTasks);
+  bind('taskAssigneeFilter', 'change', loadAllTasks);
   bind('taskSearchInput', 'input', () => {
     clearTimeout(taskSearchTimer);
     taskSearchTimer = setTimeout(loadAllTasks, 220);
@@ -7452,10 +8622,26 @@ function init() {
   bind('replyTemplatesCloseBtn', 'click', () => setReplyTemplatesPanel(false));
   bind('replyTemplateCancelBtn', 'click', resetReplyTemplateCreateBox);
   bind('replyTemplateSaveBtn', 'click', saveReplyTemplateFromComposer);
-  $('replyTemplatesList')?.addEventListener('click', (event) => {
-    const button = event.target?.closest?.('[data-reply-template-id]');
-    if (!button) return;
-    applyReplyTemplate(button.dataset.replyTemplateId);
+  $('replyTemplatesList')?.addEventListener('click', async (event) => {
+    const editButton = event.target?.closest?.('[data-reply-template-edit]');
+    if (editButton) {
+      openReplyTemplateEditBox(editButton.dataset.replyTemplateEdit);
+      return;
+    }
+    const deleteButton = event.target?.closest?.('[data-reply-template-delete]');
+    if (deleteButton) {
+      deleteButton.disabled = true;
+      try {
+        await deleteReplyTemplate(deleteButton.dataset.replyTemplateDelete);
+      } catch (err) {
+        notify('Шаблоны', `Не удалось удалить шаблон: ${String(err.message || err)}`);
+      } finally {
+        deleteButton.disabled = false;
+      }
+      return;
+    }
+    const applyButton = event.target?.closest?.('[data-reply-template-apply]');
+    if (applyButton) applyReplyTemplate(applyButton.dataset.replyTemplateApply);
   });
   bind('attachImageBtn', 'click', () => $('chatImageInput')?.click());
   bind('chatImageInput', 'change', handleChatImageSelection);
@@ -7493,23 +8679,57 @@ function init() {
 
       outboundSendInFlight = true;
       suppressFrontendSyncUntil = Date.now() + 20000;
-      setStatus('Отправляем сообщение…');
+      setStatus('В очереди');
 
+      let captionAcceptedForFiles = false;
       try {
         const chatIdForSend = Number(currentChatId);
-        await sendCurrentChatMessageWithRetry(chatIdForSend, { text, imageFiles });
+        const messageOperationId = text ? createClientOperationId() : null;
+        const attachmentOperationId = imageFiles.length ? createClientOperationId() : null;
+        const { messageOperation, filesUnavailable } = await dispatchComposerCommands(
+          chatIdForSend,
+          {
+            text,
+            imageFiles,
+            messageOperationId,
+            attachmentOperationId,
+            areFilesAvailable: (files) => files.every((file) => (
+              typeof File !== 'undefined' && file instanceof File
+            )),
+            onCaptionAcceptedForFiles: () => {
+              captionAcceptedForFiles = true;
+            },
+          },
+        );
+        if (filesUnavailable) {
+          $('messageText').value = '';
+          autosizeComposerTextarea($('messageText'));
+          notify(
+            'Вложения не загружены',
+            'Подпись отправлена; вложения не загружены. Выберите файлы повторно.',
+          );
+          return;
+        }
 
         $('messageText').value = '';
         clearComposerAttachments();
         autosizeComposerTextarea($('messageText'));
-        setStatus('Сообщение отправлено');
+        if (messageOperation) {
+          setStatus(messageOperationStatusLabel(messageOperation.status));
+        } else {
+          setStatus('Вложения отправлены');
+        }
 
         await loadChats();
         if (Number(currentChatId) === chatIdForSend) {
           await openChat(chatIdForSend);
         }
       } catch (err) {
-        notify('Сообщение не отправлено', friendlySendError(err));
+        const detail = String(err?.detail || err?.message || err || '');
+        notify(
+          captionAcceptedForFiles ? 'Вложения не загружены' : 'Операция отправки не завершена',
+          detail,
+        );
       } finally {
         outboundSendInFlight = false;
         suppressFrontendSyncUntil = Date.now() + 6000;
@@ -7771,6 +8991,10 @@ function autosizeComposerTextarea(textarea) {
 
 document.addEventListener('click', (event) => {
   if (!event.target.closest?.('.message-actions-menu-wrap')) closeMessageActionsMenus();
+  if (!event.target.closest?.('.date-range-filter-wrap')) {
+    document.querySelectorAll('.date-range-filter-popover').forEach(popover => popover.classList.add('hidden'));
+    document.querySelectorAll('.date-range-filter-btn[aria-expanded="true"]').forEach(button => button.setAttribute('aria-expanded', 'false'));
+  }
 });
 
 

@@ -10,12 +10,12 @@
   <meta name="apple-mobile-web-app-title" content="Arti CRM" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <link rel="apple-touch-icon" href="/static/icons/app-icon-180.png?v=v57-mobile-questions-inline-and-dark-analytics-20260701" />
-  <meta name="arti-build-version" content="v83-knowledge-css-clean-theme-20260713" />
+  <meta name="arti-build-version" content="v95-18-chat-preview-task-visuals-20260909" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <script src="/static/theme-init.js?v=v79-strict-csp-secure-cookie-20260708"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=v84-knowledge-card-style-clean-20260713" />
+  <link rel="stylesheet" href="/static/styles.css?v=v95-18-chat-preview-task-visuals-20260909" />
 
 </head>
 <body class="auth-pending">
@@ -142,18 +142,43 @@
                 <option value="archive">Архив</option>
               </select>
             </div>
-            <div class="chat-search-wrap">
-              <button id="chatSearchToggleBtn" class="chat-search-toggle" type="button" aria-label="Поиск по сообщениям" aria-expanded="false" title="Поиск по сообщениям">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M16.5 16.5L21 21"></path></svg>
-              </button>
-              <div id="chatSearchBox" class="chat-search-box hidden">
-                <input id="chatSearchInput" type="search" autocomplete="off" placeholder="Поиск по сообщениям" aria-label="Поиск по сообщениям" />
-                <button id="chatSearchClearBtn" class="chat-search-clear hidden" type="button" aria-label="Очистить поиск" title="Очистить">×</button>
+            <div class="chat-filter-actions">
+              <div id="chatDateFilterWrap" class="date-range-filter-wrap">
+                <button id="chatDateFilterBtn" class="chat-search-toggle date-range-filter-btn" type="button" aria-label="Фильтр чатов по дате последнего сообщения" aria-expanded="false" title="Фильтр чатов по дате последнего сообщения">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v4"/><path d="M17 3v4"/><path d="M4 9h16"/><rect x="4" y="5" width="16" height="16" rx="2"/></svg>
+                </button>
+                <div id="chatDateFilterPopover" class="date-range-filter-popover hidden">
+                  <div class="date-range-filter-fields">
+                    <label for="chatDateFilterFromInput">С
+                      <input id="chatDateFilterFromInput" type="date" aria-label="Начальная дата списка чатов" />
+                    </label>
+                    <label for="chatDateFilterToInput">По
+                      <input id="chatDateFilterToInput" type="date" aria-label="Конечная дата списка чатов" />
+                    </label>
+                  </div>
+                  <div class="date-range-filter-actions">
+                    <button id="chatDateFilterClearBtn" class="ghost small" type="button">Сбросить</button>
+                    <button id="chatDateFilterApplyBtn" class="primary small" type="button">Показать</button>
+                  </div>
+                </div>
+              </div>
+              <div class="chat-search-wrap">
+                <button id="chatSearchToggleBtn" class="chat-search-toggle" type="button" aria-label="Поиск по сообщениям" aria-expanded="false" title="Поиск по сообщениям">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M16.5 16.5L21 21"></path></svg>
+                </button>
+                <div id="chatSearchBox" class="chat-search-box hidden">
+                  <input id="chatSearchInput" type="search" autocomplete="off" placeholder="Поиск по сообщениям" aria-label="Поиск по сообщениям" />
+                  <button id="chatSearchClearBtn" class="chat-search-clear hidden" type="button" aria-label="Очистить поиск" title="Очистить">×</button>
+                </div>
               </div>
             </div>
           </div>
           <div id="stats" class="stats"></div>
           <div id="chatList" class="chat-list"></div>
+          <div id="chatListLoadState" class="chat-list-load-state hidden" aria-live="polite" aria-atomic="true">
+            <span class="chat-list-load-spinner" aria-hidden="true"></span>
+            <span id="chatListLoadLabel"></span>
+          </div>
         </aside>
 
         <section class="conversation panel-card">
@@ -626,10 +651,28 @@
             <option value="in_progress">В работе</option>
             <option value="archive">Архив</option>
           </select>
-          <label class="tasks-ref-date" title="Фильтр по дате задачи">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v4"/><path d="M17 3v4"/><path d="M4 9h16"/><rect x="4" y="5" width="16" height="16" rx="2"/></svg>
-            <input id="taskDueDateFilter" type="date" aria-label="Фильтр задач по дате" />
-          </label>
+          <select id="taskAssigneeFilter" class="tasks-ref-select" aria-label="Ответственный по задаче">
+            <option value="">Ответственный</option>
+          </select>
+          <div id="taskDueDateFilterWrap" class="tasks-ref-date date-range-filter-wrap">
+            <button id="taskDueDateFilterBtn" class="date-range-filter-btn" type="button" aria-label="Фильтр задач по диапазону дат" aria-expanded="false" title="Фильтр задач по диапазону дат">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v4"/><path d="M17 3v4"/><path d="M4 9h16"/><rect x="4" y="5" width="16" height="16" rx="2"/></svg>
+            </button>
+            <div id="taskDueDateFilterPopover" class="date-range-filter-popover hidden">
+              <div class="date-range-filter-fields">
+                <label for="taskDueDateFromFilter">С
+                  <input id="taskDueDateFromFilter" type="date" aria-label="Начальная дата задач" />
+                </label>
+                <label for="taskDueDateToFilter">По
+                  <input id="taskDueDateToFilter" type="date" aria-label="Конечная дата задач" />
+                </label>
+              </div>
+              <div class="date-range-filter-actions">
+                <button id="taskDueDateFilterClearBtn" class="ghost small" type="button">Сбросить</button>
+                <button id="taskDueDateFilterApplyBtn" class="primary small" type="button">Показать</button>
+              </div>
+            </div>
+          </div>
           <input id="taskBucketFilter" type="hidden" value="active" />
         </section>
         <section id="taskStandaloneCreatePanel" class="panel-card tasks-standalone-create-panel hidden" aria-label="Создание задачи без чата">
@@ -878,13 +921,16 @@
             <div class="settings-card-head">
               <div>
                 <h3>Типы задач</h3>
-                <p class="muted">Добавляйте и удаляйте типы задач. Для каждого типа можно задать своё название поля вместо “Комментарий”.</p>
+                <p class="muted">Для типа задачи можно задать поле комментария и активный статус, который применяется к связанному чату.</p>
               </div>
             </div>
 
             <form id="taskTypeForm" class="task-type-create-form">
               <input id="taskTypeTitle" placeholder="Тип задачи, например: Доставки" required />
               <input id="taskTypeCommentLabel" placeholder="Название поля, например: Адрес" value="Комментарий" />
+              <select id="taskTypeChatStatus" aria-label="Статус чата для нового типа задачи">
+                <option value="">Не менять статус чата</option>
+              </select>
               <input id="taskTypeSort" type="number" placeholder="Порядок" value="0" />
               <button id="taskTypeCreateBtn" class="crm-light-btn" type="submit">Добавить тип</button>
             </form>
@@ -892,6 +938,7 @@
             <div class="task-type-settings-header" aria-hidden="true">
               <span>Тип задачи</span>
               <span>Поле в карточке</span>
+              <span>Статус чата</span>
               <span>Порядок</span>
               <span>Активен</span>
               <span></span>
@@ -978,6 +1025,6 @@
 
   <div id="notificationToasts" class="notification-toast-stack" aria-live="polite"></div>
 
-  <script src="/static/app.js?v=v89-yandex-oauth-tombstone-20260803"></script>
+  <script src="/static/app.js?v=v95-18-chat-preview-task-visuals-20260909"></script>
 </body>
 </html>

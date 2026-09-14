@@ -32,6 +32,8 @@ _ADMIN_GET_ROUTES = frozenset(
 )
 _ADMIN_GET_PREFIXES = ("/api/debug/", "/api/chat-uploads/")
 _NOTIFICATION_READ_ROUTE_RE = re.compile(r"^/api/notifications/[^/]+/read$")
+_CHAT_READ_STATE_ROUTE_RE = re.compile(r"^/api/chats/[^/]+/read-state$")
+_CHAT_PIN_STATE_ROUTE_RE = re.compile(r"^/api/chats/[^/]+/pin-state$")
 
 
 def current_user(request: Request, *, auth_disabled: bool = False) -> dict[str, Any]:
@@ -65,8 +67,11 @@ def route_access_class(method: str, path: str) -> str:
         return "session_self_check"
     if route in _SYSTEM_ROUTE_EXCEPTIONS:
         return "token_only" if normalized_path == "/api/background/tick" else "webhook_unchanged"
-    if route in _VIEWER_SELF_SERVICE_ROUTES or (
-        normalized_method == "POST" and _NOTIFICATION_READ_ROUTE_RE.fullmatch(normalized_path)
+    if (
+        route in _VIEWER_SELF_SERVICE_ROUTES
+        or (normalized_method == "POST" and _NOTIFICATION_READ_ROUTE_RE.fullmatch(normalized_path))
+        or (normalized_method == "PATCH" and _CHAT_READ_STATE_ROUTE_RE.fullmatch(normalized_path))
+        or (normalized_method == "PATCH" and _CHAT_PIN_STATE_ROUTE_RE.fullmatch(normalized_path))
     ):
         return "viewer_self_service"
     if normalized_method == "GET" and (

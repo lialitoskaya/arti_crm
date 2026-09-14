@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import os
 import sqlite3
-
 import json
 import re
-from contextlib import nullcontext
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
@@ -16,6 +14,19 @@ from app.marketplace_sender import (
     system_sender_matches as _shared_system_sender_matches,
 )
 from app.schemas import ChatCreate, ChatUpdate, TaskCreate, TaskUpdate, TaskTypeCreate, TaskTypeUpdate
+from app.task_chat_status_automation import (
+    TERMINAL_TASK_STATUSES,
+    acquire_task_effect_conn,
+    apply_manual_status_conn,
+    apply_provider_reopen_conn,
+    reconcile_automation_state_conn,
+    rebind_task_effect_conn,
+    release_all_task_effects_for_rollback_conn,
+    release_chat_status_automation_conn,
+    release_task_effect_conn,
+    release_task_type_effects_conn,
+    set_task_type_mapping_conn,
+)
 
 
 STANDALONE_TASK_MARKETPLACE = 'internal_tasks'
@@ -89,6 +100,7 @@ def _get_user_label(conn, user_id: int | None) -> str | None:
         return None
     row = conn.execute("SELECT id, username, display_name FROM users WHERE id=? AND is_active=1", (user_id,)).fetchone()
     return _user_label_from_row(row_to_dict(row)) if row else None
+
 
 def row_to_dict(row) -> dict[str, Any]:
     data = dict(row)
@@ -314,159 +326,228 @@ def find_recent_matching_outbound_message(
 
 
 
-def _is_provisional_outbound_external_id(value: Any) -> bool:
-    """Return True for local send placeholders that are not real marketplace ids."""
-    if value in (None, ""):
-        return True
-    text = str(value).strip()
-    if not text:
-        return True
-    lowered = text.lower()
-    if lowered in {"true", "false", "none", "null", "ok", "success"}:
-        return True
-    # Older send handlers could stringify an object returned in `result`.
-    if text.startswith("{") or text.startswith("["):
-        return True
-    if text.startswith("local:") or text.startswith("crm:"):
-        return True
-    return False
+def _message_raw_dict(value: str | None) -> dict[str, Any]:
+    try:
+        payload = json.loads(value or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
-def _raw_marks_crm_sent(raw_json: str | None) -> bool:
-    return bool(raw_json and "_crm_sent_from_crm" in raw_json)
+def _merge_message_raw_payload(
+    existing_raw_json: str | None,
+    incoming_raw: dict[str, Any] | None,
+) -> str:
+    """Merge provider data while preserving CRM audit fields."""
+    existing_payload = _message_raw_dict(existing_raw_json)
+    incoming_payload = incoming_raw if isinstance(incoming_raw, dict) else {}
+    merged_payload = {**existing_payload, **incoming_payload}
+    for key in (
+        "_crm_sent_from_crm",
+        "_crm_sent_by_label",
+        "_crm_sent_by_user_id",
+        "_crm_client_operation_id",
+        "_crm_send_ack_message_id",
+        "_crm_marketplace_attachment_sent",
+        "_crm_local_attachment",
+    ):
+        if key in existing_payload:
+            merged_payload[key] = existing_payload[key]
+    return json.dumps(merged_payload, ensure_ascii=False)
 
 
-def _find_outbound_echo_candidate_conn(conn, *, chat_id: int, text: str, created_at: str | None, window_seconds: int = 900, exclude_id: int | None = None):
-    """Find a local CRM outbound row that should be upgraded by a marketplace echo.
+def _find_outbound_counterpart_conn(
+    conn: sqlite3.Connection,
+    *,
+    chat_id: int,
+    text: str,
+    created_at: str,
+    incoming_is_crm_sent: bool,
+    window_seconds: int = 180,
+) -> sqlite3.Row | None:
+    """Find one unambiguous opposite-origin row for the same outbound message.
 
-    Some marketplace send endpoints (notably Ozon/WB variants) acknowledge a send
-    without returning the final message id that later appears in history. The CRM
-    creates a local outbound row immediately, then sync imports the marketplace
-    echo as a second outbound row. Match the echo to the local row by chat/text/time
-    and upgrade that row instead of inserting a duplicate.
+    Provider send acknowledgements and history records do not always expose the
+    same message id. The only safe fallback is a close-in-time text match where
+    exactly one side is CRM-origin. Ambiguous matches are deliberately ignored.
     """
-    needle = (text or "").strip()
+    needle = str(text or "").strip()
     if not needle or needle == "[сообщение без текста / вложение]":
         return None
-    safe_window = max(30, min(int(window_seconds or 900), 86400))
-    sql = """
-        SELECT id, external_message_id, author, raw_json, created_at
-        FROM messages
-        WHERE chat_id=?
-          AND direction='outbound'
-          AND TRIM(text)=TRIM(?)
-          AND ABS(strftime('%s', COALESCE(?, created_at)) - strftime('%s', created_at)) <= ?
-    """
-    params: list[Any] = [int(chat_id), needle, created_at, safe_window]
-    if exclude_id is not None:
-        sql += " AND id<>?"
-        params.append(int(exclude_id))
-    sql += " ORDER BY id DESC LIMIT 20"
-    rows = conn.execute(sql, params).fetchall()
-    for row in rows:
-        external_id = row["external_message_id"]
-        raw_json = row["raw_json"] or "{}"
-        if _is_provisional_outbound_external_id(external_id) or _raw_marks_crm_sent(raw_json):
-            return row
-    return None
-
-
-
-def _find_existing_marketplace_echo_for_crm_send_conn(conn, *, chat_id: int, text: str, created_at: str | None, window_seconds: int = 900):
-    """Find a marketplace echo that arrived before the CRM local-send row.
-
-    Race this fixes:
-    1. The operator sends a message from CRM.
-    2. Browser autosync / marketplace sync imports the just-sent seller message first.
-    3. The send endpoint then saves the local CRM row with no final marketplace id.
-
-    Without this reverse lookup the UI briefly shows two outbound bubbles until the
-    repair job removes one. Returning the existing echo lets add_message update it
-    immediately, so the duplicate is filtered before it appears.
-    """
-    needle = (text or "").strip()
-    if not needle or needle == "[сообщение без текста / вложение]":
-        return None
-    safe_window = max(30, min(int(window_seconds or 900), 86400))
+    safe_window = max(10, min(int(window_seconds or 180), 900))
     rows = conn.execute(
         """
-        SELECT id, external_message_id, author, raw_json, created_at
+        SELECT *, ABS(strftime('%s', created_at) - strftime('%s', ?)) AS time_delta
         FROM messages
         WHERE chat_id=?
           AND direction='outbound'
+          AND is_crm_sent=?
           AND TRIM(text)=TRIM(?)
-          AND ABS(strftime('%s', COALESCE(?, created_at)) - strftime('%s', created_at)) <= ?
-        ORDER BY id DESC
-        LIMIT 20
+          AND ABS(strftime('%s', created_at) - strftime('%s', ?)) <= ?
+        ORDER BY time_delta ASC, id ASC
+        LIMIT 2
         """,
-        (int(chat_id), needle, created_at, safe_window),
+        (
+            created_at,
+            int(chat_id),
+            0 if incoming_is_crm_sent else 1,
+            needle,
+            created_at,
+            safe_window,
+        ),
     ).fetchall()
-    for row in rows:
-        raw_json = row["raw_json"] or "{}"
-        # Existing echo must look like marketplace data, not another CRM local row.
-        if _raw_marks_crm_sent(raw_json):
-            continue
-        if _is_provisional_outbound_external_id(row["external_message_id"]):
-            continue
-        return row
+    # Text/time is only a fallback for providers that do not expose the same
+    # id in the send acknowledgement and history. Never guess when more than
+    # one opposite-origin candidate exists: repeated identical replies are
+    # valid user actions and must remain separate messages.
+    if len(rows) != 1:
+        return None
+    return rows[0]
+
+
+def _merge_message_identity_conn(
+    conn: sqlite3.Connection,
+    *,
+    existing: sqlite3.Row,
+    direction: str,
+    author: str | None,
+    text: str,
+    external_message_id: str | None,
+    raw: dict[str, Any] | None,
+    created_at: str,
+    is_crm_sent: bool,
+    crm_author_user_id: int | None,
+    crm_author_label: str | None,
+    client_operation_id: str | None,
+) -> int:
+    existing_is_crm = bool(existing["is_crm_sent"])
+    canonical_is_crm = bool(existing_is_crm or is_crm_sent)
+    canonical_direction = "outbound" if canonical_is_crm else direction
+    canonical_label = (
+        str(existing["crm_author_label"] or "").strip()
+        or str(crm_author_label or "").strip()
+        or None
+    )
+    canonical_user_id = existing["crm_author_user_id"] or crm_author_user_id
+    canonical_operation_id = (
+        str(existing["client_operation_id"] or "").strip()
+        or str(client_operation_id or "").strip()
+        or None
+    )
+    existing_external_id = str(existing["external_message_id"] or "").strip()
+    incoming_external_id = str(external_message_id or "").strip()
+    canonical_external_id = existing_external_id or incoming_external_id or None
+
+    merged_raw = _message_raw_dict(
+        _merge_message_raw_payload(existing["raw_json"], raw)
+    )
+    if is_crm_sent and incoming_external_id:
+        # A send endpoint acknowledgement is audit data, not the canonical
+        # history identity. The provider history id wins when it arrives.
+        merged_raw.setdefault("_crm_send_ack_message_id", incoming_external_id)
+    elif not is_crm_sent and incoming_external_id:
+        if existing_external_id and existing_external_id != incoming_external_id and existing_is_crm:
+            merged_raw.setdefault("_crm_send_ack_message_id", existing_external_id)
+        canonical_external_id = incoming_external_id
+
+    canonical_author = canonical_label or existing["author"] or author
+    canonical_created_at = existing["created_at"] if is_crm_sent else created_at
+    conn.execute(
+        """
+        UPDATE messages
+        SET external_message_id=?, direction=?, author=?, text=?, created_at=?, raw_json=?,
+            is_crm_sent=?, crm_author_user_id=?, crm_author_label=?, client_operation_id=?
+        WHERE id=?
+        """,
+        (
+            canonical_external_id,
+            canonical_direction,
+            canonical_author,
+            text,
+            canonical_created_at,
+            json.dumps(merged_raw, ensure_ascii=False),
+            int(canonical_is_crm),
+            canonical_user_id,
+            canonical_label,
+            canonical_operation_id,
+            int(existing["id"]),
+        ),
+    )
+    return int(existing["id"])
+
+
+def _find_existing_message_identity_conn(
+    conn: sqlite3.Connection,
+    *,
+    chat_id: int,
+    direction: str,
+    text: str,
+    external_message_id: str | None,
+    raw: dict[str, Any] | None,
+    created_at: str,
+    is_crm_sent: bool,
+    client_operation_id: str | None,
+) -> sqlite3.Row | None:
+    operation_id = str(client_operation_id or "").strip()
+    if operation_id:
+        row = conn.execute(
+            "SELECT * FROM messages WHERE chat_id=? AND client_operation_id=?",
+            (int(chat_id), operation_id),
+        ).fetchone()
+        if row:
+            return row
+
+    clean_external_id = str(external_message_id or "").strip()
+    if clean_external_id:
+        row = conn.execute(
+            "SELECT * FROM messages WHERE chat_id=? AND external_message_id=?",
+            (int(chat_id), clean_external_id),
+        ).fetchone()
+        if row:
+            return row
+
+    raw_payload = raw if isinstance(raw, dict) else {}
+    raw_source = str(raw_payload.get("_crm_source") or "")
+    if clean_external_id.startswith("wb:last:") or raw_source == "wb_lastMessage":
+        row = conn.execute(
+            """
+            SELECT * FROM messages
+            WHERE chat_id=? AND TRIM(text)=TRIM(?)
+              AND raw_json LIKE '%wb_lastMessage%'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (int(chat_id), text),
+        ).fetchone()
+        if row:
+            return row
+
+    if clean_external_id.startswith("wb:") and "_crm_wb_msg_obj" in raw_payload:
+        row = conn.execute(
+            """
+            SELECT * FROM messages
+            WHERE chat_id=? AND TRIM(text)=TRIM(?)
+              AND raw_json LIKE '%_crm_wb_msg_obj%'
+              AND ABS(strftime('%s', created_at) - strftime('%s', ?)) <= 5
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (int(chat_id), text, created_at),
+        ).fetchone()
+        if row:
+            return row
+
+    if direction == "outbound":
+        return _find_outbound_counterpart_conn(
+            conn,
+            chat_id=int(chat_id),
+            text=text,
+            created_at=created_at,
+            incoming_is_crm_sent=is_crm_sent,
+            window_seconds=int(__import__("os").getenv("CRM_OUTBOUND_ECHO_MATCH_WINDOW_SECONDS", "180") or "180"),
+        )
     return None
 
-def repair_outbound_marketplace_echo_duplicates(limit: int = 1000, window_seconds: int = 900) -> int:
-    """Merge already-created duplicate outbound echoes back into the CRM local row.
-
-    This is a repair for rows created before the echo-upgrade logic existed. It is
-    intentionally conservative: only same chat + same text + close timestamps +
-    outbound direction, and only when one candidate looks like a local/provisional
-    CRM send.
-    """
-    safe_limit = max(1, min(int(limit or 1000), 10000))
-    safe_window = max(30, min(int(window_seconds or 900), 86400))
-    repaired = 0
-    with get_connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT id, chat_id, external_message_id, author, text, created_at, raw_json
-            FROM messages
-            WHERE direction='outbound'
-              AND TRIM(text)<>''
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (safe_limit,),
-        ).fetchall()
-        for row in rows:
-            row_id = int(row["id"])
-            external_id = row["external_message_id"]
-            raw_json = row["raw_json"] or "{}"
-            # We treat a non-provisional, non-CRM-marked row as the marketplace echo.
-            if _is_provisional_outbound_external_id(external_id) or _raw_marks_crm_sent(raw_json):
-                continue
-            local = _find_outbound_echo_candidate_conn(
-                conn,
-                chat_id=int(row["chat_id"]),
-                text=row["text"] or "",
-                created_at=row["created_at"],
-                window_seconds=safe_window,
-                exclude_id=row_id,
-            )
-            if not local:
-                continue
-            local_id = int(local["id"])
-            conn.execute(
-                """
-                UPDATE messages
-                SET external_message_id=?,
-                    author=COALESCE(NULLIF(author, ''), ?),
-                    raw_json=?,
-                    created_at=COALESCE(?, created_at)
-                WHERE id=?
-                """,
-                (external_id, row["author"], raw_json, row["created_at"], local_id),
-            )
-            conn.execute("DELETE FROM messages WHERE id=?", (row_id,))
-            refresh_chat_last_message(conn, int(row["chat_id"]))
-            repaired += 1
-    return repaired
 
 def delete_mock_chats() -> int:
     """Remove historical demo/mock chats from local databases.
@@ -803,10 +884,6 @@ def upsert_chat(chat: ChatCreate) -> int:
             for key, value in existing_metadata.items():
                 if str(key).startswith("_crm_"):
                     incoming_metadata[key] = value
-            if _is_closed_status_key_conn(conn, existing["status"]):
-                incoming_metadata["_crm_status_manual"] = True
-                incoming_metadata.setdefault("_crm_status_manual_value", "closed")
-                incoming_metadata.setdefault("_crm_status_manual_source_value", existing["status"])
         conn.execute(
             """
             INSERT INTO chats (
@@ -820,33 +897,6 @@ def upsert_chat(chat: ChatCreate) -> int:
                 END,
                 customer_public_id=COALESCE(NULLIF(excluded.customer_public_id, ''), chats.customer_public_id),
                 order_id=COALESCE(NULLIF(excluded.order_id, ''), order_id),
-                -- Marketplace sync must not erase operator workflow fields, except
-                -- when a marketplace explicitly reports unread activity. In that case
-                -- a previously archived/closed chat must return to the active inbox.
-                status=CASE
-                    -- Manual CRM status and closed-like workflow statuses have priority
-                    -- over marketplace sync. Without this, background sync could reset
-                    -- closed dialogs back to "new" when marketplace metadata contains
-                    -- unread flags from an already imported message.
-                    WHEN chats.metadata_json LIKE '%"_crm_status_manual": true%' THEN chats.status
-                    WHEN chats.status='closed' THEN chats.status
-                    WHEN lower(chats.status) IN ('closed', 'archive', 'archived', 'zakryt', 'zakryto') THEN chats.status
-                    WHEN chats.status LIKE '%Закры%' OR chats.status LIKE '%закры%' THEN chats.status
-                    WHEN chats.status IN (
-                        SELECT key FROM chat_statuses
-                        WHERE key='closed'
-                           OR lower(key) IN ('closed', 'archive', 'archived', 'zakryt', 'zakryto')
-                           OR title LIKE '%Закры%'
-                           OR title LIKE '%закры%'
-                    ) THEN chats.status
-                    -- Custom statuses are not known to marketplace sync, so never
-                    -- overwrite them from unread_count / first_unread_message_id.
-                    WHEN chats.status NOT IN ('new', 'in_progress', 'waiting_customer', 'closed') THEN chats.status
-                    WHEN excluded.metadata_json LIKE '%"unread_count": 0%' THEN chats.status
-                    WHEN excluded.metadata_json LIKE '%"unread_count":%' THEN 'new'
-                    WHEN excluded.metadata_json LIKE '%"first_unread_message_id":%' AND excluded.metadata_json NOT LIKE '%"first_unread_message_id": null%' THEN 'new'
-                    ELSE chats.status
-                END,
                 assigned_to=chats.assigned_to,
                 metadata_json=excluded.metadata_json,
                 updated_at=CURRENT_TIMESTAMP
@@ -1433,16 +1483,9 @@ def reopen_closed_chat_for_new_activity(chat_id: int, latest_direction: str | No
     We only call this after a sync pass has confirmed newer messages for that chat,
     so old historical imports will not reopen archived conversations accidentally.
     """
-    new_status = "new" if latest_direction == "inbound" else "in_progress"
     with get_connection() as conn:
-        row = conn.execute("SELECT status FROM chats WHERE id=?", (chat_id,)).fetchone()
-        if not row or row["status"] != "closed":
-            return False
-        conn.execute(
-            "UPDATE chats SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-            (new_status, chat_id),
-        )
-        return True
+        conn.execute("BEGIN IMMEDIATE")
+        return apply_provider_reopen_conn(conn, int(chat_id), latest_direction)
 
 
 def get_latest_message_for_chat(chat_id: int) -> dict[str, Any] | None:
@@ -2191,8 +2234,284 @@ def mark_push_subscription_result(endpoint: str, *, ok: bool, error: str | None 
             )
 
 
+def _chat_read_state_row_conn(conn: Any, chat_id: int, user_id: int) -> Any:
+    return conn.execute(
+        """
+        SELECT
+            c.id AS chat_id,
+            cus.user_id AS state_user_id,
+            cus.last_read_message_id,
+            cus.last_read_at,
+            COALESCE(cus.is_marked_unread, 0) AS is_marked_unread,
+            (
+                SELECT MAX(all_messages.id)
+                FROM messages all_messages
+                WHERE all_messages.chat_id=c.id
+            ) AS latest_message_id,
+            (
+                SELECT MAX(unread_messages.id)
+                FROM messages unread_messages
+                WHERE unread_messages.chat_id=c.id
+                  AND unread_messages.direction='inbound'
+                  AND cus.user_id IS NOT NULL
+                  AND unread_messages.id > COALESCE(cus.last_read_message_id, 0)
+            ) AS unread_message_id
+        FROM chats c
+        LEFT JOIN chat_user_states cus
+          ON cus.chat_id=c.id AND cus.user_id=?
+        WHERE c.id=?
+        """,
+        (int(user_id), int(chat_id)),
+    ).fetchone()
+
+
+def _serialize_chat_read_state(row: Any) -> dict[str, Any] | None:
+    if not row:
+        return None
+    marked_unread = bool(row["is_marked_unread"])
+    unread_message_id = row["unread_message_id"]
+    return {
+        "chat_id": int(row["chat_id"]),
+        "is_unread": bool(marked_unread or unread_message_id is not None),
+        "is_marked_unread": marked_unread,
+        "last_read_message_id": (
+            int(row["last_read_message_id"])
+            if row["last_read_message_id"] is not None
+            else None
+        ),
+        "last_read_at": row["last_read_at"],
+        "unread_message_id": (
+            int(unread_message_id)
+            if unread_message_id is not None
+            else None
+        ),
+    }
+
+
+def get_chat_read_state(chat_id: int, user_id: int) -> dict[str, Any] | None:
+    with get_connection() as conn:
+        return _serialize_chat_read_state(
+            _chat_read_state_row_conn(conn, int(chat_id), int(user_id))
+        )
+
+
+def set_chat_read_state(
+    chat_id: int,
+    user_id: int,
+    *,
+    is_unread: bool,
+) -> dict[str, Any] | None:
+    """Set canonical read state for one CRM user without loading chat history."""
+    with get_connection() as conn:
+        current = _chat_read_state_row_conn(conn, int(chat_id), int(user_id))
+        if not current:
+            return None
+
+        latest_message_id = current["latest_message_id"]
+        if is_unread:
+            conn.execute(
+                """
+                INSERT INTO chat_user_states (
+                    user_id, chat_id, last_read_message_id, last_read_at,
+                    is_marked_unread, updated_at
+                )
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP, 1, CURRENT_TIMESTAMP)
+                ON CONFLICT(user_id, chat_id) DO UPDATE SET
+                    is_marked_unread=1,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE chat_user_states.is_marked_unread<>1
+                """,
+                (int(user_id), int(chat_id), latest_message_id),
+            )
+        elif current["state_user_id"] is not None:
+            conn.execute(
+                """
+                UPDATE chat_user_states
+                SET last_read_message_id=?,
+                    last_read_at=CURRENT_TIMESTAMP,
+                    is_marked_unread=0,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE user_id=? AND chat_id=?
+                  AND (
+                      is_marked_unread<>0
+                      OR last_read_message_id IS NOT ?
+                  )
+                """,
+                (
+                    latest_message_id,
+                    int(user_id),
+                    int(chat_id),
+                    latest_message_id,
+                ),
+            )
+
+        return _serialize_chat_read_state(
+            _chat_read_state_row_conn(conn, int(chat_id), int(user_id))
+        )
+
+
+def _chat_pin_state_row_conn(conn: Any, chat_id: int, user_id: int) -> Any:
+    return conn.execute(
+        """
+        SELECT
+            c.id AS chat_id,
+            cus.user_id AS state_user_id,
+            COALESCE(cus.is_pinned, 0) AS is_pinned,
+            cus.pinned_at AS pinned_at,
+            (
+                SELECT MAX(all_messages.id)
+                FROM messages all_messages
+                WHERE all_messages.chat_id=c.id
+            ) AS latest_message_id
+        FROM chats c
+        LEFT JOIN chat_user_states cus
+          ON cus.chat_id=c.id AND cus.user_id=?
+        WHERE c.id=?
+        """,
+        (int(user_id), int(chat_id)),
+    ).fetchone()
+
+
+def _serialize_chat_pin_state(row: Any) -> dict[str, Any] | None:
+    if not row:
+        return None
+    return {
+        "chat_id": int(row["chat_id"]),
+        "is_pinned": bool(row["is_pinned"]),
+        "pinned_at": row["pinned_at"],
+    }
+
+
+def get_chat_pin_state(chat_id: int, user_id: int) -> dict[str, Any] | None:
+    with get_connection() as conn:
+        return _serialize_chat_pin_state(
+            _chat_pin_state_row_conn(conn, int(chat_id), int(user_id))
+        )
+
+
+def set_chat_pin_state(
+    chat_id: int,
+    user_id: int,
+    *,
+    is_pinned: bool,
+) -> dict[str, Any] | None:
+    """Set personal pin state without changing read state or loading history."""
+    with get_connection() as conn:
+        current = _chat_pin_state_row_conn(conn, int(chat_id), int(user_id))
+        if not current:
+            return None
+
+        if is_pinned:
+            conn.execute(
+                """
+                INSERT INTO chat_user_states (
+                    user_id, chat_id, last_read_message_id, last_read_at,
+                    is_marked_unread, is_pinned, pinned_at, updated_at
+                )
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP, 0, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT(user_id, chat_id) DO UPDATE SET
+                    is_pinned=1,
+                    pinned_at=CASE
+                        WHEN chat_user_states.is_pinned=1 THEN chat_user_states.pinned_at
+                        ELSE CURRENT_TIMESTAMP
+                    END,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE chat_user_states.is_pinned<>1
+                """,
+                (int(user_id), int(chat_id), current["latest_message_id"]),
+            )
+        elif current["state_user_id"] is not None:
+            conn.execute(
+                """
+                UPDATE chat_user_states
+                SET is_pinned=0,
+                    pinned_at=NULL,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE user_id=? AND chat_id=? AND is_pinned<>0
+                """,
+                (int(user_id), int(chat_id)),
+            )
+
+        return _serialize_chat_pin_state(
+            _chat_pin_state_row_conn(conn, int(chat_id), int(user_id))
+        )
+
+
+def _preserve_read_users_for_replayed_inbound_conn(
+    conn: Any,
+    *,
+    chat_id: int,
+    message_id: int,
+) -> None:
+    """Keep a delayed/replayed inbound from reopening chats that were read."""
+    conn.execute(
+        """
+        UPDATE chat_user_states
+        SET last_read_message_id=?,
+            updated_at=CURRENT_TIMESTAMP
+        WHERE chat_id=?
+          AND is_marked_unread=0
+          AND (last_read_message_id IS NULL OR last_read_message_id < ?)
+          AND NOT EXISTS (
+              SELECT 1
+              FROM messages unread_messages
+              WHERE unread_messages.chat_id=chat_user_states.chat_id
+                AND unread_messages.direction='inbound'
+                AND unread_messages.id > COALESCE(chat_user_states.last_read_message_id, 0)
+                AND unread_messages.id<>?
+          )
+        """,
+        (int(message_id), int(chat_id), int(message_id), int(message_id)),
+    )
+
+
+def _mark_chat_unread_for_active_users_conn(
+    conn: Any,
+    *,
+    chat_id: int,
+    message_id: int,
+    previous_latest_message_id: int | None,
+    created_at: str | None,
+) -> None:
+    """Create personal unread boundaries only for a genuinely new latest inbound."""
+    is_recent = _message_recent_enough_for_notification(created_at)
+    latest = conn.execute(
+        """
+        SELECT id
+        FROM messages
+        WHERE chat_id=?
+        ORDER BY julianday(created_at) DESC, id DESC
+        LIMIT 1
+        """,
+        (int(chat_id),),
+    ).fetchone()
+    is_new_latest = bool(
+        is_recent and latest and int(latest["id"]) == int(message_id)
+    )
+    if not is_new_latest:
+        _preserve_read_users_for_replayed_inbound_conn(
+            conn, chat_id=chat_id, message_id=message_id
+        )
+        return
+
+    conn.execute(
+        """
+        INSERT INTO chat_user_states (
+            user_id, chat_id, last_read_message_id, last_read_at,
+            is_marked_unread, updated_at
+        )
+        SELECT
+            users.id, ?, ?, CURRENT_TIMESTAMP, 0, CURRENT_TIMESTAMP
+        FROM users
+        WHERE users.is_active=1
+        ON CONFLICT(user_id, chat_id) DO NOTHING
+        """,
+        (int(chat_id), previous_latest_message_id),
+    )
+
+
 def _add_message_conn(
-    conn,
+    conn: sqlite3.Connection,
     chat_id: int,
     direction: str,
     text: str,
@@ -2200,281 +2519,196 @@ def _add_message_conn(
     external_message_id: str | None = None,
     raw: dict[str, Any] | None = None,
     created_at: str | None = None,
+    *,
+    is_crm_sent: bool = False,
+    crm_author_user_id: int | None = None,
+    crm_author_label: str | None = None,
+    client_operation_id: str | None = None,
 ) -> int:
-    """Insert or update a marketplace message and rebuild chat preview safely."""
-    clean_external_id = external_message_id or None
-    raw_json = json.dumps(raw or {}, ensure_ascii=False)
-    if not created_at:
-        created_at = _utc_now_iso()
+    """Persist one logical message through a single identity reconciliation path."""
+    from app.message_send_operations import (
+        confirm_operation_from_echo_conn,
+        match_operation_for_echo_conn,
+    )
 
-    with nullcontext(conn):
-        message_id: int
-
-        # v104: hard idempotency guard for marketplace sync. The app may run
-        # background sync and operator-triggered sync close to each other. If a
-        # message with the same marketplace id is already in the local DB, update
-        # it and return instead of allowing a UNIQUE constraint failure to abort
-        # the whole Ozon/Yandex/WB synchronization pass.
-        if clean_external_id:
-            existing_by_external_id = conn.execute(
-                "SELECT id FROM messages WHERE chat_id=? AND external_message_id=?",
-                (int(chat_id), clean_external_id),
-            ).fetchone()
-            if existing_by_external_id:
-                conn.execute(
-                    """
-                    UPDATE messages
-                    SET direction=?, author=COALESCE(NULLIF(?, ''), author),
-                        text=?, raw_json=?, created_at=COALESCE(?, created_at)
-                    WHERE id=?
-                    """,
-                    (direction, author, text, raw_json, created_at, existing_by_external_id["id"]),
-                )
-                message_id = int(existing_by_external_id["id"])
-                refresh_chat_last_message(conn, chat_id)
-                return message_id
-
-        if direction == "outbound" and not clean_external_id and _raw_marks_crm_sent(raw_json):
-            # Reverse race guard: if autosync already imported the marketplace
-            # echo before this send request saved its local row, update that echo
-            # in place instead of inserting a second CRM bubble.
-            existing_echo = _find_existing_marketplace_echo_for_crm_send_conn(
-                conn,
-                chat_id=int(chat_id),
-                text=text,
-                created_at=created_at,
-                window_seconds=int(__import__("os").getenv("CRM_OUTBOUND_ECHO_MATCH_WINDOW_SECONDS", "900") or "900"),
-            )
-            if existing_echo:
-                merged_raw = raw or {}
-                try:
-                    echo_raw = json.loads(existing_echo["raw_json"] or "{}")
-                    if isinstance(echo_raw, dict):
-                        merged_raw = {**echo_raw, **(raw or {})}
-                except Exception:
-                    pass
-                conn.execute(
-                    """
-                    UPDATE messages
-                    SET author=COALESCE(NULLIF(?, ''), author),
-                        raw_json=?,
-                        created_at=COALESCE(created_at, ?)
-                    WHERE id=?
-                    """,
-                    (author, json.dumps(merged_raw, ensure_ascii=False), created_at, existing_echo["id"]),
-                )
-                message_id = int(existing_echo["id"])
-                refresh_chat_last_message(conn, chat_id)
-                return message_id
-
-        if clean_external_id and direction == "outbound":
-            # Root-cause fix for duplicate seller replies: if the marketplace
-            # returns the same CRM-sent message later with its real id, upgrade
-            # the local/provisional outbound row instead of inserting a second
-            # seller bubble. This runs before exact external-id lookup because
-            # old local rows may have placeholder ids like "True" from send ACKs.
-            outbound_echo_duplicate = _find_outbound_echo_candidate_conn(
-                conn,
-                chat_id=int(chat_id),
-                text=text,
-                created_at=created_at,
-                window_seconds=int(__import__("os").getenv("CRM_OUTBOUND_ECHO_MATCH_WINDOW_SECONDS", "900") or "900"),
-            )
-            if outbound_echo_duplicate:
-                conn.execute(
-                    """
-                    UPDATE messages
-                    SET external_message_id=?,
-                        author=COALESCE(NULLIF(author, ''), ?),
-                        raw_json=?,
-                        created_at=COALESCE(?, created_at)
-                    WHERE id=?
-                    """,
-                    (clean_external_id, author, raw_json, created_at, outbound_echo_duplicate["id"]),
-                )
-                message_id = int(outbound_echo_duplicate["id"])
-                refresh_chat_last_message(conn, chat_id)
-                return message_id
-
-        if clean_external_id:
-            existing = conn.execute(
-                "SELECT id, text FROM messages WHERE chat_id=? AND external_message_id=?",
-                (chat_id, clean_external_id),
-            ).fetchone()
-            if existing:
-                conn.execute(
-                    """
-                    UPDATE messages
-                    SET direction=?, author=?, text=?, raw_json=?,
-                        created_at=COALESCE(?, created_at)
-                    WHERE id=?
-                    """,
-                    (direction, author, text, raw_json, created_at, existing["id"]),
-                )
-                message_id = int(existing["id"])
-                refresh_chat_last_message(conn, chat_id)
-                return message_id
-
-            # v64: older WB local repair builds saved lastMessage with a fallback
-            # external id based on a missing/wrong timestamp. If we now parse
-            # addTimestamp correctly, update the existing wb_lastMessage row
-            # instead of inserting a duplicate.
-            if str(clean_external_id).startswith("wb:last:") or '"_crm_source": "wb_lastMessage"' in raw_json:
-                wb_last_duplicate = conn.execute(
-                    """
-                    SELECT id
-                    FROM messages
-                    WHERE chat_id=?
-                      AND TRIM(text)=TRIM(?)
-                      AND raw_json LIKE '%wb_lastMessage%'
-                    ORDER BY id DESC
-                    LIMIT 1
-                    """,
-                    (chat_id, text),
-                ).fetchone()
-                if wb_last_duplicate:
-                    conn.execute(
-                        """
-                        UPDATE messages
-                        SET external_message_id=?, direction=?, author=COALESCE(?, author), raw_json=?,
-                            created_at=COALESCE(?, created_at)
-                        WHERE id=?
-                        """,
-                        (clean_external_id, direction, author, raw_json, created_at, wb_last_duplicate["id"]),
-                    )
-                    message_id = int(wb_last_duplicate["id"])
-                    refresh_chat_last_message(conn, chat_id)
-                    return message_id
-
-            # If WB direction detection is improved later, a fallback external id
-            # that included the old direction can change. Update the same WB event
-            # row by text/time instead of leaving an old inbound duplicate that keeps
-            # the chat in "ждёт ответа".
-            if str(clean_external_id).startswith("wb:") and "_crm_wb_msg_obj" in raw_json:
-                wb_event_duplicate = conn.execute(
-                    """
-                    SELECT id
-                    FROM messages
-                    WHERE chat_id=?
-                      AND TRIM(text)=TRIM(?)
-                      AND raw_json LIKE '%_crm_wb_msg_obj%'
-                      AND ABS(strftime('%s', COALESCE(?, created_at)) - strftime('%s', created_at)) <= 5
-                    ORDER BY id DESC
-                    LIMIT 1
-                    """,
-                    (chat_id, text, created_at),
-                ).fetchone()
-                if wb_event_duplicate:
-                    conn.execute(
-                        """
-                        UPDATE messages
-                        SET external_message_id=?, direction=?, author=COALESCE(?, author), raw_json=?,
-                            created_at=COALESCE(?, created_at)
-                        WHERE id=?
-                        """,
-                        (clean_external_id, direction, author, raw_json, created_at, wb_event_duplicate["id"]),
-                    )
-                    message_id = int(wb_event_duplicate["id"])
-                    refresh_chat_last_message(conn, chat_id)
-                    return message_id
-
-            # v50: de-duplicate seller replies. Some marketplace send endpoints
-            # return no message id, so CRM first saved a local outbound message
-            # with an empty external id. On the next sync the same seller reply
-            # came back with a marketplace id and was inserted again. If the text
-            # and direction match a recent local no-id message, upgrade that row
-            # instead of creating a duplicate.
-            local_duplicate = conn.execute(
-                """
-                SELECT id
-                FROM messages
-                WHERE chat_id=?
-                  AND direction=?
-                  AND COALESCE(external_message_id, '')=''
-                  AND TRIM(text)=TRIM(?)
-                  AND ABS(strftime('%s', COALESCE(?, created_at)) - strftime('%s', created_at)) <= 900
-                ORDER BY id DESC
-                LIMIT 1
-                """,
-                (chat_id, direction, text, created_at),
-            ).fetchone()
-            if local_duplicate:
-                conn.execute(
-                    """
-                    UPDATE messages
-                    SET external_message_id=?, author=COALESCE(?, author), raw_json=?,
-                        created_at=COALESCE(?, created_at)
-                    WHERE id=?
-                    """,
-                    (clean_external_id, author, raw_json, created_at, local_duplicate["id"]),
-                )
-                message_id = int(local_duplicate["id"])
-                refresh_chat_last_message(conn, chat_id)
-                return message_id
-
-        # Also protect against double-clicks/retries when the marketplace response
-        # still has no external id. Keep one local copy per same text/direction in
-        # a short time window.
-        if not clean_external_id:
-            existing_local = conn.execute(
-                """
-                SELECT id
-                FROM messages
-                WHERE chat_id=?
-                  AND direction=?
-                  AND COALESCE(external_message_id, '')=''
-                  AND TRIM(text)=TRIM(?)
-                  AND ABS(strftime('%s', COALESCE(?, created_at)) - strftime('%s', created_at)) <= 30
-                ORDER BY id DESC
-                LIMIT 1
-                """,
-                (chat_id, direction, text, created_at),
-            ).fetchone()
-            if existing_local:
-                refresh_chat_last_message(conn, chat_id)
-                return int(existing_local["id"])
-
-        cur = conn.execute(
-            """
-            INSERT OR IGNORE INTO messages (chat_id, external_message_id, direction, author, text, created_at, raw_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (chat_id, clean_external_id, direction, author, text, created_at, raw_json),
+    created_at = created_at or _utc_now_iso()
+    raw_payload = dict(raw) if isinstance(raw, dict) else {}
+    clean_external_id = str(external_message_id or "").strip() or None
+    matched_operation = None
+    if not is_crm_sent and str(direction or "").strip().lower() == "outbound":
+        matched_operation = match_operation_for_echo_conn(
+            conn,
+            chat_id=int(chat_id),
+            direction=direction,
+            text=text,
+            provider_external_message_id=clean_external_id,
+            created_at=created_at,
         )
+        if matched_operation:
+            is_crm_sent = True
+            crm_author_user_id = int(matched_operation.get("author_user_id") or 0) or None
+            crm_author_label = str(matched_operation.get("author_label") or "").strip() or None
+            client_operation_id = str(matched_operation.get("client_operation_id") or "").strip() or None
 
-        # If another sync worker inserted the same marketplace message between
-        # our SELECT and INSERT, SQLite ignores the insert. Update and return the
-        # existing row instead of raising UNIQUE constraint failed.
-        if clean_external_id and int(cur.rowcount or 0) == 0:
-            existing_after_insert = conn.execute(
-                "SELECT id FROM messages WHERE chat_id=? AND external_message_id=?",
-                (int(chat_id), clean_external_id),
-            ).fetchone()
-            if existing_after_insert:
-                conn.execute(
-                    """
-                    UPDATE messages
-                    SET direction=?, author=COALESCE(NULLIF(?, ''), author),
-                        text=?, raw_json=?, created_at=COALESCE(?, created_at)
-                    WHERE id=?
-                    """,
-                    (direction, author, text, raw_json, created_at, existing_after_insert["id"]),
-                )
-                message_id = int(existing_after_insert["id"])
-                refresh_chat_last_message(conn, chat_id)
-                return message_id
+    crm_label = str(
+        crm_author_label or raw_payload.get("_crm_sent_by_label") or ""
+    ).strip() or None
+    operation_id = str(
+        client_operation_id or raw_payload.get("_crm_client_operation_id") or ""
+    ).strip() or None
+    try:
+        raw_crm_author_user_id = int(raw_payload.get("_crm_sent_by_user_id") or 0) or None
+    except (TypeError, ValueError):
+        raw_crm_author_user_id = None
+    crm_author_user_id = crm_author_user_id or raw_crm_author_user_id
+    if crm_author_user_id and not crm_label:
+        crm_label = _get_user_label(conn, int(crm_author_user_id))
+    incoming_is_crm_sent = bool(
+        is_crm_sent
+        or raw_payload.get("_crm_sent_from_crm") is True
+        or crm_label
+        or crm_author_user_id
+        or operation_id
+    )
 
-        message_id = int(cur.lastrowid)
-        refresh_chat_last_message(conn, chat_id)
-        if direction == "inbound":
-            _notify_new_inbound_message_conn(
+    if incoming_is_crm_sent:
+        direction = "outbound"
+        raw_payload["_crm_sent_from_crm"] = True
+        if crm_label:
+            raw_payload["_crm_sent_by_label"] = crm_label
+        if crm_author_user_id:
+            raw_payload["_crm_sent_by_user_id"] = int(crm_author_user_id)
+        if operation_id:
+            raw_payload["_crm_client_operation_id"] = operation_id
+    elif direction == "inbound" and _message_raw_looks_seller_side(raw_payload):
+        direction = "outbound"
+
+    previous_latest_message_id: int | None = None
+    if direction == "inbound":
+        previous_latest = conn.execute(
+            "SELECT MAX(id) AS id FROM messages WHERE chat_id=?",
+            (int(chat_id),),
+        ).fetchone()
+        if previous_latest and previous_latest["id"] is not None:
+            previous_latest_message_id = int(previous_latest["id"])
+
+    existing = _find_existing_message_identity_conn(
+        conn,
+        chat_id=int(chat_id),
+        direction=direction,
+        text=text,
+        external_message_id=clean_external_id,
+        raw=raw_payload,
+        created_at=created_at,
+        is_crm_sent=incoming_is_crm_sent,
+        client_operation_id=operation_id,
+    )
+    if existing:
+        message_id = _merge_message_identity_conn(
+            conn,
+            existing=existing,
+            direction=direction,
+            author=author,
+            text=text,
+            external_message_id=clean_external_id,
+            raw=raw_payload,
+            created_at=created_at,
+            is_crm_sent=incoming_is_crm_sent,
+            crm_author_user_id=crm_author_user_id,
+            crm_author_label=crm_label,
+            client_operation_id=operation_id,
+        )
+        refresh_chat_last_message(conn, int(chat_id))
+        if matched_operation:
+            confirm_operation_from_echo_conn(
                 conn,
-                chat_id=chat_id,
-                message_id=message_id,
-                text=text,
-                created_at=created_at,
+                operation_id=int(matched_operation["id"]),
+                canonical_message_id=message_id,
+                provider_external_message_id=clean_external_id,
             )
         return message_id
+
+    raw_json = json.dumps(raw_payload, ensure_ascii=False)
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO messages (
+                chat_id, external_message_id, direction, author, text, created_at,
+                raw_json, is_crm_sent, crm_author_user_id, crm_author_label,
+                client_operation_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(chat_id),
+                clean_external_id,
+                direction,
+                crm_label or author,
+                text,
+                created_at,
+                raw_json,
+                int(incoming_is_crm_sent),
+                int(crm_author_user_id) if crm_author_user_id else None,
+                crm_label,
+                operation_id,
+            ),
+        )
+        message_id = int(cur.lastrowid)
+    except sqlite3.IntegrityError:
+        # A concurrent sync or repeated client operation won the unique identity
+        # race. Resolve the canonical row and enrich it instead of inserting again.
+        existing = _find_existing_message_identity_conn(
+            conn,
+            chat_id=int(chat_id),
+            direction=direction,
+            text=text,
+            external_message_id=clean_external_id,
+            raw=raw_payload,
+            created_at=created_at,
+            is_crm_sent=incoming_is_crm_sent,
+            client_operation_id=operation_id,
+        )
+        if not existing:
+            raise
+        message_id = _merge_message_identity_conn(
+            conn,
+            existing=existing,
+            direction=direction,
+            author=author,
+            text=text,
+            external_message_id=clean_external_id,
+            raw=raw_payload,
+            created_at=created_at,
+            is_crm_sent=incoming_is_crm_sent,
+            crm_author_user_id=crm_author_user_id,
+            crm_author_label=crm_label,
+            client_operation_id=operation_id,
+        )
+
+    refresh_chat_last_message(conn, int(chat_id))
+    if matched_operation:
+        confirm_operation_from_echo_conn(
+            conn,
+            operation_id=int(matched_operation["id"]),
+            canonical_message_id=message_id,
+            provider_external_message_id=clean_external_id,
+        )
+    if direction == "inbound":
+        _mark_chat_unread_for_active_users_conn(
+            conn,
+            chat_id=int(chat_id),
+            message_id=message_id,
+            previous_latest_message_id=previous_latest_message_id,
+            created_at=created_at,
+        )
+        _notify_new_inbound_message_conn(
+            conn,
+            chat_id=int(chat_id),
+            message_id=message_id,
+            text=text,
+            created_at=created_at,
+        )
+    return message_id
 
 
 def add_message(
@@ -2485,8 +2719,13 @@ def add_message(
     external_message_id: str | None = None,
     raw: dict[str, Any] | None = None,
     created_at: str | None = None,
+    *,
+    is_crm_sent: bool = False,
+    crm_author_user_id: int | None = None,
+    crm_author_label: str | None = None,
+    client_operation_id: str | None = None,
 ) -> int:
-    """Persist through the canonical reconciliation path in one repository transaction."""
+    """Persist through the canonical reconciliation path in one transaction."""
     with get_connection() as conn:
         return _add_message_conn(
             conn,
@@ -2497,8 +2736,30 @@ def add_message(
             external_message_id=external_message_id,
             raw=raw,
             created_at=created_at,
+            is_crm_sent=is_crm_sent,
+            crm_author_user_id=crm_author_user_id,
+            crm_author_label=crm_author_label,
+            client_operation_id=client_operation_id,
         )
 
+
+def get_message_by_client_operation_id(
+    chat_id: int,
+    client_operation_id: str | None,
+) -> dict[str, Any] | None:
+    operation_id = str(client_operation_id or "").strip()
+    if not operation_id:
+        return None
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM messages
+            WHERE chat_id=? AND client_operation_id=?
+            LIMIT 1
+            """,
+            (int(chat_id), operation_id),
+        ).fetchone()
+        return row_to_dict(row) if row else None
 
 
 def update_internal_note(chat_id: int, message_id: int, text: str) -> dict[str, Any] | None:
@@ -2551,7 +2812,18 @@ def delete_internal_note(chat_id: int, message_id: int) -> bool:
         refresh_chat_last_message(conn, int(chat_id))
         return True
 
-def _chats_select_sql(where: str) -> str:
+def _latest_chat_message_at_sql(chat_alias: str = "c") -> str:
+    return f"""(
+        SELECT latest_message.created_at
+        FROM messages latest_message
+        WHERE latest_message.chat_id = {chat_alias}.id
+        ORDER BY julianday(latest_message.created_at) DESC, latest_message.id DESC
+        LIMIT 1
+    )"""
+
+
+def _chats_select_sql(where: str, current_user_id: int | None = None) -> str:
+    read_user_id = int(current_user_id) if current_user_id is not None else -1
     return f"""
         SELECT
             c.*,
@@ -2578,13 +2850,31 @@ def _chats_select_sql(where: str) -> str:
                 ORDER BY julianday(m.created_at) DESC, m.id DESC
                 LIMIT 1
             ) AS actual_last_message_text,
+            {_latest_chat_message_at_sql("c")} AS actual_last_message_at,
+            cus.last_read_message_id AS last_read_message_id,
+            cus.last_read_at AS last_read_at,
+            COALESCE(cus.is_marked_unread, 0) AS is_marked_unread,
+            COALESCE(cus.is_pinned, 0) AS is_pinned,
+            cus.pinned_at AS pinned_at,
+            CASE
+                WHEN COALESCE(cus.is_marked_unread, 0)=1 THEN 1
+                WHEN cus.user_id IS NOT NULL AND EXISTS (
+                    SELECT 1
+                    FROM messages unread_messages
+                    WHERE unread_messages.chat_id=c.id
+                      AND unread_messages.direction='inbound'
+                      AND unread_messages.id > COALESCE(cus.last_read_message_id, 0)
+                ) THEN 1
+                ELSE 0
+            END AS is_unread,
             (
-                SELECT m.created_at
-                FROM messages m
-                WHERE m.chat_id = c.id
-                ORDER BY julianday(m.created_at) DESC, m.id DESC
-                LIMIT 1
-            ) AS actual_last_message_at,
+                SELECT MAX(unread_messages.id)
+                FROM messages unread_messages
+                WHERE unread_messages.chat_id=c.id
+                  AND unread_messages.direction='inbound'
+                  AND cus.user_id IS NOT NULL
+                  AND unread_messages.id > COALESCE(cus.last_read_message_id, 0)
+            ) AS unread_message_id,
             s.title AS status_title,
             s.color AS status_color,
             s.funnel_id AS funnel_id,
@@ -2592,8 +2882,9 @@ def _chats_select_sql(where: str) -> str:
         FROM chats c
         LEFT JOIN chat_statuses s ON s.key = c.status
         LEFT JOIN chat_funnels f ON f.id = s.funnel_id
+        LEFT JOIN chat_user_states cus ON cus.chat_id=c.id AND cus.user_id={read_user_id}
         {where}
-        ORDER BY julianday(actual_last_message_at) DESC, c.id DESC
+        ORDER BY COALESCE(cus.is_pinned, 0) DESC, julianday(actual_last_message_at) DESC, c.id DESC
     """
 
 
@@ -2621,14 +2912,16 @@ def _message_search_params(variants: list[str]) -> list[str]:
     return [f"%{_escape_like_query(variant)}%" for variant in variants]
 
 
-def list_chats(
+def _chat_list_query_parts(
     status: str | None = None,
     marketplace: str | None = None,
     archived: bool = False,
     assigned_user_id: int | None = None,
     funnel_id: int | None = None,
     q: str | None = None,
-) -> list[dict[str, Any]]:
+    last_message_created_from: str | None = None,
+    last_message_created_to: str | None = None,
+) -> tuple[str, list[Any], list[str], list[str]]:
     clauses = [
         "c.marketplace NOT IN ('mock', 'internal_tasks')",
         f"NOT ({_system_excluded_condition_sql('c')})",
@@ -2657,6 +2950,14 @@ def list_chats(
         clauses.append("c.assigned_user_id = ?")
         params.append(int(assigned_user_id))
 
+    if last_message_created_from and last_message_created_to:
+        latest_message_at = _latest_chat_message_at_sql("c")
+        clauses.extend([
+            f"julianday({latest_message_at}) >= julianday(?)",
+            f"julianday({latest_message_at}) < julianday(?)",
+        ])
+        params.extend([last_message_created_from, last_message_created_to])
+
     search_variants = _chat_message_search_variants(q)
     search_params = _message_search_params(search_variants)
     if search_variants:
@@ -2673,33 +2974,169 @@ def list_chats(
         params.extend(search_params)
 
     where = f"WHERE {' AND '.join(clauses)}"
+    return where, params, search_variants, search_params
+
+
+def _list_chat_items_conn(
+    conn: sqlite3.Connection,
+    *,
+    where: str,
+    params: list[Any],
+    search_variants: list[str],
+    search_params: list[str],
+    q: str | None,
+    current_user_id: int | None,
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    sql = _chats_select_sql(where, current_user_id)
+    query_params = list(params)
+    if limit is not None:
+        sql += "\nLIMIT ? OFFSET ?"
+        query_params.extend([int(limit), max(0, int(offset))])
+
+    rows = conn.execute(sql, query_params).fetchall()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        item = _decorate_chat_sla(row_to_dict(row))
+        if search_variants:
+            match = conn.execute(
+                f"""
+                SELECT text, created_at
+                FROM messages ms
+                WHERE ms.chat_id=?
+                  AND {_message_search_clause('ms', search_variants)}
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                [int(item["id"]), *search_params],
+            ).fetchone()
+            if match:
+                item["search_match_text"] = match["text"]
+                item["search_match_at"] = match["created_at"]
+                item["search_query"] = (q or "").strip()
+        result.append(item)
+    return result
+
+
+def list_chats(
+    status: str | None = None,
+    marketplace: str | None = None,
+    archived: bool = False,
+    assigned_user_id: int | None = None,
+    funnel_id: int | None = None,
+    q: str | None = None,
+    current_user_id: int | None = None,
+    last_message_created_from: str | None = None,
+    last_message_created_to: str | None = None,
+) -> list[dict[str, Any]]:
+    where, params, search_variants, search_params = _chat_list_query_parts(
+        status=status,
+        marketplace=marketplace,
+        archived=archived,
+        assigned_user_id=assigned_user_id,
+        funnel_id=funnel_id,
+        q=q,
+        last_message_created_from=last_message_created_from,
+        last_message_created_to=last_message_created_to,
+    )
     with get_connection() as conn:
-        rows = conn.execute(_chats_select_sql(where), params).fetchall()
-        result: list[dict[str, Any]] = []
-        for row in rows:
-            item = _decorate_chat_sla(row_to_dict(row))
-            if search_variants:
-                match = conn.execute(
-                    f"""
-                    SELECT text, created_at
-                    FROM messages ms
-                    WHERE ms.chat_id=?
-                      AND {_message_search_clause('ms', search_variants)}
-                    ORDER BY created_at DESC, id DESC
-                    LIMIT 1
-                    """,
-                    [int(item["id"]), *search_params],
-                ).fetchone()
-                if match:
-                    item["search_match_text"] = match["text"]
-                    item["search_match_at"] = match["created_at"]
-                    item["search_query"] = (q or "").strip()
-            result.append(item)
+        result = _list_chat_items_conn(
+            conn,
+            where=where,
+            params=params,
+            search_variants=search_variants,
+            search_params=search_params,
+            q=q,
+            current_user_id=current_user_id,
+        )
 
         # v40: do not additionally hide Ozon rows at list-render time.
         # System/support chats are filtered/deleted during sync; hiding here made
         # real customer chats disappear when old metadata was classified too broadly.
         return result
+
+
+def list_chats_page(
+    *,
+    status: str | None = None,
+    marketplace: str | None = None,
+    archived: bool = False,
+    assigned_user_id: int | None = None,
+    funnel_id: int | None = None,
+    q: str | None = None,
+    current_user_id: int | None = None,
+    last_message_created_from: str | None = None,
+    last_message_created_to: str | None = None,
+    limit: int = 30,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Return one bounded chat batch plus canonical total/unread counters."""
+    safe_limit = max(20, min(int(limit or 30), 200))
+    safe_offset = max(0, int(offset or 0))
+    where, params, search_variants, search_params = _chat_list_query_parts(
+        status=status,
+        marketplace=marketplace,
+        archived=archived,
+        assigned_user_id=assigned_user_id,
+        funnel_id=funnel_id,
+        q=q,
+        last_message_created_from=last_message_created_from,
+        last_message_created_to=last_message_created_to,
+    )
+    read_user_id = int(current_user_id) if current_user_id is not None else -1
+    with get_connection() as conn:
+        counters = conn.execute(
+            f"""
+            SELECT
+                COUNT(*) AS total,
+                COALESCE(SUM(
+                    CASE
+                        WHEN COALESCE(cus.is_marked_unread, 0)=1 THEN 1
+                        WHEN cus.user_id IS NOT NULL AND EXISTS (
+                            SELECT 1
+                            FROM messages unread_messages
+                            WHERE unread_messages.chat_id=c.id
+                              AND unread_messages.direction='inbound'
+                              AND unread_messages.id > COALESCE(cus.last_read_message_id, 0)
+                        ) THEN 1
+                        ELSE 0
+                    END
+                ), 0) AS unread_total
+            FROM chats c
+            LEFT JOIN chat_statuses s ON s.key = c.status
+            LEFT JOIN chat_user_states cus ON cus.chat_id=c.id AND cus.user_id={read_user_id}
+            {where}
+            """,
+            params,
+        ).fetchone()
+        total = int(counters["total"] or 0)
+        unread_total = int(counters["unread_total"] or 0)
+        if total and safe_offset >= total:
+            safe_offset = max(0, ((total - 1) // safe_limit) * safe_limit)
+        items = _list_chat_items_conn(
+            conn,
+            where=where,
+            params=params,
+            search_variants=search_variants,
+            search_params=search_params,
+            q=q,
+            current_user_id=current_user_id,
+            limit=safe_limit,
+            offset=safe_offset,
+        )
+
+    next_offset = safe_offset + len(items)
+    return {
+        "items": items,
+        "total": total,
+        "unread_total": unread_total,
+        "limit": safe_limit,
+        "offset": safe_offset,
+        "has_previous": safe_offset > 0,
+        "has_more": next_offset < total,
+        "next_offset": next_offset if next_offset < total else None,
+    }
 
 
 
@@ -2714,7 +3151,7 @@ def get_chat_by_external(marketplace: str, external_chat_id: str) -> dict[str, A
         return _decorate_chat_sla(row_to_dict(row)) if row else None
 
 
-def get_chat_summary(chat_id: int) -> dict[str, Any] | None:
+def get_chat_summary(chat_id: int, current_user_id: int | None = None) -> dict[str, Any] | None:
     """Return a chat row without loading full message history.
 
     Used by quick UI updates such as status/assignee changes. Loading the whole
@@ -2722,7 +3159,7 @@ def get_chat_summary(chat_id: int) -> dict[str, Any] | None:
     """
     with get_connection() as conn:
         row = conn.execute(
-            _chats_select_sql("WHERE c.id=? AND c.marketplace NOT IN ('mock', 'internal_tasks')"),
+            _chats_select_sql("WHERE c.id=? AND c.marketplace NOT IN ('mock', 'internal_tasks')", current_user_id),
             (int(chat_id),),
         ).fetchone()
         return _decorate_chat_sla(row_to_dict(row)) if row else None
@@ -2734,30 +3171,40 @@ def chat_has_messages(chat_id: int) -> bool:
         return bool(row)
 
 
-def get_chat(chat_id: int, messages_limit: int | None = None) -> dict[str, Any] | None:
+def get_chat(
+    chat_id: int,
+    messages_limit: int | None = None,
+    current_user_id: int | None = None,
+) -> dict[str, Any] | None:
     with get_connection() as conn:
-        chat = conn.execute(_chats_select_sql("WHERE c.id=? AND c.marketplace NOT IN ('mock', 'internal_tasks')"), (chat_id,)).fetchone()
+        chat = conn.execute(
+            _chats_select_sql("WHERE c.id=? AND c.marketplace NOT IN ('mock', 'internal_tasks')", current_user_id),
+            (chat_id,),
+        ).fetchone()
         if not chat:
             return None
         chat_dict = row_to_dict(chat)
+        message_where = "chat_id=?"
+        message_params: list[Any] = [chat_id]
+
         if messages_limit and messages_limit > 0:
             messages = conn.execute(
-                """
+                f"""
                 SELECT * FROM (
                     SELECT *
                     FROM messages
-                    WHERE chat_id=?
-                    ORDER BY created_at DESC, id DESC
+                    WHERE {message_where}
+                    ORDER BY julianday(created_at) DESC, id DESC
                     LIMIT ?
                 )
-                ORDER BY created_at ASC, id ASC
+                ORDER BY julianday(created_at) ASC, id ASC
                 """,
-                (chat_id, int(messages_limit)),
+                [*message_params, int(messages_limit)],
             ).fetchall()
         else:
             messages = conn.execute(
-                "SELECT * FROM messages WHERE chat_id=? ORDER BY created_at ASC, id ASC",
-                (chat_id,),
+                f"SELECT * FROM messages WHERE {message_where} ORDER BY julianday(created_at) ASC, id ASC",
+                message_params,
             ).fetchall()
         tasks = conn.execute(
             """
@@ -2765,12 +3212,16 @@ def get_chat(chat_id: int, messages_limit: int | None = None) -> dict[str, Any] 
             FROM tasks t
             LEFT JOIN users u ON u.id = t.assigned_user_id
             WHERE t.chat_id=?
-            ORDER BY t.created_at DESC, t.id DESC
+            ORDER BY
+                CASE WHEN t.due_at IS NULL OR t.due_at='' THEN 1 ELSE 0 END,
+                julianday(t.due_at) DESC,
+                t.id DESC
             """,
             (chat_id,),
         ).fetchall()
         result = _decorate_chat_sla(chat_dict)
-        result["messages"] = [row_to_dict(r) for r in messages]
+        message_items = [row_to_dict(r) for r in messages]
+        result["messages"] = message_items
         result["tasks"] = [row_to_dict(r) for r in tasks]
         return result
 
@@ -2782,7 +3233,8 @@ def update_chat(chat_id: int, payload: ChatUpdate) -> dict[str, Any] | None:
         return get_chat_summary(chat_id)
 
     with get_connection() as conn:
-        current = conn.execute("SELECT metadata_json FROM chats WHERE id=?", (chat_id,)).fetchone()
+        conn.execute("BEGIN IMMEDIATE")
+        current = conn.execute("SELECT status, metadata_json FROM chats WHERE id=?", (chat_id,)).fetchone()
         if not current:
             return None
         try:
@@ -2806,12 +3258,16 @@ def update_chat(chat_id: int, payload: ChatUpdate) -> dict[str, Any] | None:
             status_value = str(fields.get("status") or "").strip()
             if status_value:
                 canonical_status = _canonical_workflow_status_conn(conn, status_value)
-                fields["status"] = canonical_status
+                apply_manual_status_conn(conn, int(chat_id), canonical_status)
+                for key in tuple(metadata):
+                    if str(key).startswith("_crm_status_provider_override"):
+                        metadata.pop(key, None)
                 metadata["_crm_status_manual"] = True
                 metadata["_crm_status_manual_value"] = canonical_status
                 metadata["_crm_status_manual_source_value"] = status_value
                 metadata["_crm_status_manual_at"] = __import__("datetime").datetime.utcnow().isoformat(timespec="seconds") + "Z"
                 fields["metadata_json"] = json.dumps(metadata, ensure_ascii=False)
+            fields.pop("status", None)
 
         if "assigned_user_id" in fields:
             assigned_user_id = fields.get("assigned_user_id")
@@ -2837,15 +3293,18 @@ def update_chat(chat_id: int, payload: ChatUpdate) -> dict[str, Any] | None:
         elif "assigned_to" in fields and fields.get("assigned_to") == "":
             fields["assigned_to"] = None
 
-        allowed = {"status", "assigned_to", "assigned_user_id", "customer_name", "metadata_json"}
+        allowed = {"assigned_to", "assigned_user_id", "customer_name", "metadata_json"}
         fields = {k: v for k, v in fields.items() if k in allowed}
 
-        assignments = ", ".join([f"{key}=?" for key in fields])
-        params = list(fields.values()) + [chat_id]
-        conn.execute(
-            f"UPDATE chats SET {assignments}, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-            params,
-        )
+        if fields:
+            assignments = ", ".join([f"{key}=?" for key in fields])
+            params = list(fields.values()) + [chat_id]
+            cursor = conn.execute(
+                f"UPDATE chats SET {assignments}, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                params,
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("Chat update lost its target row")
     return get_chat_summary(chat_id)
 
 
@@ -3008,11 +3467,27 @@ def update_chat_status(status_id: int, fields: dict[str, Any]) -> dict[str, Any]
     if "is_active" in fields and fields["is_active"] is not None:
         allowed["is_active"] = 1 if fields["is_active"] else 0
     with get_connection() as conn:
-        if not conn.execute("SELECT 1 FROM chat_statuses WHERE id=?", (status_id,)).fetchone():
+        conn.execute("BEGIN IMMEDIATE")
+        preimage = conn.execute(
+            "SELECT id, key, is_active FROM chat_statuses WHERE id=?", (int(status_id),)
+        ).fetchone()
+        if not preimage:
             return None
+        deactivating = bool(int(preimage["is_active"] or 0)) and allowed.get("is_active") == 0
+        if deactivating:
+            release_chat_status_automation_conn(conn, int(status_id), str(preimage["key"]))
         if allowed:
             assignments = ", ".join([f"{key}=?" for key in allowed])
-            conn.execute(f"UPDATE chat_statuses SET {assignments}, updated_at=CURRENT_TIMESTAMP WHERE id=?", list(allowed.values()) + [status_id])
+            cursor = conn.execute(
+                f"""
+                UPDATE chat_statuses
+                SET {assignments}, updated_at=CURRENT_TIMESTAMP
+                WHERE id=? AND is_active=?
+                """,
+                list(allowed.values()) + [int(status_id), int(preimage["is_active"] or 0)],
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("Chat status update lost its locked preimage")
         row = conn.execute(
             """
             SELECT s.*, f.title AS funnel_title
@@ -3027,15 +3502,31 @@ def update_chat_status(status_id: int, fields: dict[str, Any]) -> dict[str, Any]
 
 def delete_chat_status(status_id: int) -> bool:
     with get_connection() as conn:
-        row = conn.execute("SELECT key, is_system FROM chat_statuses WHERE id=?", (status_id,)).fetchone()
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT key, is_system, is_active FROM chat_statuses WHERE id=?", (int(status_id),)
+        ).fetchone()
         if not row:
             return False
+        release_chat_status_automation_conn(conn, int(status_id), str(row["key"]))
         in_use = conn.execute("SELECT COUNT(*) AS c FROM chats WHERE status=?", (row["key"],)).fetchone()["c"]
         # System/in-use statuses are deactivated so old chats do not break.
         if int(row["is_system"] or 0) or int(in_use or 0) > 0:
-            conn.execute("UPDATE chat_statuses SET is_active=0, updated_at=CURRENT_TIMESTAMP WHERE id=?", (status_id,))
+            cursor = conn.execute(
+                """
+                UPDATE chat_statuses
+                SET is_active=0, updated_at=CURRENT_TIMESTAMP
+                WHERE id=? AND is_active=?
+                """,
+                (int(status_id), int(row["is_active"] or 0)),
+            )
         else:
-            conn.execute("DELETE FROM chat_statuses WHERE id=?", (status_id,))
+            cursor = conn.execute(
+                "DELETE FROM chat_statuses WHERE id=? AND is_active=?",
+                (int(status_id), int(row["is_active"] or 0)),
+            )
+        if cursor.rowcount != 1:
+            raise RuntimeError("Chat status delete lost its locked preimage")
         return True
 
 
@@ -3085,13 +3576,18 @@ def _ensure_task_types_table(conn) -> None:
 def list_task_types(include_inactive: bool = False) -> list[dict[str, Any]]:
     with get_connection() as conn:
         _ensure_task_types_table(conn)
-        where = "" if include_inactive else "WHERE is_active=1"
+        where = "" if include_inactive else "WHERE tt.is_active=1"
         rows = conn.execute(
             f"""
-            SELECT id, title, comment_label, sort_order, is_active, created_at, updated_at
-            FROM task_types
+            SELECT tt.id, tt.title, tt.comment_label, tt.sort_order, tt.is_active,
+                   tt.created_at, tt.updated_at, l.chat_status_id,
+                   s.key AS chat_status_key, s.title AS chat_status_title
+            FROM task_types tt
+            LEFT JOIN task_type_chat_status_links l ON l.task_type_id=tt.id
+            LEFT JOIN chat_statuses s ON s.id=l.chat_status_id
             {where}
-            ORDER BY is_active DESC, sort_order ASC, title COLLATE NOCASE ASC, id ASC
+            ORDER BY tt.is_active DESC, tt.sort_order ASC,
+                     tt.title COLLATE NOCASE ASC, tt.id ASC
             """
         ).fetchall()
         return [row_to_dict(r) for r in rows]
@@ -3103,6 +3599,7 @@ def create_task_type(payload: TaskTypeCreate) -> dict[str, Any]:
     if not title:
         raise ValueError("Название типа задачи обязательно")
     with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         _ensure_task_types_table(conn)
         cur = conn.execute(
             """
@@ -3111,12 +3608,26 @@ def create_task_type(payload: TaskTypeCreate) -> dict[str, Any]:
             """,
             (title, comment_label, int(payload.sort_order or 0)),
         )
-        row = conn.execute("SELECT * FROM task_types WHERE id=?", (cur.lastrowid,)).fetchone()
+        task_type_id = int(cur.lastrowid)
+        set_task_type_mapping_conn(conn, task_type_id, payload.chat_status_id)
+        row = conn.execute(
+            """
+            SELECT tt.*, l.chat_status_id, s.key AS chat_status_key,
+                   s.title AS chat_status_title
+            FROM task_types tt
+            LEFT JOIN task_type_chat_status_links l ON l.task_type_id=tt.id
+            LEFT JOIN chat_statuses s ON s.id=l.chat_status_id
+            WHERE tt.id=?
+            """,
+            (task_type_id,),
+        ).fetchone()
         return row_to_dict(row)
 
 
 def update_task_type(type_id: int, payload: TaskTypeUpdate) -> dict[str, Any] | None:
     fields = payload.model_dump(exclude_unset=True)
+    mapping_was_set = "chat_status_id" in fields
+    chat_status_id = fields.pop("chat_status_id", None)
     allowed = {"title", "comment_label", "sort_order", "is_active"}
     updates: dict[str, Any] = {}
     for key, value in fields.items():
@@ -3130,31 +3641,72 @@ def update_task_type(type_id: int, payload: TaskTypeUpdate) -> dict[str, Any] | 
             value = 1 if value else 0
         updates[key] = value
     with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         _ensure_task_types_table(conn)
-        exists = conn.execute("SELECT id FROM task_types WHERE id=?", (type_id,)).fetchone()
-        if not exists:
+        preimage = conn.execute(
+            "SELECT id, is_active FROM task_types WHERE id=?", (int(type_id),)
+        ).fetchone()
+        if not preimage:
             return None
         if updates:
             assignments = ", ".join([f"{key}=?" for key in updates])
-            conn.execute(
-                f"UPDATE task_types SET {assignments}, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                list(updates.values()) + [type_id],
+            cursor = conn.execute(
+                f"""
+                UPDATE task_types
+                SET {assignments}, updated_at=CURRENT_TIMESTAMP
+                WHERE id=? AND is_active=?
+                """,
+                list(updates.values()) + [int(type_id), int(preimage["is_active"] or 0)],
             )
-        row = conn.execute("SELECT * FROM task_types WHERE id=?", (type_id,)).fetchone()
+            if cursor.rowcount != 1:
+                raise RuntimeError("Task type update lost its locked preimage")
+        if mapping_was_set:
+            set_task_type_mapping_conn(conn, int(type_id), chat_status_id)
+        next_active = int(updates.get("is_active", preimage["is_active"]) or 0)
+        if next_active == 0:
+            release_task_type_effects_conn(conn, int(type_id))
+        row = conn.execute(
+            """
+            SELECT tt.*, l.chat_status_id, s.key AS chat_status_key,
+                   s.title AS chat_status_title
+            FROM task_types tt
+            LEFT JOIN task_type_chat_status_links l ON l.task_type_id=tt.id
+            LEFT JOIN chat_statuses s ON s.id=l.chat_status_id
+            WHERE tt.id=?
+            """,
+            (type_id,),
+        ).fetchone()
         return row_to_dict(row) if row else None
 
 
 def delete_task_type(type_id: int) -> bool:
     with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         _ensure_task_types_table(conn)
-        row = conn.execute("SELECT id FROM task_types WHERE id=?", (type_id,)).fetchone()
+        row = conn.execute(
+            "SELECT id, is_active FROM task_types WHERE id=?", (int(type_id),)
+        ).fetchone()
         if not row:
             return False
         in_use = conn.execute("SELECT COUNT(*) AS c FROM tasks WHERE task_type_id=?", (type_id,)).fetchone()["c"]
         if int(in_use or 0) > 0:
-            conn.execute("UPDATE task_types SET is_active=0, updated_at=CURRENT_TIMESTAMP WHERE id=?", (type_id,))
+            cursor = conn.execute(
+                """
+                UPDATE task_types SET is_active=0, updated_at=CURRENT_TIMESTAMP
+                WHERE id=? AND is_active=?
+                """,
+                (int(type_id), int(row["is_active"] or 0)),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("Task type deactivate lost its locked preimage")
+            release_task_type_effects_conn(conn, int(type_id))
         else:
-            conn.execute("DELETE FROM task_types WHERE id=?", (type_id,))
+            cursor = conn.execute(
+                "DELETE FROM task_types WHERE id=? AND is_active=?",
+                (int(type_id), int(row["is_active"] or 0)),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("Task type delete lost its locked preimage")
         return True
 
 
@@ -3220,6 +3772,7 @@ def create_standalone_task(
     if not title:
         raise ValueError("Task title is required")
     with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         _ensure_task_types_table(conn)
         chat_id = _ensure_standalone_task_chat_conn(conn)
         normalized_task_type_id = _normalize_task_type_id_for_insert(conn, task_type_id)
@@ -3245,6 +3798,7 @@ def create_standalone_task(
 
 def create_task(payload: TaskCreate) -> int:
     with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         _ensure_task_types_table(conn)
         assigned_user_id = payload.assigned_user_id
         assignee = payload.assignee
@@ -3258,7 +3812,9 @@ def create_task(payload: TaskCreate) -> int:
             """,
             (payload.chat_id, task_type_id, payload.title, payload.description, assignee, assigned_user_id, payload.due_at),
         )
-        return int(cur.lastrowid)
+        task_id = int(cur.lastrowid)
+        acquire_task_effect_conn(conn, task_id)
+        return task_id
 
 
 def _load_task_comments(conn, task_id: int) -> list[dict[str, Any]]:
@@ -3333,10 +3889,21 @@ def update_task(task_id: int, payload: TaskUpdate) -> dict[str, Any] | None:
     fields = {k: v for k, v in fields.items() if k in allowed}
 
     with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         _ensure_task_types_table(conn)
-        exists = conn.execute("SELECT id FROM tasks WHERE id=?", (task_id,)).fetchone()
-        if not exists:
+        previous = conn.execute(
+            "SELECT id, chat_id, task_type_id, status FROM tasks WHERE id=?",
+            (int(task_id),),
+        ).fetchone()
+        if not previous:
             return None
+        previous_type_id = previous["task_type_id"]
+        previous_status = str(previous["status"] or "").strip().lower()
+
+        if "task_type_id" in fields:
+            fields["task_type_id"] = _normalize_task_type_id_for_insert(
+                conn, fields.get("task_type_id")
+            )
         if "assigned_user_id" in fields:
             assigned_user_id = fields.get("assigned_user_id")
             if assigned_user_id:
@@ -3345,11 +3912,31 @@ def update_task(task_id: int, payload: TaskUpdate) -> dict[str, Any] | None:
                 fields["assignee"] = None
         if fields:
             assignments = ", ".join([f"{key}=?" for key in fields])
-            params = list(fields.values()) + [task_id]
-            conn.execute(
-                f"UPDATE tasks SET {assignments}, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            params = list(fields.values()) + [int(task_id), previous_type_id, previous_status]
+            cursor = conn.execute(
+                f"""
+                UPDATE tasks
+                SET {assignments}, updated_at=CURRENT_TIMESTAMP
+                WHERE id=? AND task_type_id IS ? AND lower(status)=?
+                """,
                 params,
             )
+            if cursor.rowcount != 1:
+                raise RuntimeError("Task update lost its locked preimage")
+
+        next_status = str(fields.get("status", previous_status) or "").strip().lower()
+        next_type_id = fields.get("task_type_id", previous_type_id)
+        previous_terminal = previous_status in TERMINAL_TASK_STATUSES
+        next_terminal = next_status in TERMINAL_TASK_STATUSES
+        type_changed = "task_type_id" in fields and next_type_id != previous_type_id
+        reactivated = previous_terminal and not next_terminal
+        if next_terminal:
+            release_task_effect_conn(conn, int(task_id), f"task_{next_status}")
+        elif reactivated:
+            rebind_task_effect_conn(conn, int(task_id), reactivation=True)
+        elif type_changed:
+            rebind_task_effect_conn(conn, int(task_id))
+
         if comment:
             conn.execute(
                 "INSERT INTO task_comments (task_id, comment, author) VALUES (?, ?, ?)",
@@ -3391,15 +3978,33 @@ def get_task(task_id: int) -> dict[str, Any] | None:
 def delete_task(task_id: int) -> bool:
     task_id = int(task_id)
     with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         exists = conn.execute("SELECT id FROM tasks WHERE id=?", (task_id,)).fetchone()
         if not exists:
             return False
+        release_task_effect_conn(conn, task_id, "task_deleted")
         # Explicitly remove child records first. This keeps deletion stable even if
         # the current SQLite database was created by an older schema without ON DELETE CASCADE.
         conn.execute("DELETE FROM task_comments WHERE task_id=?", (task_id,))
         conn.execute("DELETE FROM notifications WHERE task_id=?", (task_id,))
         cur = conn.execute("DELETE FROM tasks WHERE id=?", (task_id,))
-        return bool(cur.rowcount)
+        if cur.rowcount != 1:
+            raise RuntimeError("Task delete lost its locked target")
+        return True
+
+
+def reconcile_task_chat_status_automation() -> None:
+    """Repair an interrupted task/status transition under one SQLite write lock."""
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        reconcile_automation_state_conn(conn)
+
+
+def release_task_chat_status_automation_for_rollback() -> int:
+    """Release task-owned effects before rolling application code back."""
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        return release_all_task_effects_for_rollback_conn(conn)
 
 
 def list_tasks(
@@ -3408,7 +4013,8 @@ def list_tasks(
     assigned_user_id: int | None = None,
     q: str | None = None,
     task_type_id: int | None = None,
-    due_date: str | None = None,
+    due_date_from: str | None = None,
+    due_date_to: str | None = None,
 ) -> list[dict[str, Any]]:
     clauses = ["c.marketplace != 'mock'"]
     params: list[Any] = []
@@ -3442,9 +4048,12 @@ def list_tasks(
                 search_variants.append(variant)
         clauses.append("(" + " OR ".join(["COALESCE(t.title, '') LIKE ?"] * len(search_variants)) + ")")
         params.extend([f"%{variant}%" for variant in search_variants])
-    if due_date:
-        clauses.append("date(t.due_at) = date(?)")
-        params.append(str(due_date))
+    if due_date_from and due_date_to:
+        clauses.extend([
+            "date(t.due_at) >= date(?)",
+            "date(t.due_at) <= date(?)",
+        ])
+        params.extend([str(due_date_from), str(due_date_to)])
     where = f"WHERE {' AND '.join(clauses)}"
     with get_connection() as conn:
         _ensure_task_types_table(conn)
@@ -3469,15 +4078,9 @@ def list_tasks(
             LEFT JOIN users u ON u.id = t.assigned_user_id
             {where}
             ORDER BY
-                CASE
-                    WHEN t.status IN ('new', 'open') THEN 0
-                    WHEN t.status = 'in_progress' THEN 1
-                    WHEN t.status IN ('archived', 'done', 'cancelled') THEN 2
-                    ELSE 3
-                END,
                 CASE WHEN t.due_at IS NULL OR t.due_at='' THEN 1 ELSE 0 END,
-                datetime(t.due_at),
-                datetime(t.updated_at) DESC
+                julianday(t.due_at) DESC,
+                t.id DESC
             """,
             params,
         ).fetchall()
@@ -5026,3 +5629,10 @@ def update_reply_template(template_id: int, *, title: str | None = None, content
             return None
         conn.execute(f"UPDATE reply_templates SET {', '.join(fields)} WHERE id=?", params)
     return get_reply_template(template_id)
+
+
+def delete_reply_template(template_id: int) -> bool:
+    with get_connection() as conn:
+        _ensure_reply_templates_table(conn)
+        cursor = conn.execute("DELETE FROM reply_templates WHERE id=?", (template_id,))
+        return cursor.rowcount > 0

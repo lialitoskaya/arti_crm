@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import sys
 import unittest
 from pathlib import Path
 from typing import Any
 from unittest import mock
+
+import httpx
 
 
 _TESTS_DIR = str(Path(__file__).resolve().parent)
@@ -17,10 +20,12 @@ from fastapi import HTTPException, Request  # noqa: E402
 from fastapi.routing import APIRoute  # noqa: E402
 
 from app.reply_templates_router import create_reply_templates_router  # noqa: E402
-from app.schemas import ReplyTemplateCreate  # noqa: E402
+from app.schemas import ReplyTemplateCreate, ReplyTemplateUpdate  # noqa: E402
 
 
 main = foundation.main
+db = foundation.db
+repo = foundation.repo
 
 
 def _request_without_user() -> Request:
@@ -54,6 +59,8 @@ class _RecordingRepository:
         self.calls: list[tuple[Any, ...]] = []
         self.create_result: Any = {"id": 12, "title": "Created"}
         self.create_error: ValueError | None = None
+        self.update_result: Any = {"id": 12, "title": "Updated"}
+        self.delete_result = True
 
     def list_reply_templates(self, q: str | None = None) -> list[dict[str, Any]]:
         self.calls.append(("list_reply_templates", q))
@@ -72,6 +79,33 @@ class _RecordingRepository:
             raise self.create_error
         return self.create_result
 
+    def update_reply_template(
+        self,
+        template_id: int,
+        *,
+        title: str | None,
+        content: str | None,
+        sort_order: int | None,
+        is_active: bool | None,
+        user_id: int,
+    ) -> dict[str, Any] | None:
+        self.calls.append(
+            (
+                "update_reply_template",
+                template_id,
+                title,
+                content,
+                sort_order,
+                is_active,
+                user_id,
+            )
+        )
+        return self.update_result
+
+    def delete_reply_template(self, template_id: int) -> bool:
+        self.calls.append(("delete_reply_template", template_id))
+        return self.delete_result
+
 
 class ReplyTemplatesRouterTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -87,6 +121,8 @@ class ReplyTemplatesRouterTests(unittest.TestCase):
         expected = {
             ("/api/reply-templates", "GET"),
             ("/api/reply-templates", "POST"),
+            ("/api/reply-templates/{template_id}", "PATCH"),
+            ("/api/reply-templates/{template_id}", "DELETE"),
         }
         actual = {
             (route.path, method)
@@ -175,6 +211,84 @@ class ReplyTemplatesRouterTests(unittest.TestCase):
         self.assertEqual("Нужны права администратора", error.exception.detail)
         self.assertEqual([], self.repo.calls)
 
+    def test_update_and_delete_preserve_repository_contract(self) -> None:
+        update_payload = ReplyTemplateUpdate.model_construct(
+            title="Updated",
+            content="Updated text",
+            sort_order=4,
+            is_active=True,
+        )
+        update_endpoint = _route(
+            self.router,
+            "/api/reply-templates/{template_id}",
+            "PATCH",
+        ).endpoint
+        delete_endpoint = _route(
+            self.router,
+            "/api/reply-templates/{template_id}",
+            "DELETE",
+        ).endpoint
+
+        self.assertIs(
+            self.repo.update_result,
+            update_endpoint(12, update_payload, _request_without_user()),
+        )
+        self.assertEqual(
+            {
+                "ok": True,
+                "template_id": 12,
+            },
+            delete_endpoint(12, _request_without_user()),
+        )
+        self.assertEqual(
+            [
+                (
+                    "update_reply_template",
+                    12,
+                    "Updated",
+                    "Updated text",
+                    4,
+                    True,
+                    7,
+                ),
+                ("delete_reply_template", 12),
+            ],
+            self.repo.calls,
+        )
+
+    def test_viewer_and_manager_are_denied_update_and_delete(self) -> None:
+        payload = ReplyTemplateUpdate.model_construct(title="Denied")
+        for role in ("viewer", "manager"):
+            with self.subTest(role=role):
+                restricted_repo = _RecordingRepository()
+                user = {"id": 8, "role": role, "is_active": True}
+                router = create_reply_templates_router(
+                    restricted_repo,
+                    lambda _request, user=user: user,
+                    main._require_admin,
+                )
+                request = _request_without_user()
+                request.state.user = user
+                update_endpoint = _route(
+                    router,
+                    "/api/reply-templates/{template_id}",
+                    "PATCH",
+                ).endpoint
+                delete_endpoint = _route(
+                    router,
+                    "/api/reply-templates/{template_id}",
+                    "DELETE",
+                ).endpoint
+
+                with self.assertRaises(HTTPException) as update_error:
+                    update_endpoint(12, payload, request)
+                with self.assertRaises(HTTPException) as delete_error:
+                    delete_endpoint(12, request)
+
+                self.assertEqual(403, update_error.exception.status_code)
+                self.assertEqual(403, delete_error.exception.status_code)
+                self.assertEqual([], restricted_repo.calls)
+
     def test_router_has_no_main_db_network_or_environment_imports(self) -> None:
         module_path = Path(sys.modules[create_reply_templates_router.__module__].__file__).resolve()
         tree = ast.parse(module_path.read_text(encoding="utf-8"))
@@ -190,6 +304,119 @@ class ReplyTemplatesRouterTests(unittest.TestCase):
             if isinstance(node, ast.ImportFrom) and node.module
         )
         self.assertEqual({"__future__", "collections.abc", "typing", "fastapi", "app.schemas"}, imported_modules)
+
+
+async def _client_for_user(user: dict[str, Any]) -> httpx.AsyncClient:
+    token = repo.create_session(int(user["id"]), user_agent="reply-template-test")
+    client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=main.app),
+        base_url="https://testserver",
+    )
+    client.cookies.set(main.AUTH_COOKIE_NAME, token)
+    return client
+
+
+async def _csrf_headers(client: httpx.AsyncClient) -> dict[str, str]:
+    response = await client.get("/api/security/csrf")
+    if response.status_code != 200:
+        raise AssertionError(f"failed to obtain CSRF token: {response.status_code}")
+    return {main.CSRF_HEADER_NAME: response.json()["csrf_token"]}
+
+
+class ReplyTemplatesHttpSecurityTests(unittest.TestCase):
+    def setUp(self) -> None:
+        foundation._NETWORK_ATTEMPTS.clear()
+        foundation._remove_test_runtime_files()
+        main.app.state.security_rate_limits = {}
+        db.init_db()
+        self.admin = repo.create_user("reply-admin", "reply-admin-password", "Admin", "admin")
+        self.viewer = repo.create_user("reply-viewer", "reply-viewer-password", "Viewer", "viewer")
+        self.manager = repo.create_user("reply-manager", "reply-manager-password", "Manager", "manager")
+
+    def tearDown(self) -> None:
+        try:
+            self.assertEqual([], foundation._NETWORK_ATTEMPTS, "a test attempted network access")
+        finally:
+            foundation._remove_test_runtime_files()
+
+    def test_admin_update_and_delete_work_without_page_reload(self) -> None:
+        async def exercise():
+            async with await _client_for_user(self.admin) as client:
+                headers = await _csrf_headers(client)
+                created = await client.post(
+                    "/api/reply-templates",
+                    json={"title": "Greeting", "content": "Hello", "sort_order": 0},
+                    headers=headers,
+                )
+                template_id = int(created.json()["id"])
+                updated = await client.patch(
+                    f"/api/reply-templates/{template_id}",
+                    json={"title": "Updated greeting", "content": "Updated text"},
+                    headers=headers,
+                )
+                deleted = await client.delete(
+                    f"/api/reply-templates/{template_id}",
+                    headers=headers,
+                )
+                listed = await client.get("/api/reply-templates")
+                return created, updated, deleted, listed, template_id
+
+        created, updated, deleted, listed, template_id = asyncio.run(exercise())
+        self.assertEqual(200, created.status_code)
+        self.assertEqual(200, updated.status_code)
+        self.assertEqual("Updated greeting", updated.json()["title"])
+        self.assertEqual("Updated text", updated.json()["content"])
+        self.assertEqual(200, deleted.status_code)
+        self.assertEqual({"ok": True, "template_id": template_id}, deleted.json())
+        self.assertNotIn(template_id, [item["id"] for item in listed.json()])
+
+    def test_viewer_and_manager_mutations_are_forbidden(self) -> None:
+        template = repo.create_reply_template(title="Protected", content="Text", user_id=int(self.admin["id"]))
+
+        async def exercise(user: dict[str, Any]):
+            async with await _client_for_user(user) as client:
+                headers = await _csrf_headers(client)
+                updated = await client.patch(
+                    f"/api/reply-templates/{template['id']}",
+                    json={"title": "Denied"},
+                    headers=headers,
+                )
+                deleted = await client.delete(
+                    f"/api/reply-templates/{template['id']}",
+                    headers=headers,
+                )
+                return updated, deleted
+
+        for user in (self.viewer, self.manager):
+            with self.subTest(role=user["role"]):
+                updated, deleted = asyncio.run(exercise(user))
+                self.assertEqual(403, updated.status_code)
+                self.assertEqual(403, deleted.status_code)
+
+        preserved = repo.get_reply_template(int(template["id"]))
+        self.assertIsNotNone(preserved)
+        self.assertEqual("Protected", preserved["title"])
+
+    def test_update_and_delete_require_csrf(self) -> None:
+        template = repo.create_reply_template(title="Protected", content="Text", user_id=int(self.admin["id"]))
+
+        async def exercise():
+            async with await _client_for_user(self.admin) as client:
+                updated = await client.patch(
+                    f"/api/reply-templates/{template['id']}",
+                    json={"title": "Blocked"},
+                )
+                deleted = await client.delete(f"/api/reply-templates/{template['id']}")
+                return updated, deleted
+
+        updated, deleted = asyncio.run(exercise())
+        self.assertEqual(403, updated.status_code)
+        self.assertEqual(403, deleted.status_code)
+        self.assertIn("CSRF", updated.json()["detail"])
+        self.assertIn("CSRF", deleted.json()["detail"])
+        preserved = repo.get_reply_template(int(template["id"]))
+        self.assertIsNotNone(preserved)
+        self.assertEqual("Protected", preserved["title"])
 
 
 if __name__ == "__main__":

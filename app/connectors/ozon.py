@@ -9,7 +9,14 @@ from typing import Any
 
 import httpx
 
-from app.connectors.base import MarketplaceConnector, UnifiedChat, UnifiedMessage
+from app.connectors.base import (
+    MarketplaceConnector,
+    MarketplaceSendError,
+    MarketplaceSendOutcome,
+    UnifiedChat,
+    UnifiedMessage,
+    sanitize_provider_payload,
+)
 from app.marketplace_sender import (
     extract_sender_designations as _shared_extract_sender_designations,
     normalize_system_sender as _shared_normalize_system_sender,
@@ -662,6 +669,66 @@ class OzonConnector(MarketplaceConnector):
             )
         return chats
 
+    @staticmethod
+    def _stringify_message_content(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value.strip()
+        if isinstance(value, (int, float, bool)):
+            return str(value)
+        if isinstance(value, dict):
+            for key in (
+                "text", "message", "message_text", "content", "body",
+                "value", "title", "name", "file_name", "filename", "url", "link",
+            ):
+                nested_text = OzonConnector._stringify_message_content(value.get(key))
+                if nested_text:
+                    return nested_text
+            if value.get("type"):
+                return f"[{value.get('type')}]"
+            return json.dumps(value, ensure_ascii=False)
+        if isinstance(value, list):
+            parts = [OzonConnector._stringify_message_content(item) for item in value]
+            return "\n".join(part for part in parts if part)
+        return str(value)
+
+    @classmethod
+    def _extract_data_message_text(cls, value: Any) -> str:
+        """Extract visible Ozon message text without leaking transport type tokens."""
+        if isinstance(value, list) and value:
+            parts = [cls._stringify_message_content(item) for item in value]
+            parts = [part for part in parts if part]
+            if parts and parts[0].strip().lower() == "errortext":
+                parts = parts[1:]
+            return "\n".join(parts)
+        return cls._stringify_message_content(value)
+
+    @classmethod
+    def _normalize_product_context(cls, item: dict[str, Any]) -> dict[str, Any] | None:
+        """Map Ozon message product context to one stable CRM presentation contract."""
+        context = item.get("context")
+        if not isinstance(context, dict):
+            return None
+        raw_sku = context.get("sku")
+        if isinstance(raw_sku, bool) or not isinstance(raw_sku, (str, int)):
+            return None
+        sku = str(raw_sku).strip()
+        if not sku or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", sku):
+            return None
+        title = next((
+            str(context.get(key) or "").strip()
+            for key in ("product_name", "productName", "title", "name")
+            if str(context.get(key) or "").strip()
+        ), None)
+        normalized = {
+            "kind": "ozon_product",
+            "sku": sku,
+            "url": f"https://www.ozon.ru/product/{sku}",
+            "title": title,
+        }
+        return {key: value for key, value in normalized.items() if value not in (None, "")}
+
     def _extract_message_text(self, item: dict[str, Any]) -> str:
         """Return human-readable message text from different Ozon response shapes."""
         direct = (
@@ -674,34 +741,11 @@ class OzonConnector(MarketplaceConnector):
         if isinstance(direct, str) and direct.strip():
             return direct.strip()
 
-        def stringify(value: Any) -> str:
-            if value is None:
-                return ""
-            if isinstance(value, str):
-                return value.strip()
-            if isinstance(value, (int, float, bool)):
-                return str(value)
-            if isinstance(value, dict):
-                for key in (
-                    "text", "message", "message_text", "content", "body",
-                    "value", "title", "name", "file_name", "filename", "url", "link",
-                ):
-                    nested_text = stringify(value.get(key))
-                    if nested_text:
-                        return nested_text
-                if value.get("type"):
-                    return f"[{value.get('type')}]"
-                return json.dumps(value, ensure_ascii=False)
-            if isinstance(value, list):
-                parts = [stringify(v) for v in value]
-                return "\n".join(part for part in parts if part)
-            return str(value)
-
-        data_text = stringify(item.get("data"))
+        data_text = self._extract_data_message_text(item.get("data"))
         if data_text:
             return data_text
 
-        attachments_text = stringify(item.get("attachments") or item.get("files"))
+        attachments_text = self._stringify_message_content(item.get("attachments") or item.get("files"))
         if attachments_text:
             return attachments_text
 
@@ -823,6 +867,16 @@ class OzonConnector(MarketplaceConnector):
             if not external_message_id:
                 external_message_id = self._fallback_message_id(item, external_chat_id, text, direction)
 
+            provider_payload = sanitize_provider_payload(item)
+            raw_payload = {
+                **provider_payload,
+                "_crm_author_name": author_name,
+                "_crm_author_public_id": author_public_id,
+            }
+            product_context = self._normalize_product_context(item)
+            if product_context:
+                raw_payload["_crm_product_context"] = product_context
+
             messages.append(
                 UnifiedMessage(
                     external_message_id=external_message_id,
@@ -831,18 +885,68 @@ class OzonConnector(MarketplaceConnector):
                     text=str(text),
                     author="seller" if is_seller else (author_name or user_type or "customer"),
                     created_at=item.get("created_at") or item.get("createdAt"),
-                    raw={**item, "_crm_author_name": author_name, "_crm_author_public_id": author_public_id},
+                    raw=raw_payload,
                 )
             )
 
         messages.sort(key=lambda m: m.created_at or "")
         return messages
 
-    async def send_message(self, external_chat_id: str, text: str) -> dict[str, Any]:
+    async def send_message(
+        self,
+        external_chat_id: str,
+        text: str,
+    ) -> MarketplaceSendOutcome:
+        """Send one text without persisting provider response bodies on failure."""
         if not self.client_id or not self.api_key:
-            raise RuntimeError("OZON_CLIENT_ID/OZON_API_KEY are not configured")
+            raise MarketplaceSendError(
+                category="configuration",
+                safe_summary="Ozon connector is not configured",
+                side_effect_possible=False,
+            )
         payload = {"chat_id": external_chat_id, "text": text}
-        return await self._post("/v1/chat/send/message", payload)
+        try:
+            async with httpx.AsyncClient(timeout=45) as client:
+                response = await client.post(
+                    f"{self.base_url}/v1/chat/send/message",
+                    headers=self.headers,
+                    json=payload,
+                )
+        except httpx.TimeoutException as exc:
+            raise MarketplaceSendError(
+                category="ambiguous_timeout",
+                safe_summary="Ozon send timed out; provider outcome is unknown",
+                side_effect_possible=True,
+            ) from exc
+        except httpx.RequestError as exc:
+            raise MarketplaceSendError(
+                category="ambiguous_transport",
+                safe_summary="Ozon transport failed; provider outcome is unknown",
+                side_effect_possible=True,
+            ) from exc
+        correlation_id = response.headers.get("x-request-id") or response.headers.get("request-id")
+        if response.status_code >= 400:
+            raise MarketplaceSendError(
+                category="provider_http_error",
+                safe_summary="Ozon rejected or did not confirm the send request",
+                side_effect_possible=True,
+                http_status=response.status_code,
+                correlation_id=correlation_id,
+            )
+        try:
+            data = response.json()
+        except Exception as exc:
+            raise MarketplaceSendError(
+                category="ambiguous_response",
+                safe_summary="Ozon returned an unreadable send response",
+                side_effect_possible=True,
+                http_status=response.status_code,
+                correlation_id=correlation_id,
+            ) from exc
+        return MarketplaceSendOutcome(
+            response=data if isinstance(data, dict) else {"ok": True},
+            provider_external_message_id=None,
+        )
 
     async def send_file(
         self,

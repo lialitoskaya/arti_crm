@@ -5,7 +5,14 @@ from typing import Any
 
 import httpx
 
-from app.connectors.base import MarketplaceConnector, UnifiedChat, UnifiedMessage
+from app.connectors.base import (
+    MarketplaceConnector,
+    MarketplaceSendError,
+    MarketplaceSendOutcome,
+    UnifiedChat,
+    UnifiedMessage,
+    sanitize_provider_payload,
+)
 
 
 class YandexChatHistoryError(RuntimeError):
@@ -196,21 +203,74 @@ class YandexMarketConnector(MarketplaceConnector):
                     text=text,
                     author=author,
                     created_at=item.get("createdAt"),
-                    raw=item,
+                    raw=sanitize_provider_payload(item),
                 )
             )
         messages.sort(key=lambda m: m.created_at or "")
         return messages
 
-    async def send_message(self, external_chat_id: str, text: str) -> dict[str, Any]:
+    async def send_message(
+        self,
+        external_chat_id: str,
+        text: str,
+    ) -> MarketplaceSendOutcome:
         if not self.token or not self.business_id:
-            raise RuntimeError("YANDEX_MARKET_TOKEN/YANDEX_MARKET_BUSINESS_ID are not configured")
-        data = await self._post(
-            "/chats/message",
-            params={"chatId": external_chat_id},
-            json_body={"message": text},
+            raise MarketplaceSendError(
+                category="configuration",
+                safe_summary="Yandex Market connector is not configured",
+                side_effect_possible=False,
+            )
+        try:
+            async with httpx.AsyncClient(timeout=35) as client:
+                response = await client.post(
+                    self._url("/chats/message"),
+                    headers=self.headers,
+                    params={"chatId": external_chat_id},
+                    json={"message": text},
+                )
+        except httpx.TimeoutException as exc:
+            raise MarketplaceSendError(
+                category="ambiguous_timeout",
+                safe_summary="Yandex Market send timed out; provider outcome is unknown",
+                side_effect_possible=True,
+            ) from exc
+        except httpx.RequestError as exc:
+            raise MarketplaceSendError(
+                category="ambiguous_transport",
+                safe_summary="Yandex Market transport failed; provider outcome is unknown",
+                side_effect_possible=True,
+            ) from exc
+        correlation_id = response.headers.get("x-request-id") or response.headers.get("request-id")
+        if response.status_code >= 400:
+            raise MarketplaceSendError(
+                category="provider_http_error",
+                safe_summary="Yandex Market did not confirm the send request",
+                side_effect_possible=True,
+                http_status=response.status_code,
+                correlation_id=correlation_id,
+            )
+        try:
+            data = response.json()
+        except Exception as exc:
+            raise MarketplaceSendError(
+                category="ambiguous_response",
+                safe_summary="Yandex Market returned an unreadable send response",
+                side_effect_possible=True,
+                http_status=response.status_code,
+                correlation_id=correlation_id,
+            ) from exc
+        if not isinstance(data, dict) or data.get("status") == "ERROR":
+            raise MarketplaceSendError(
+                category="ambiguous_response",
+                safe_summary="Yandex Market did not return a confirmed send result",
+                side_effect_possible=True,
+                http_status=response.status_code,
+                correlation_id=correlation_id,
+            )
+        return MarketplaceSendOutcome(
+            response=data,
+            provider_external_message_id=None,
         )
-        return data
 
     async def send_file(
         self,

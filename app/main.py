@@ -10,7 +10,7 @@ import uuid
 import hmac
 import hashlib
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time as datetime_time, timedelta, timezone
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -68,7 +68,12 @@ from app.connectors.ozon import OzonConnector
 from app.connectors.wildberries import WildberriesConnector
 from app.connectors.yandex_market import YandexMarketConnector
 from app.db import get_connection, init_db
-from app.schemas import AiReplyCreate, ChatCreate, ChatUpdate, InternalNoteCreate, InternalNoteUpdate, LoginCreate, MessageCreate, ReviewReplyCreate, QuestionAnswerCreate, TaskCreate, TaskUpdate, UserCreate, UserPasswordUpdate, UserUpdate, ProfileUpdate, KnowledgeCategoryCreate, KnowledgeArticleCreate, KnowledgeArticleUpdate, YandexOAuthManagedLinkCreate, YandexOAuthManagedLinkUpdate
+from app.message_send_service import (
+    MessageSendOperationConflict,
+    MessageSendService,
+    public_operation,
+)
+from app.schemas import AiReplyCreate, ChatCreate, ChatPinStateUpdate, ChatReadStateUpdate, ChatUpdate, InternalNoteCreate, InternalNoteUpdate, LoginCreate, MessageCreate, ReviewReplyCreate, QuestionAnswerCreate, TaskCreate, TaskUpdate, UserCreate, UserPasswordUpdate, UserUpdate, ProfileUpdate, KnowledgeCategoryCreate, KnowledgeArticleCreate, KnowledgeArticleUpdate, YandexOAuthManagedLinkCreate, YandexOAuthManagedLinkUpdate
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -709,6 +714,11 @@ async def _run_background_tick_once(*, source: str = "manual") -> dict[str, Any]
 
     async with lock:
         try:
+            try:
+                result["message_send_outbox"] = await message_send_service.drain_once()
+            except Exception as exc:
+                result["message_send_outbox"] = {"ok": False, "error": _mask_sensitive(str(exc))[:256]}
+
             if _env_bool("OZON_BACKGROUND_SYNC", True):
                 try:
                     result["marketplaces"]["ozon"] = await _sync_ozon_fast_inbox_locked(background=True)
@@ -771,6 +781,7 @@ connectors = {
     "yandex": YandexMarketConnector(),
     "wildberries": WildberriesConnector(),
 }
+message_send_service = MessageSendService(connectors)
 
 
 def _marketplace_sync_lock(marketplace: str) -> asyncio.Lock:
@@ -988,15 +999,6 @@ def _trusted_marketplace_message_id(raw_response: Any) -> str:
                 return text
     return ""
 
-
-def _mark_crm_sent_raw(raw_response: Any, *, author: str | None = None, user_id: int | None = None) -> dict[str, Any]:
-    raw = dict(raw_response) if isinstance(raw_response, dict) else {"_crm_marketplace_response": raw_response}
-    raw["_crm_sent_from_crm"] = True
-    if author:
-        raw["_crm_sent_by_label"] = author
-    if user_id:
-        raw["_crm_sent_by_user_id"] = user_id
-    return raw
 
 def _wb_last_message_payload_from_metadata(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
     """Return WB lastMessage saved in chat metadata, if present."""
@@ -2074,6 +2076,28 @@ async def _sync_operator_frontend_unlocked() -> dict[str, Any]:
     return payload
 
 
+async def _message_send_outbox_loop() -> None:
+    """Drain durable text commands; SQLite claims provide process safety."""
+    interval = _env_int(
+        "MESSAGE_SEND_OUTBOX_INTERVAL_SECONDS",
+        2,
+        minimum=1,
+        maximum=60,
+    )
+    await asyncio.sleep(1)
+    while True:
+        try:
+            app.state.last_message_send_outbox = await message_send_service.drain_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            app.state.last_message_send_outbox = {
+                "ok": False,
+                "error": _mask_sensitive(str(exc))[:256],
+            }
+        await asyncio.sleep(interval)
+
+
 
 def _background_min_interval_for_marketplace(marketplace: str) -> int:
     """Per-marketplace polling guard to avoid API 429 rate limits.
@@ -2273,6 +2297,11 @@ async def on_startup() -> None:
     if _AUTH_DISABLED_CONFIGURATION_ERROR is not None:
         raise _AUTH_DISABLED_CONFIGURATION_ERROR
     init_db()
+    app.state.last_message_send_outbox = {
+        "processed": 0,
+        "stale_uncertain": 0,
+        "scheduled": True,
+    }
     try:
         repo.ensure_security_tables()
         repo.ensure_login_security_tables()
@@ -2294,10 +2323,6 @@ async def on_startup() -> None:
         app.state.last_wb_lastmessage_direction_repair = repo.repair_wb_lastmessage_directions()
     except Exception as exc:
         app.state.last_wb_lastmessage_direction_repair = {"ok": False, "error": str(exc)}
-    try:
-        app.state.last_outbound_echo_repair = repo.repair_outbound_marketplace_echo_duplicates(limit=3000)
-    except Exception as exc:
-        app.state.last_outbound_echo_repair = {"ok": False, "error": str(exc)}
     app.state.sync_lock = asyncio.Lock()
     app.state.last_sync = {}
     app.state.last_background_sync = {}
@@ -2316,11 +2341,17 @@ async def on_startup() -> None:
     app.state.background_sync_task = asyncio.create_task(_background_sync_loop())
     app.state.wb_events_import_planner_task = asyncio.create_task(_wb_events_import_planner_loop())
     app.state.push_outbox_task = asyncio.create_task(_push_outbox_loop())
+    app.state.message_send_outbox_task = asyncio.create_task(_message_send_outbox_loop())
 
 
 @app.on_event("shutdown")
 async def on_shutdown() -> None:
-    for task_name in ("background_sync_task", "wb_events_import_planner_task", "push_outbox_task"):
+    for task_name in (
+        "background_sync_task",
+        "wb_events_import_planner_task",
+        "push_outbox_task",
+        "message_send_outbox_task",
+    ):
         task = getattr(app.state, task_name, None)
         if task:
             task.cancel()
@@ -4936,6 +4967,49 @@ async def answer_ozon_question(question_id: int, payload: QuestionAnswerCreate) 
     return {"ok": True, "question": updated, "marketplace_response": raw_response, "status_response": status_result}
 
 
+def _validate_complete_date_range(
+    date_from: date | None,
+    date_to: date | None,
+) -> tuple[date | None, date | None]:
+    if date_from is None and date_to is None:
+        return None, None
+    if date_from is None or date_to is None:
+        raise HTTPException(status_code=422, detail="Both date boundaries are required")
+    if date_from > date_to:
+        raise HTTPException(status_code=422, detail="Date range is invalid")
+    return date_from, date_to
+
+
+def _local_date_range_utc_bounds(
+    date_from: date | None,
+    date_to: date | None,
+    timezone_offset_minutes: int,
+) -> tuple[str | None, str | None]:
+    normalized_from, normalized_to = _validate_complete_date_range(date_from, date_to)
+    if normalized_from is None or normalized_to is None:
+        return None, None
+    if timezone_offset_minutes < -840 or timezone_offset_minutes > 840:
+        raise HTTPException(status_code=422, detail="Invalid timezone offset")
+
+    # Browser getTimezoneOffset() is UTC - local time. Convert the inclusive
+    # local calendar range to one half-open UTC interval [start, end).
+    local_timezone = timezone(timedelta(minutes=-timezone_offset_minutes))
+    local_start = datetime.combine(normalized_from, datetime_time.min, tzinfo=local_timezone)
+    try:
+        end_date_exclusive = normalized_to + timedelta(days=1)
+    except OverflowError as exc:
+        raise HTTPException(status_code=422, detail="Date range is invalid") from exc
+    local_end_exclusive = datetime.combine(
+        end_date_exclusive,
+        datetime_time.min,
+        tzinfo=local_timezone,
+    )
+    return (
+        local_start.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+        local_end_exclusive.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+    )
+
+
 @app.get("/api/tasks")
 def list_tasks(
     request: Request,
@@ -4944,17 +5018,21 @@ def list_tasks(
     mine: bool = False,
     q: str | None = None,
     task_type_id: int | None = None,
-    due_date: str | None = None,
+    due_date_from: date | None = None,
+    due_date_to: date | None = None,
+    assigned_user_id: int | None = None,
 ) -> list[dict[str, Any]]:
     user = _current_user(request)
-    assigned_user_id = int(user["id"]) if mine else None
+    normalized_from, normalized_to = _validate_complete_date_range(due_date_from, due_date_to)
+    effective_assigned_user_id = int(user["id"]) if mine else assigned_user_id
     return repo.list_tasks(
         status=status,
         bucket=bucket,
-        assigned_user_id=assigned_user_id,
+        assigned_user_id=effective_assigned_user_id,
         q=q,
         task_type_id=task_type_id,
-        due_date=due_date,
+        due_date_from=normalized_from.isoformat() if normalized_from else None,
+        due_date_to=normalized_to.isoformat() if normalized_to else None,
     )
 
 
@@ -5033,26 +5111,90 @@ def list_chats(
     mine: bool = False,
     funnel_id: int | None = None,
     q: str | None = None,
-) -> list[dict[str, Any]]:
+    date_from: date | None = None,
+    date_to: date | None = None,
+    timezone_offset_minutes: int = 0,
+    paginated: bool = False,
+    limit: int = 30,
+    offset: int = 0,
+) -> list[dict[str, Any]] | dict[str, Any]:
     user = _current_user(request)
     assigned_user_id = int(user["id"]) if mine else None
-    return repo.list_chats(
-        status=status,
-        marketplace=marketplace,
-        archived=archived,
-        assigned_user_id=assigned_user_id,
-        funnel_id=funnel_id,
-        q=q,
+    last_message_created_from, last_message_created_to = _local_date_range_utc_bounds(
+        date_from,
+        date_to,
+        timezone_offset_minutes,
     )
+    common_filters = {
+        "status": status,
+        "marketplace": marketplace,
+        "archived": archived,
+        "assigned_user_id": assigned_user_id,
+        "funnel_id": funnel_id,
+        "q": q,
+        "current_user_id": int(user["id"]),
+        "last_message_created_from": last_message_created_from,
+        "last_message_created_to": last_message_created_to,
+    }
+    if paginated:
+        return repo.list_chats_page(
+            **common_filters,
+            limit=limit,
+            offset=offset,
+        )
+    return repo.list_chats(**common_filters)
 
 
 @app.get("/api/chats/{chat_id}")
-def get_chat(chat_id: int, messages_limit: int = 120) -> dict[str, Any]:
+def get_chat(
+    chat_id: int,
+    request: Request,
+    messages_limit: int = 120,
+) -> dict[str, Any]:
+    user = _current_user(request)
     safe_limit = max(20, min(int(messages_limit or 120), 500))
-    chat = repo.get_chat(chat_id, messages_limit=safe_limit)
+    chat = repo.get_chat(
+        chat_id,
+        messages_limit=safe_limit,
+        current_user_id=int(user["id"]),
+    )
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
     return chat
+
+
+@app.patch("/api/chats/{chat_id}/read-state")
+def update_chat_read_state(
+    chat_id: int,
+    payload: ChatReadStateUpdate,
+    request: Request,
+) -> dict[str, Any]:
+    user = _current_user(request)
+    state = repo.set_chat_read_state(
+        chat_id,
+        int(user["id"]),
+        is_unread=payload.is_unread,
+    )
+    if not state:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    return state
+
+
+@app.patch("/api/chats/{chat_id}/pin-state")
+def update_chat_pin_state(
+    chat_id: int,
+    payload: ChatPinStateUpdate,
+    request: Request,
+) -> dict[str, Any]:
+    user = _current_user(request)
+    state = repo.set_chat_pin_state(
+        chat_id,
+        int(user["id"]),
+        is_pinned=payload.is_pinned,
+    )
+    if not state:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    return state
 
 
 
@@ -5285,7 +5427,11 @@ async def add_chat_attachments(
     request: Request,
     images: list[UploadFile] = File(...),
     caption: str = Form(default=""),
+    operation_id: str = Form(default=""),
 ) -> dict[str, Any]:
+    caption_text = (caption or "").strip()
+    if caption_text:
+        raise HTTPException(status_code=422, detail="Подпись отправляется отдельной командой сообщения")
     chat = repo.get_chat(chat_id)
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
@@ -5297,6 +5443,7 @@ async def add_chat_attachments(
     current_user = _current_user(request)
     current_user_id = int(current_user.get("id") or 0)
     author = (current_user.get("display_name") or current_user.get("username") or "manager").strip()
+    client_operation_id = operation_id.strip() or f"server:{uuid.uuid4().hex}"
 
     prepared: list[dict[str, Any]] = []
     for upload in images:
@@ -5311,7 +5458,6 @@ async def add_chat_attachments(
 
     marketplace = chat["marketplace"]
     connector = connectors.get(marketplace) or connectors["mock"]
-    caption_text = (caption or "").strip()
     marketplace_responses: list[dict[str, Any]] = []
 
     try:
@@ -5322,7 +5468,7 @@ async def add_chat_attachments(
                 for item in prepared
             ]
             image_lines = [f"![Изображение]({item['url']})" for item in attachments]
-            text = "\n".join([part for part in [caption_text, *image_lines] if part]).strip() or "[изображение]"
+            text = "\n".join(image_lines).strip() or "[изображение]"
             message_id = repo.add_message(
                 chat_id=chat_id,
                 direction="outbound",
@@ -5330,6 +5476,10 @@ async def add_chat_attachments(
                 author=author,
                 external_message_id=f"local-image:{uuid.uuid4().hex}",
                 raw={"_crm_local_attachment": True, "attachments": attachments},
+                is_crm_sent=True,
+                crm_author_user_id=current_user_id,
+                crm_author_label=author,
+                client_operation_id=client_operation_id,
             )
             return {"ok": True, "message_id": message_id, "attachments": attachments, "chat": repo.get_chat(chat_id)}
 
@@ -5339,12 +5489,6 @@ async def add_chat_attachments(
         if marketplace == "wildberries":
             # WB Buyers Chat public method in the current connector supports text replies only.
             raise HTTPException(status_code=400, detail="WB Buyers Chat API сейчас поддерживает отправку текста из CRM. Для фото нужен отдельный подтверждённый метод WB загрузки/отправки файлов.")
-
-        if caption_text:
-            if marketplace == "wildberries" and hasattr(connector, "set_reply_sign_from_metadata"):
-                connector.set_reply_sign_from_metadata(chat["external_chat_id"], chat.get("metadata") or {})  # type: ignore[attr-defined]
-            caption_response = await connector.send_message(chat["external_chat_id"], caption_text)
-            marketplace_responses.append({"type": "text", "response": caption_response})
 
         for item in prepared:
             try:
@@ -5367,7 +5511,7 @@ async def add_chat_attachments(
         for item in prepared
     ]
     image_lines = [f"![Изображение]({item['url']})" for item in attachments]
-    text = "\n".join([part for part in [caption_text, *image_lines] if part]).strip() or "[изображение]"
+    text = "\n".join(image_lines).strip() or "[изображение]"
     external_ids = [
         _trusted_marketplace_message_id(entry.get("response"))
         for entry in marketplace_responses
@@ -5388,6 +5532,10 @@ async def add_chat_attachments(
             "attachments": attachments,
             "marketplace_responses": marketplace_responses,
         },
+        is_crm_sent=True,
+        crm_author_user_id=current_user_id,
+        crm_author_label=author,
+        client_operation_id=client_operation_id,
     )
     assigned_on_send = False
     if current_user_id and _env_bool("CRM_AUTO_ASSIGN_FIRST_RESPONSE", True):
@@ -5399,60 +5547,72 @@ async def add_chat_attachments(
     return {"ok": True, "message_id": message_id, "attachments": attachments, "chat": repo.get_chat(chat_id), "assigned_on_send": assigned_on_send}
 
 
+def _message_send_http_status(operation: dict[str, Any]) -> int:
+    if str(operation.get("status")) in {
+        "pending", "sending", "retry_wait", "accepted", "uncertain"
+    }:
+        return 202
+    return 200
+
+
 @app.post("/api/chats/{chat_id}/messages")
-async def send_message(chat_id: int, payload: MessageCreate, request: Request) -> dict[str, Any]:
+async def send_message(chat_id: int, payload: MessageCreate, request: Request) -> JSONResponse:
     chat = repo.get_chat(chat_id)
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
 
-    # v88: the first CRM employee who replies to an unassigned chat becomes the
-    # responsible manager. This moves the chat into that employee's "Мои чаты"
-    # tab and updates the assignee selector in the opened dialog.
     current_user = _current_user(request)
     current_user_id = int(current_user.get("id") or 0)
     current_user_label = (current_user.get("display_name") or current_user.get("username") or "").strip()
-    outbound_author = (payload.author or "").strip()
-    if not outbound_author or outbound_author.lower() in {"manager", "менеджер", "operator", "оператор"}:
-        outbound_author = current_user_label or outbound_author or "manager"
-
-    marketplace = chat["marketplace"]
-    connector = connectors.get(marketplace) or connectors["mock"]
+    outbound_author = current_user_label or "manager"
+    client_operation_id = payload.operation_id.strip()
+    if not client_operation_id:
+        raise HTTPException(status_code=422, detail="operation_id is required")
 
     try:
-        if chat.get("metadata", {}).get("source") == "mock" or marketplace == "mock":
-            raw_response = await connectors["mock"].send_message(chat["external_chat_id"], payload.text)
-        else:
-            if marketplace == "wildberries" and hasattr(connector, "set_reply_sign_from_metadata"):
-                connector.set_reply_sign_from_metadata(chat["external_chat_id"], chat.get("metadata") or {})  # type: ignore[attr-defined]
-            raw_response = await connector.send_message(chat["external_chat_id"], payload.text)
-    except Exception as exc:
-        # Не сохраняем сообщение как отправленное и не назначаем ответственного,
-        # если маркетплейс не принял ответ.
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-    message_id = repo.add_message(
-        chat_id=chat_id,
-        direction="outbound",
-        text=payload.text,
-        author=outbound_author,
-        external_message_id=_trusted_marketplace_message_id(raw_response),
-        raw=_mark_crm_sent_raw(raw_response, author=outbound_author, user_id=current_user_id),
-    )
-    assigned_on_send = False
-    if current_user_id and _env_bool("CRM_AUTO_ASSIGN_FIRST_RESPONSE", True):
-        assigned_on_send = repo.assign_chat_to_user_if_unassigned(
+        operation, deduplicated = await message_send_service.register_and_dispatch(
             chat_id=chat_id,
-            user_id=current_user_id,
-            reason="first_crm_reply",
+            client_operation_id=client_operation_id,
+            text=payload.text,
+            intent_origin=payload.intent_origin,
+            author_user_id=current_user_id or None,
+            author_label=outbound_author,
         )
-    updated_chat = repo.get_chat(chat_id)
-    return {
+    except MessageSendOperationConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    body = {
         "ok": True,
-        "message_id": message_id,
-        "marketplace_response": raw_response,
-        "chat": updated_chat,
-        "assigned_on_send": assigned_on_send,
+        "operation": public_operation(operation, deduplicated=deduplicated),
+        "chat": repo.get_chat(chat_id),
     }
+    return JSONResponse(content=body, status_code=_message_send_http_status(operation))
+
+
+@app.get("/api/chats/{chat_id}/message-send-operations")
+def list_message_send_operations(chat_id: int) -> dict[str, Any]:
+    if not repo.get_chat(chat_id):
+        raise HTTPException(status_code=404, detail="Chat not found")
+    return {
+        "operations": [
+            public_operation(operation)
+            for operation in message_send_service.list_chat_operations(chat_id)
+        ]
+    }
+
+
+@app.get("/api/chats/{chat_id}/message-send-operations/{client_operation_id}")
+def get_message_send_operation(chat_id: int, client_operation_id: str) -> dict[str, Any]:
+    if not repo.get_chat(chat_id):
+        raise HTTPException(status_code=404, detail="Chat not found")
+    operation = message_send_service.get_chat_operation(chat_id, client_operation_id)
+    if not operation:
+        raise HTTPException(status_code=404, detail="Message send operation not found")
+    return {"operation": public_operation(operation)}
 
 
 @app.post("/api/chats/{chat_id}/notes")
