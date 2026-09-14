@@ -1,4 +1,4 @@
-const ARTI_CRM_SW_VERSION = 'v95-17-notification-copy-20260826';
+const ARTI_CRM_SW_VERSION = 'v95-18-chat-preview-task-visuals-20260909';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();

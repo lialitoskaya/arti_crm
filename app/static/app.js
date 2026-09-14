@@ -3814,7 +3814,7 @@ function renderChatList(options = {}) {
         <div class="chat-badges">${statusBadge(chat.status, chat.status_label, chat.status_color)}${slaBadge}${assigneeBadge}</div>
         <div class="chat-item-read-meta">
           <button class="chat-read-state-control" type="button" data-chat-read-state data-chat-id="${chat.id}" tabindex="${chat.is_unread ? '-1' : '0'}" aria-label="${chat.is_unread ? '\u041d\u0435\u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043d\u044b\u0439 \u0447\u0430\u0442' : '\u041e\u0442\u043c\u0435\u0442\u0438\u0442\u044c \u0447\u0430\u0442 \u043d\u0435\u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043d\u044b\u043c'}" aria-pressed="${chat.is_unread ? 'true' : 'false'}" title="${chat.is_unread ? '\u041d\u0435\u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043d\u044b\u0439 \u0447\u0430\u0442' : '\u041e\u0442\u043c\u0435\u0442\u0438\u0442\u044c \u043d\u0435\u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043d\u044b\u043c'}">
-            <span class="chat-read-state-dot" aria-hidden="true"></span>
+            <span class="chat-read-state-checks" aria-hidden="true"></span>
           </button>
           <span class="chat-time">${escapeHtml(time)}</span>
         </div>
