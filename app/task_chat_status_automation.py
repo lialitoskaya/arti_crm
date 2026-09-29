@@ -8,6 +8,11 @@ from typing import Any
 MIGRATION_NAME = "20260824_task_type_chat_status_automation"
 TERMINAL_TASK_STATUSES = frozenset({"done", "archived", "cancelled"})
 OVERRIDE_KINDS = frozenset({"manual", "provider", "rollback_release"})
+_AUTOMATION_TABLES = (
+    "task_chat_status_effects",
+    "chat_task_status_state",
+    "task_type_chat_status_links",
+)
 
 
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
@@ -349,9 +354,10 @@ def _validate_automation_schema(conn: sqlite3.Connection) -> None:
     _validate_schema_migrations(conn)
     _validate_table_contracts(conn)
     _validate_existing_structural_contracts(conn)
-    foreign_key_errors = conn.execute("PRAGMA foreign_key_check").fetchall()
-    if foreign_key_errors:
-        raise RuntimeError("Incompatible task chat-status foreign-key data")
+    for table in _AUTOMATION_TABLES:
+        foreign_key_errors = conn.execute(f"PRAGMA foreign_key_check({table})").fetchall()
+        if foreign_key_errors:
+            raise RuntimeError("Incompatible task chat-status foreign-key data")
 
     for table, name, unique, columns, partial, predicate in _EXPECTED_INDEXES:
         _assert_index_definition(conn, table, name, unique, columns, partial, predicate)
@@ -383,14 +389,9 @@ def apply_task_chat_status_automation_migration(conn: sqlite3.Connection) -> Non
     _validate_existing_structural_contracts(conn)
     _validate_existing_index_contracts(conn)
     if missing_audit:
-        automation_tables = (
-            "task_chat_status_effects",
-            "chat_task_status_state",
-            "task_type_chat_status_links",
-        )
         nonempty = [
             table
-            for table in automation_tables
+            for table in _AUTOMATION_TABLES
             if _table_exists(conn, table)
             and int(conn.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()["c"] or 0) > 0
         ]
@@ -398,7 +399,7 @@ def apply_task_chat_status_automation_migration(conn: sqlite3.Connection) -> Non
             raise RuntimeError(
                 "Incompatible nonempty task chat-status schema: missing trustworthy audit columns"
             )
-        for table in automation_tables:
+        for table in _AUTOMATION_TABLES:
             if _table_exists(conn, table):
                 conn.execute(f"DROP TABLE {table}")
     _create_automation_tables(conn)
