@@ -2021,12 +2021,28 @@ def cleanup_read_marketplace_notifications() -> int:
         return int(cur.rowcount or 0)
 
 
+def _notification_day_scope(user_id: int) -> tuple[str, list[Any]]:
+    """Share one Moscow calendar day across feed, unread count and read-all.
+
+    Stored naive SQLite timestamps are UTC; ISO timestamps may have an offset.
+    datetime() normalizes both without Julian-day fractional rounding at midnight.
+    This visibility predicate never expires notification history or push delivery.
+    """
+    moscow = timezone(timedelta(hours=3))
+    start = _utcnow().astimezone(moscow).replace(hour=0, minute=0, second=0, microsecond=0)
+    end = start + timedelta(days=1)
+    return (
+        "user_id=? AND datetime(created_at)>=datetime(?) AND datetime(created_at)<datetime(?)",
+        [int(user_id), start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat()],
+    )
+
+
 def list_notifications(user_id: int, *, limit: int = 30, unread_only: bool = False) -> dict[str, Any]:
     limit = max(1, min(int(limit or 30), 100))
-    clauses = ["n.user_id=?"]
-    params: list[Any] = [int(user_id)]
+    day_where, params = _notification_day_scope(user_id)
+    clauses = [day_where]
     if unread_only:
-        clauses.append("n.is_read=0")
+        clauses.append("is_read=0")
     where = " AND ".join(clauses)
     cleanup_read_marketplace_notifications()
     with get_connection() as conn:
@@ -2041,18 +2057,17 @@ def list_notifications(user_id: int, *, limit: int = 30, unread_only: bool = Fal
                 c.customer_public_id,
                 c.external_chat_id,
                 t.title AS task_title
-            FROM notifications n
+            FROM (SELECT * FROM notifications WHERE {where}) n
             LEFT JOIN chats c ON c.id = n.chat_id
             LEFT JOIN tasks t ON t.id = n.task_id
-            WHERE {where}
             ORDER BY n.is_read ASC, datetime(n.created_at) DESC, n.id DESC
             LIMIT ?
             """,
             params + [limit],
         ).fetchall()
         unread = conn.execute(
-            "SELECT COUNT(*) AS c FROM notifications WHERE user_id=? AND is_read=0",
-            (int(user_id),),
+            f"SELECT COUNT(*) AS c FROM notifications WHERE {day_where} AND is_read=0",
+            params,
         ).fetchone()["c"]
         return {"items": [row_to_dict(row) for row in rows], "unread_count": int(unread)}
 
@@ -2067,10 +2082,11 @@ def mark_notification_read(notification_id: int, user_id: int) -> bool:
 
 
 def mark_all_notifications_read(user_id: int) -> int:
+    day_where, params = _notification_day_scope(user_id)
     with get_connection() as conn:
         cur = conn.execute(
-            "UPDATE notifications SET is_read=1, read_at=CURRENT_TIMESTAMP WHERE user_id=? AND is_read=0",
-            (int(user_id),),
+            f"UPDATE notifications SET is_read=1, read_at=CURRENT_TIMESTAMP WHERE {day_where} AND is_read=0",
+            params,
         )
         return int(cur.rowcount or 0)
 

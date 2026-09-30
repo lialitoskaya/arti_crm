@@ -7,6 +7,7 @@
   --crm-panel: #ffffff;
   --crm-panel-soft: #fafafa;
   --crm-panel-muted: #f0f0f0;
+  --crm-notification-background: rgba(248, 251, 255, .88);
   --crm-line: #e3e3e3;
   --crm-line-strong: #d7d7d7;
   --crm-text: #222222;
@@ -909,10 +910,11 @@ html[data-theme="dark"] button.reply-template-delete-action:focus-visible {
   display: grid;
   gap: 7px;
   padding: 12px 38px 12px 12px;
-  border: 1px solid #dce3f4;
+  border: 1px solid var(--crm-line);
   border-radius: var(--crm-radius-md);
-  background: #eef2ff;
-  box-shadow: var(--crm-shadow-md);
+  background: var(--crm-notification-background);
+  box-shadow: var(--crm-shadow-xs);
+  color: var(--crm-text);
   cursor: pointer;
 }
 .notification-close-btn { position: absolute; right: 8px; top: 8px; width: 24px; height: 24px; min-width: 24px; min-height: 24px; background: transparent; }
@@ -3481,7 +3483,6 @@ html[data-theme] .chat-item,
 html[data-theme] .review-item,
 html[data-theme] .empty-card,
 html[data-theme] .empty-chat-item,
-html[data-theme] .notification-toast,
 html[data-theme] .mobile-more-card,
 html[data-theme] .task-item,
 html[data-theme] .knowledge-item,
@@ -3868,6 +3869,7 @@ html[data-theme="dark"] .message-actions-btn:hover {
 html[data-theme="dark"] {
   --crm-bg: #0b0f17;
   --crm-bg-soft: #0f1624;
+  --crm-notification-background: rgba(22, 31, 47, .90);
   --crm-panel: #121a29;
   --crm-panel-solid: #111827;
   --crm-panel-soft: #162033;
@@ -3908,7 +3910,6 @@ html[data-theme="dark"] :is(
   .extra-menu,
   .extra-panel,
   .reply-templates-panel,
-  .notification-toast,
   .notifications-panel,
   .reviews-list-panel,
   .review-detail-panel,

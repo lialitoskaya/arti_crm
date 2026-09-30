@@ -1,5 +1,34 @@
 # Business rules
 
+## Current-day notifications
+
+1. The notification feed and its unread count include every notification type,
+   including tasks, only for the current Moscow calendar day (fixed UTC+03:00).
+   The repository samples the clock once per operation and uses the same half-open
+   interval `[00:00, next 00:00)` for items and the full count, independent of limit.
+   ISO timestamps with offsets and naive SQLite UTC timestamps are normalized in
+   SQLite; invalid timestamps and dates outside the current day are not visible.
+2. The authenticated user's identity scopes both the feed and unread count.
+   `read-all` marks only that user's unread notifications in today's interval.
+   Its response queries the actual current unread count, so a concurrent arrival
+   or midnight rollover is not concealed by a hardcoded zero.
+3. At Moscow midnight, yesterday's entries leave the open page on the next
+   successful existing notification poll (normally every five seconds). The server
+   is the only source of the date predicate; the UI replaces the feed and prunes
+   absent toast IDs. Initial load/reload establishes the existing unread baseline
+   without replaying the backlog as new toasts.
+4. The day boundary is visibility, not retention: it does not delete rows, expire
+   them, or change historical read state. Individual notification read operations
+   remain available for historical IDs. Existing marketplace-read and stale-message
+   reconciliation retains its domain-specific behavior independently of age.
+5. Web Push payloads, pending deliveries and retry state are independent of this
+   UI day scope and are not changed or cancelled by feed reads or `read-all`.
+   Notification creation retains its existing rolling recent-message window
+   (24 hours by default); that window is distinct from calendar-day visibility.
+6. Toasts reuse the existing markup, context/time presentation, controls and
+   layout. Their background alone is translucent in both themes; text and controls
+   remain opaque, without blur or another rendering path.
+
 ## Personal chat read state
 
 The backend and SQLite database are the source of truth for chat read state. The
