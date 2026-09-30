@@ -30,6 +30,6 @@ def create_notifications_router(
     def api_mark_all_notifications_read(request: Request) -> dict[str, Any]:
         user = current_user_dependency(request)
         count = repo.mark_all_notifications_read(int(user["id"]))
-        return {"ok": True, "marked": count, "unread_count": 0}
+        return {"ok": True, "marked": count, "unread_count": repo.list_notifications(int(user["id"]), limit=1)["unread_count"]}
 
     return router
