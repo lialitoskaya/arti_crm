@@ -121,8 +121,11 @@ class NotificationsRouterTests(unittest.TestCase):
     def test_marks_all_notifications_and_returns_exact_payload(self) -> None:
         endpoint = _route(self.router, "/api/notifications/read-all", "POST").endpoint
         result = endpoint(_request_without_user())
-        self.assertEqual({"ok": True, "marked": 3, "unread_count": 0}, result)
-        self.assertEqual([("mark_all_notifications_read", 7)], self.repo.calls)
+        self.assertEqual({"ok": True, "marked": 3, "unread_count": 4}, result)
+        self.assertEqual(
+            [("mark_all_notifications_read", 7), ("list_notifications", 7, 1, False)],
+            self.repo.calls,
+        )
 
     def test_auth_disabled_semantics_are_preserved_through_injected_dependency(self) -> None:
         router = create_notifications_router(self.repo, main._current_user)

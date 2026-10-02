@@ -306,6 +306,67 @@ class ChatOperatorUiTests(unittest.TestCase):
             """
         )
 
+    def test_notification_poll_replaces_previous_day_and_does_not_replay_on_reload(self) -> None:
+        functions = "\n".join(_extract_function(self.source, name) for name in (
+            "loadNotifications", "currentUnreadNotifications", "rememberUnreadNotificationIds",
+            "enqueueNotificationToasts", "renderNotifications", "updateNotificationsBadge",
+            "escapeHtml", "parseDate", "formatDateTime",
+        ))
+        _run_node(
+            f"""
+            const stack = {{ innerHTML: '', classList: {{ add() {{}}, remove() {{}} }}, querySelectorAll() {{ return []; }} }};
+            const badges = Object.fromEntries(['notificationsBadge', 'mobileMoreBadge', 'mobileMoreNotificationsBadge'].map(id => [id, {{
+              textContent: '', hidden: true,
+              classList: {{ add() {{ badges[id].hidden = true; }}, remove() {{ badges[id].hidden = false; }} }},
+            }}]));
+            function $(id) {{ return id === 'notificationToasts' ? stack : badges[id]; }}
+            let notifications = [], notificationToastIds = [], notificationSeenUnreadIds = new Set();
+            let notificationsPanelOpen = false, notificationsBootstrapDone = false;
+            let notificationsUnreadCount = 0, notificationsLoadPromise = null, lastBrowserNotificationAt = 0;
+            const document = {{ hidden: false }}, window = {{}};
+            let soundCalls = 0;
+            const notificationLooksLikeMessage = item => item.type === 'new_message';
+            const notificationLooksLikeQuestion = item => item.type === 'new_question';
+            function playNotificationSound() {{ soundCalls++; }}
+            function notify() {{ throw new Error('unexpected notification error'); }}
+            console.warn = (...args) => {{ throw new Error(args.join(' ')); }};
+            const yesterday = {{ id: 17, type: 'new_message', title: 'Yesterday', body: 'Old fixture', created_at: '2026-09-27T20:59:00Z', is_read: false }};
+            const today = {{ id: 18, type: 'new_message', title: 'Today <context>', body: 'Ozon fixture', created_at: '2026-09-27T21:00:00Z', is_read: false }};
+            let response = {{ items: [yesterday], unread_count: 1 }};
+            async function api(path) {{
+              if (path !== '/api/notifications?limit=30') throw new Error('client added a date filter');
+              return response;
+            }}
+            {functions}
+            (async () => {{
+              await loadNotifications();
+              if (stack.innerHTML || notificationToastIds.length || soundCalls) throw new Error('bootstrap replayed backlog');
+              enqueueNotificationToasts([yesterday]);
+              notificationsPanelOpen = true;
+              renderNotifications();
+              if (!stack.innerHTML.includes('data-notification-open="17"')) throw new Error('old-day setup failed');
+              // The next successful server poll crosses midnight; the browser has no date predicate.
+              response = {{ items: [today], unread_count: 1 }};
+              await loadNotifications();
+              if (notifications.length !== 1 || notifications[0].id !== 18) throw new Error('old feed remained');
+              if (notificationToastIds.join(',') !== '18' || stack.innerHTML.includes('Yesterday')) throw new Error('old toast remained');
+              if (!stack.innerHTML.includes('Today &lt;context&gt;') || !stack.innerHTML.includes('Ozon fixture')) throw new Error('context lost');
+              if (Object.values(badges).some(b => b.textContent !== '1' || b.hidden)) throw new Error('badges disagree with server count');
+              await loadNotifications();
+              if (notificationToastIds.join(',') !== '18' || soundCalls !== 1) throw new Error('poll replayed duplicate');
+              // Reload establishes a baseline and does not replay the server's unread backlog.
+              notificationsBootstrapDone = false; notificationToastIds = []; notificationsPanelOpen = false;
+              notificationSeenUnreadIds = new Set();
+              await loadNotifications();
+              if (stack.innerHTML || notificationToastIds.length || soundCalls !== 1) throw new Error('reload replayed backlog');
+              response = {{ items: [], unread_count: 0 }};
+              await loadNotifications();
+              if (stack.innerHTML || notificationsPanelOpen || notificationsUnreadCount) throw new Error('empty day did not clear feed');
+              if (Object.values(badges).some(b => b.textContent !== '0' || !b.hidden)) throw new Error('empty day did not clear badges');
+            }})().catch(error => {{ console.error(error); process.exit(1); }});
+            """
+        )
+
     def test_question_notification_keeps_first_poll_baseline_and_context(self) -> None:
         sound_key = _extract_function(self.source, "questionSoundKey")
         track = _extract_function(self.source, "trackQuestionSounds")
