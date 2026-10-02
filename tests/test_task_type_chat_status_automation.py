@@ -812,6 +812,59 @@ class TaskChatStatusMigrationContractTests(unittest.TestCase):
         finally:
             conn.close()
 
+    def test_unrelated_foreign_key_violation_does_not_block_migration(self) -> None:
+        conn = self._base_connection()
+        try:
+            conn.execute("PRAGMA foreign_keys=OFF")
+            conn.executescript(
+                """
+                CREATE TABLE legacy_messages(
+                    id INTEGER PRIMARY KEY,
+                    chat_id INTEGER NOT NULL,
+                    FOREIGN KEY(chat_id) REFERENCES chats(id)
+                );
+                INSERT INTO legacy_messages(id, chat_id) VALUES (1, 999);
+                """
+            )
+            conn.execute("PRAGMA foreign_keys=ON")
+
+            self.assertTrue(conn.execute("PRAGMA foreign_key_check").fetchall())
+            apply_task_chat_status_automation_migration(conn)
+
+            self.assertIsNotNone(
+                conn.execute("SELECT 1 FROM schema_migrations WHERE name=?", (MIGRATION_NAME,)).fetchone()
+            )
+            self.assertTrue(
+                conn.execute("PRAGMA foreign_key_check(legacy_messages)").fetchall()
+            )
+        finally:
+            conn.close()
+
+    def test_automation_foreign_key_violation_still_fails_closed(self) -> None:
+        conn = self._base_connection()
+        try:
+            apply_task_chat_status_automation_migration(conn)
+            conn.commit()
+            conn.execute("PRAGMA foreign_keys=OFF")
+            conn.execute(
+                """
+                INSERT INTO task_type_chat_status_links(task_type_id, chat_status_id)
+                VALUES (999, 999)
+                """
+            )
+            conn.commit()
+            conn.execute("PRAGMA foreign_keys=ON")
+
+            with self.assertRaisesRegex(RuntimeError, "foreign-key data"):
+                apply_task_chat_status_automation_migration(conn)
+            self.assertTrue(
+                conn.execute(
+                    "PRAGMA foreign_key_check(task_type_chat_status_links)"
+                ).fetchall()
+            )
+        finally:
+            conn.close()
+
     def test_cycle_index_mismatch_is_rejected_even_with_marker(self) -> None:
         conn = self._base_connection()
         try:
