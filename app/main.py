@@ -1496,7 +1496,7 @@ async def _sync_ozon_fast_inbox_unlocked(*, background: bool = True) -> dict[str
     v83: deep Ozon backfill may scan thousands of chats and many history pages.
     That is correct for archive recovery but too slow for operator inbox polling.
     This function uses a fresh OzonConnector instance and a small/recent profile,
-    so new chats are not delayed by backfill settings or a long deep import.
+    so inbox polling uses its own limits after waiting for any active Ozon sync.
     """
     connector = OzonConnector()
     if not getattr(connector, "client_id", "") or not getattr(connector, "api_key", ""):
@@ -2997,60 +2997,62 @@ async def debug_ozon_backfill_chats(
         "history_pages": safe_history_pages,
     }
 
-    old_settings = {
-        "sync_max_chats": getattr(connector, "sync_max_chats", None),
-        "sync_pages_per_variant": getattr(connector, "sync_pages_per_variant", None),
-        "sync_variant_mode": getattr(connector, "sync_variant_mode", None),
-        "sync_include_closed": getattr(connector, "sync_include_closed", None),
-        "history_pages": getattr(connector, "history_pages", None),
-    }
+    # Keep temporary connector and environment settings inside the Ozon lock.
+    async with _marketplace_sync_lock("ozon"):
+        old_settings = {
+            "sync_max_chats": getattr(connector, "sync_max_chats", None),
+            "sync_pages_per_variant": getattr(connector, "sync_pages_per_variant", None),
+            "sync_variant_mode": getattr(connector, "sync_variant_mode", None),
+            "sync_include_closed": getattr(connector, "sync_include_closed", None),
+            "history_pages": getattr(connector, "history_pages", None),
+        }
 
-    old_exclude_support = os.environ.get("OZON_EXCLUDE_SUPPORT_CHATS")
-    old_delete_support = os.environ.get("OZON_DELETE_SUPPORT_CHATS")
-    old_exclude_system_history = os.environ.get("OZON_EXCLUDE_SYSTEM_HISTORY_CHATS")
-    old_delete_system_history = os.environ.get("OZON_DELETE_SYSTEM_HISTORY_CHATS")
-    try:
-        if include_service_chats:
-            # Keep every Ozon chat that API returns. We can hide/mark service later,
-            # but losing customer history during backfill is worse.
-            os.environ["OZON_EXCLUDE_SUPPORT_CHATS"] = "0"
-            os.environ["OZON_DELETE_SUPPORT_CHATS"] = "0"
-            os.environ["OZON_EXCLUDE_SYSTEM_HISTORY_CHATS"] = "0"
-            os.environ["OZON_DELETE_SYSTEM_HISTORY_CHATS"] = "0"
-        with _temporary_connector_overrides(connector, overrides):
-            result = await _sync_marketplace_unlocked("ozon", background=False)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    finally:
-        if old_exclude_support is None:
-            os.environ.pop("OZON_EXCLUDE_SUPPORT_CHATS", None)
-        else:
-            os.environ["OZON_EXCLUDE_SUPPORT_CHATS"] = old_exclude_support
-        if old_delete_support is None:
-            os.environ.pop("OZON_DELETE_SUPPORT_CHATS", None)
-        else:
-            os.environ["OZON_DELETE_SUPPORT_CHATS"] = old_delete_support
-        if old_exclude_system_history is None:
-            os.environ.pop("OZON_EXCLUDE_SYSTEM_HISTORY_CHATS", None)
-        else:
-            os.environ["OZON_EXCLUDE_SYSTEM_HISTORY_CHATS"] = old_exclude_system_history
-        if old_delete_system_history is None:
-            os.environ.pop("OZON_DELETE_SYSTEM_HISTORY_CHATS", None)
-        else:
-            os.environ["OZON_DELETE_SYSTEM_HISTORY_CHATS"] = old_delete_system_history
+        old_exclude_support = os.environ.get("OZON_EXCLUDE_SUPPORT_CHATS")
+        old_delete_support = os.environ.get("OZON_DELETE_SUPPORT_CHATS")
+        old_exclude_system_history = os.environ.get("OZON_EXCLUDE_SYSTEM_HISTORY_CHATS")
+        old_delete_system_history = os.environ.get("OZON_DELETE_SYSTEM_HISTORY_CHATS")
+        try:
+            if include_service_chats:
+                # Keep every Ozon chat that API returns. We can hide/mark service later,
+                # but losing customer history during backfill is worse.
+                os.environ["OZON_EXCLUDE_SUPPORT_CHATS"] = "0"
+                os.environ["OZON_DELETE_SUPPORT_CHATS"] = "0"
+                os.environ["OZON_EXCLUDE_SYSTEM_HISTORY_CHATS"] = "0"
+                os.environ["OZON_DELETE_SYSTEM_HISTORY_CHATS"] = "0"
+            with _temporary_connector_overrides(connector, overrides):
+                result = await _sync_marketplace_unlocked("ozon", background=False)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        finally:
+            if old_exclude_support is None:
+                os.environ.pop("OZON_EXCLUDE_SUPPORT_CHATS", None)
+            else:
+                os.environ["OZON_EXCLUDE_SUPPORT_CHATS"] = old_exclude_support
+            if old_delete_support is None:
+                os.environ.pop("OZON_DELETE_SUPPORT_CHATS", None)
+            else:
+                os.environ["OZON_DELETE_SUPPORT_CHATS"] = old_delete_support
+            if old_exclude_system_history is None:
+                os.environ.pop("OZON_EXCLUDE_SYSTEM_HISTORY_CHATS", None)
+            else:
+                os.environ["OZON_EXCLUDE_SYSTEM_HISTORY_CHATS"] = old_exclude_system_history
+            if old_delete_system_history is None:
+                os.environ.pop("OZON_DELETE_SYSTEM_HISTORY_CHATS", None)
+            else:
+                os.environ["OZON_DELETE_SYSTEM_HISTORY_CHATS"] = old_delete_system_history
 
-    result["backfill"] = True
-    result["include_service_chats"] = include_service_chats
-    result["backfill_overrides"] = overrides
-    result["local_after_backfill"] = _local_ozon_chat_stats()
-    result["previous_connector_settings"] = old_settings
-    result["connector_debug"] = getattr(connector, "last_sync_debug", {})
-    result["hint"] = (
-        "Это глубокий импорт. В v81 include_service_chats=true по умолчанию: CRM сохраняет все Ozon-чаты, которые API отдаёт, "
-        "чтобы не потерять клиентскую историю из-за ошибочной фильтрации. Если после этого min_last_message_at не уходит глубже, "
-        "значит нужно увеличивать pages_per_variant/max_chats или Ozon API не отдаёт более старые страницы этим методом."
-    )
-    return result
+        result["backfill"] = True
+        result["include_service_chats"] = include_service_chats
+        result["backfill_overrides"] = overrides
+        result["local_after_backfill"] = _local_ozon_chat_stats()
+        result["previous_connector_settings"] = old_settings
+        result["connector_debug"] = getattr(connector, "last_sync_debug", {})
+        result["hint"] = (
+            "Это глубокий импорт. В v81 include_service_chats=true по умолчанию: CRM сохраняет все Ozon-чаты, которые API отдаёт, "
+            "чтобы не потерять клиентскую историю из-за ошибочной фильтрации. Если после этого min_last_message_at не уходит глубже, "
+            "значит нужно увеличивать pages_per_variant/max_chats или Ozon API не отдаёт более старые страницы этим методом."
+        )
+        return result
 
 
 @app.post("/api/debug/wb/import-events")
