@@ -248,6 +248,52 @@ identity contract. It validates the complete column, CHECK, foreign-key, and ind
 contract. A nonempty partial outbox schema fails closed because its canonical payload
 and server attribution cannot be reconstructed safely.
 
+### Code-verified historical hosting upgrade
+
+`legacy_hosting_upgrade.py` recognizes only the supplied historical hash-only outbox
+and inline task-effect schema. It is not a general partial-schema repair or a legacy
+sender. Before the first normal `init_db()` schema write, the versioned
+`20261019_legacy_hosting_review_upgrade` bridge takes `BEGIN IMMEDIATE`, validates
+the known tables/indexes/markers and consumed parent references, archives old rows,
+runs the preserved identity migration, and creates the modern outbox/automation
+schema. Conversion and its marker commit together; errors roll the conversion back.
+The rest of existing `init_db()` still has `executescript()` commit boundaries. A
+failure later in initialization needs forward recovery, not a claim that the whole
+startup was atomic.
+
+The four `legacy_*_audit` tables have no cascading foreign keys. Their exact rows,
+including historical diagnostic fields, are frozen by insert/update/delete guards
+and checked against an immutable count/hash manifest on subsequent initialization.
+This private audit is never returned by an API or logged. A separate
+`legacy_message_review_links` table preserves an effective canonical-message link;
+identity deduplication remaps it **before** deleting a duplicate, without changing
+the archived original ID. Modern AUTOINCREMENT is reserved above both the old
+maximum ID and the historical SQLite sequence, preventing numeric polling conflicts.
+
+Old operations do not enter the modern command table: they have no complete text
+payload and cannot be claimed, retried, drained, or dispatched. The existing
+operation service exposes a whitelisted review representation (`uncertain`, empty
+internal payload and a fixed display-only explanation), never fabricated sendable
+text. Only an archived `confirmed` state with an exact surviving same-chat outbound
+message, matching provider ID and original legacy text hash is represented as
+confirmed and omitted from unresolved rows. An accepted ACK alone is insufficient.
+No new history matcher, renderer, worker or manual-resolution endpoint is added.
+
+Under the existing registration write lock, a repeated legacy client ID returns
+the same review operation, a different hash conflicts, and a new ID with an
+unresolved legacy text hash also conflicts. Hashing follows the original hosted
+normalization at this one boundary before connector-specific normalization; modern
+payload hashing is unchanged. Public author labels are resolved from the old
+server-stored user ID, never from the old client-influenced display label.
+
+Old task state, mapping and inline effect fields are archived. Chat workflow status
+and its manual metadata are not rewritten; no old ownership/snapshot is synthesized.
+The preserved message-identity migration may still repair preview/activity cache and
+its timestamp when genuine duplicate messages are merged. Valid active-status
+mappings survive, including dormant inactive task types; invalid/orphaned mappings
+remain audit-only. Explicit future task create/rebind/reactivation uses the existing
+arbiter. See `docs/HOSTING_UPGRADE.md` for rollout and rollback boundaries.
+
 ## Chat-list calendar-date filter
 
 The calendar control belongs to the chat-list filters, not to an opened dialog.
@@ -332,8 +378,30 @@ may be rebuilt with the canonical audit columns and indexes, while a nonempty
 partial table without trustworthy acquisition timestamps fails closed. Column
 types, nullability, defaults, primary/unique keys, foreign-key actions and ordered
 cycle indexes are revalidated before the migration marker is written. Forward
-reconciliation
-is available as `repository.reconcile_task_chat_status_automation()`.
+reconciliation is available as `repository.reconcile_task_chat_status_automation()`.
+Foreign-key data validation is scoped to the migration's three child tables:
+`task_type_chat_status_links`, `chat_task_status_state`, and
+`task_chat_status_effects`. Every owned relationship is checked on each startup,
+including when the marker already exists; an owned orphan remains fatal before
+the marker is written or forward reconciliation starts. Errors identify only the
+static table name, never row IDs or payloads. Unrelated legacy FK violations or
+malformed FK definitions are not diagnosed or repaired by this migration and must
+be investigated separately; successful startup is not a whole-database integrity
+certificate. No records are deleted, nulled, or synthesized, and runtime FK
+enforcement remains enabled.
+
+The same validation runs through the shared `init_db()` used by ASGI and hosted
+WSGI startup. The isolated FK-validation change is confined to
+`app/task_chat_status_automation.py`; this describes code scope, not permission to
+replace that module alone on an older hosting release. Deploy the coherent release
+using `docs/HOSTING_UPGRADE.md`, with a verified database/code backup. The FK scan
+itself needs no server-specific paths, configuration, or schema changes.
+The migration participates in its caller's transaction, so a failure rolls back
+that transaction; `init_db()` as a whole is not globally atomic because existing
+`executescript()` calls establish earlier commit boundaries. Rolling this fix back
+restores the old global FK scan and can reproduce the startup failure when
+unrelated legacy integrity debt remains; there is no data conversion to undo.
+
 Before rolling application code back, operators must run the idempotent
 `repository.release_task_chat_status_automation_for_rollback()` routine; it
 releases task ownership and restores only an active baseline (or the active default)

@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 
 from app.message_outbox_migration import apply_message_send_operation_migration
 from app.task_chat_status_automation import apply_task_chat_status_automation_migration
+from app.legacy_hosting_upgrade import apply_legacy_hosting_upgrade, remap_legacy_message_reference
 
 load_dotenv()
 
@@ -135,6 +136,7 @@ def _merge_duplicate_message_rows(
 
     # Remove the redundant row before assigning its unique provider identity to
     # the canonical row. All values needed for the merge are already in memory.
+    remap_legacy_message_reference(conn, int(duplicate["id"]), int(canonical["id"]))
     conn.execute("DELETE FROM messages WHERE id=?", (int(duplicate["id"]),))
     conn.execute(
         """
@@ -388,6 +390,7 @@ def get_connection() -> Iterator[sqlite3.Connection]:
 
 def init_db() -> None:
     with get_connection() as conn:
+        apply_legacy_hosting_upgrade(conn, _apply_message_identity_migration)
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS chats (

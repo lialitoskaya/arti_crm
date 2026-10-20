@@ -1,0 +1,81 @@
+# Coherent hosting release upgrade
+
+## Purpose and boundary
+
+The reported import failure came from mixing historical `repository.py`/outbox
+contracts with a modern task automation module. Replacing one file or inventing
+missing constant aliases does not repair the different schemas and send semantics.
+Deploy one coherent release, including its complete `app/`, static assets, entry
+points and pinned requirements. Do not overlay arbitrary files from the old ZIPs.
+
+The known historical schema comes from supplied **source code**, not a production
+database inspection. The startup bridge supports that exact schema, a normal new
+database, and the already-current schema. A different or partially mixed historical
+schema must stop with a safe error; do not disable its validators to force startup.
+
+## Data policy
+
+- All old send rows are copied into immutable private audit with a count/hash
+  manifest. Missing text is not guessed. No old row is eligible for automatic send.
+- The existing operation API returns a review row with `uncertain` and the fixed
+  explanation “Старая отправка требует ручной сверки; текст не сохранён”. A
+  sufficiently proven existing confirmed message suppresses that transient row.
+- Same-ID replay preserves the old operation; changed content and new IDs with an
+  unresolved old hash return 409. This is a conservative duplicate guard, not proof
+  of exactly-once delivery. Different rewritten text cannot be recognized by hash.
+- Manual review/resolution tools are not included. Do not force a new ID, modify
+  audit hashes, or enqueue placeholder text to work around a review block.
+- Old task effects/state are archived without retroactive acquisition. Existing chat
+  workflow status and manual metadata remain; valid dormant mappings are retained.
+  Modern message-identity repair remains enabled and can update activity caches
+  when it merges proven historical duplicates.
+- Audit contains historical sensitive fields already present in the database. Keep
+  DB/backups private, never web-served, exported to diagnostics, or attached to a
+  support request. There is no API for raw audit data.
+
+## Rollout (operator action; not performed by development tests)
+
+1. Stop the old web process, cron/background ticks and marketplace workers. Prevent
+   requests during replacement. SQLite locking is not a mixed-version deployment
+   strategy.
+2. Take a consistent backup of the complete DB (including WAL state through the
+   SQLite backup mechanism or a fully stopped checkpointed database), current code,
+   private attachments and configuration. Verify restoration in a restricted
+   operator-owned environment. Never send secrets or a production dump to the agent.
+3. Install one complete release and its `requirements.txt` in a fresh environment.
+   Python 3.11+ is required by the existing dispatcher (`asyncio.timeout`).
+   `a2wsgi==1.10.10` is included for the existing WSGI entry points; Uvicorn remains
+   the ASGI server option. Keep deployment configuration/private data outside the
+   release and use absolute writable storage paths.
+4. Start one maintenance instance. Both ASGI startup and hosted WSGI use the same
+   `init_db()`. The known legacy conversion uses one `BEGIN IMMEDIATE` transaction
+   before normal initialization. Unsupported schema or conversion errors roll it
+   back; do not ignore the error or run an old dispatcher against it.
+5. Validate migration markers, preserved audit counts and the modern schema in the
+   operator environment without printing raw rows. Verify login, read-only history,
+   uncertain review rows and one **synthetic/mock** new command before enabling
+   real traffic. No production send is needed for a release smoke check.
+6. Resume only current-version processes. ASGI lifecycle starts the existing loops.
+   The WSGI adapter does not promise ASGI lifespan/background-loop execution; hosting
+   must continue to call the existing authenticated `/api/background/tick` job for
+   deferred drain/sync. Do not add a second sender or share incompatible releases.
+
+## Recovery
+
+Conversion failures roll back the bridge. Later `init_db()` stages are not one
+global transaction: if a later stage fails after the bridge committed, retain the
+audit/marker and fix forward. Repeated bridge startup validates and reuses them.
+Before any new-version writes, restoring the **whole matching code + DB backup**
+is an operator rollback option. After new writes, restoring that snapshot loses
+those writes and requires a separate reconciliation decision. Never deploy just an
+old module against the converted schema; do not drop audit tables or markers.
+
+## Verification
+
+`tests/test_legacy_hosting_upgrade.py` uses only `tmp_path` SQLite files, synthetic
+records, code-derived DDL, blocked external networking and disabled dotenv. It
+covers conversion/repeat init, rollback faults, invalid schema, ID reservation,
+reference remapping, immutable audit, concurrent registration/conversion, HTTP
+replay/polling, task lifecycle and real a2wsgi entry-point requests. It does not
+claim a live hosting deployment, provider-send verification or support for every
+unknown database variant.

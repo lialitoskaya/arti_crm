@@ -6,6 +6,7 @@ from typing import Any, Mapping
 
 from app import repository as repo
 from app.connectors.base import MarketplaceConnector
+from app.legacy_hosting_upgrade import REVIEW_TEXT
 from app.message_send_models import (
     MESSAGE_SEND_ATTEMPT_TIMEOUT_SECONDS,
     MarketplaceSendError,
@@ -13,6 +14,7 @@ from app.message_send_models import (
 )
 from app.message_send_operations import (
     MessageSendOperationConflict,
+    check_legacy_registration,
     claim_next_operation,
     complete_operation_accepted,
     complete_operation_error,
@@ -46,6 +48,9 @@ class MessageSendService:
         chat = repo.get_chat(chat_id)
         if not chat:
             raise LookupError("Chat not found")
+        legacy = check_legacy_registration(chat_id, client_operation_id, text)
+        if legacy:
+            return legacy, True
         connector = self._connector_for_chat(chat)
         if connector is None:
             raise ValueError("Marketplace connector is not configured")
@@ -54,6 +59,7 @@ class MessageSendService:
             chat_id=chat_id,
             client_operation_id=client_operation_id,
             text=normalized_text,
+            original_text=text,
             intent_origin=intent_origin,
             author_user_id=author_user_id,
             author_label=author_label,
@@ -265,7 +271,7 @@ def public_operation(operation: dict[str, Any], *, deduplicated: bool = False) -
         "intent_origin": str(operation["intent_origin"]),
         "status": str(operation["status"]),
         "attempt_count": int(operation.get("attempt_count") or 0),
-        "text": str((operation.get("payload") or {}).get("text") or ""),
+        "text": (REVIEW_TEXT if operation.get("legacy_review") else str((operation.get("payload") or {}).get("text") or "")),
         "author_label": str(operation.get("author_label") or ""),
         "requested_at": operation.get("requested_at"),
         "next_attempt_at": operation.get("next_attempt_at"),

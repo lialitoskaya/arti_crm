@@ -349,9 +349,15 @@ def _validate_automation_schema(conn: sqlite3.Connection) -> None:
     _validate_schema_migrations(conn)
     _validate_table_contracts(conn)
     _validate_existing_structural_contracts(conn)
-    foreign_key_errors = conn.execute("PRAGMA foreign_key_check").fetchall()
-    if foreign_key_errors:
-        raise RuntimeError("Incompatible task chat-status foreign-key data")
+    # This migration owns these child tables, not integrity repair of the whole DB.
+    # Keep every owned relationship fail-closed without examining unrelated legacy data.
+    for table in (
+        "task_type_chat_status_links",
+        "chat_task_status_state",
+        "task_chat_status_effects",
+    ):
+        if conn.execute(f"PRAGMA foreign_key_check({table})").fetchone() is not None:
+            raise RuntimeError(f"Incompatible task chat-status foreign-key data: {table}")
 
     for table, name, unique, columns, partial, predicate in _EXPECTED_INDEXES:
         _assert_index_definition(conn, table, name, unique, columns, partial, predicate)
