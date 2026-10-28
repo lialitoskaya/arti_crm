@@ -1,5 +1,22 @@
 # Security boundaries
 
+## First-administrator bootstrap
+
+ASGI startup and both hosted WSGI entry points use the same
+`app.main.ensure_initial_admin()` after `init_db()`. An empty `users` table requires
+explicit, validated `BOOTSTRAP_ADMIN_USERNAME` and `BOOTSTRAP_ADMIN_PASSWORD`;
+there are no default credentials or authentication bypass. Errors name the
+required settings without disclosing values. The repository serializes its
+empty-table check and insert under `BEGIN IMMEDIATE`, including workers configured
+with different usernames.
+
+Any existing user makes bootstrap a no-op before configuration validation. It never
+resets a password, reactivates a user, changes a role, or rebinds an account. WSGI
+performs this bounded bootstrap only, not the ASGI lifecycle or its cleanup and
+background tasks. One-time owner configuration and recovery boundaries are in
+`docs/HOSTING_UPGRADE.md`; regression tests use only isolated temporary SQLite,
+synthetic credentials, disabled dotenv, and blocked external networking.
+
 ## Yandex OAuth login
 
 Yandex OAuth is an optional login path for existing CRM users. The password endpoint

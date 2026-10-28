@@ -1,20 +1,210 @@
 from __future__ import annotations
 
 import ast
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 import json
 import os
+import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
 
+import httpx
 from fastapi import Request
 from starlette.responses import JSONResponse
+from starlette.datastructures import State
 
 import test_regression_foundation as foundation  # noqa: E402
 from app import auth_bootstrap  # noqa: E402
 
 
 main = foundation.main
+
+
+@contextmanager
+def _hosting_application(entrypoint: str, environment: dict[str, str]):
+    """Execute real entrypoint code with isolated storage, dotenv and networking."""
+    from a2wsgi import ASGIMiddleware
+
+    project_root = Path(__file__).resolve().parents[1]
+    previous_cwd = Path.cwd()
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+    try:
+        with tempfile.TemporaryDirectory(dir=foundation._TEMP_ROOT) as site_directory:
+            site = Path(site_directory)
+            safe_environment = {
+                **foundation._SAFE_ENV,
+                "BOOTSTRAP_ADMIN_USERNAME": "",
+                "BOOTSTRAP_ADMIN_PASSWORD": "",
+                "BOOTSTRAP_ADMIN_DISPLAY_NAME": "",
+                "CRM_CHAT_ATTACHMENTS_DIR": str(site / "attachments"),
+                **environment,
+            }
+            with mock.patch.dict(os.environ, safe_environment, clear=True), mock.patch(
+                "a2wsgi.ASGIMiddleware",
+                side_effect=lambda app: ASGIMiddleware(app, loop=loop, wait_time=5),
+            ), mock.patch.object(main.app, "state", State()), mock.patch.object(
+                main, "on_startup", side_effect=AssertionError("Full ASGI startup is forbidden")
+            ) as startup, mock.patch.object(
+                main.repo, "delete_mock_chats", side_effect=AssertionError("Startup cleanup is forbidden")
+            ) as cleanup:
+                namespace = {"__name__": "test_hosting_entry", "__file__": str(site / entrypoint)}
+                try:
+                    exec(compile((project_root / entrypoint).read_text(encoding="utf-8"),
+                                 str(site / entrypoint), "exec"), namespace)
+                    yield namespace["application"]
+                finally:
+                    startup.assert_not_called()
+                    cleanup.assert_not_called()
+                    assert not hasattr(main.app.state, "background_sync_task")
+                    os.chdir(previous_cwd)
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        loop.close()
+
+
+class HostedBootstrapSecurityTests(unittest.TestCase):
+    def setUp(self) -> None:
+        foundation._NETWORK_ATTEMPTS.clear()
+        foundation._remove_test_runtime_files()
+
+    def tearDown(self) -> None:
+        try:
+            self.assertEqual([], foundation._NETWORK_ATTEMPTS)
+        finally:
+            foundation._remove_test_runtime_files()
+
+    def test_wsgi_empty_database_bootstraps_admin_and_password_login_works(self) -> None:
+        environment = {
+            "BOOTSTRAP_ADMIN_USERNAME": "hosted-first-admin",
+            "BOOTSTRAP_ADMIN_PASSWORD": "Synthetic-hosting-password-2026!",
+        }
+        for entrypoint in ("server.py", "passenger_wsgi.py"):
+            with self.subTest(entrypoint=entrypoint):
+                foundation._remove_test_runtime_files()
+                with _hosting_application(entrypoint, environment) as application:
+                    with httpx.Client(transport=httpx.WSGITransport(app=application),
+                                      base_url="https://testserver") as client:
+                        response = client.post("/api/auth/login", json={
+                            "username": environment["BOOTSTRAP_ADMIN_USERNAME"],
+                            "password": environment["BOOTSTRAP_ADMIN_PASSWORD"],
+                        })
+                        self.assertEqual(200, response.status_code)
+                        self.assertEqual("admin", response.json()["user"]["role"])
+                        auth_cookie = next(cookie for cookie in client.cookies.jar if cookie.name == main.AUTH_COOKIE_NAME)
+                        self.assertTrue(auth_cookie.secure)
+                        self.assertEqual(200, client.get("/api/auth/me").status_code)
+                users = foundation.repo.list_users()
+                self.assertEqual(1, len(users))
+                self.assertEqual("hosted-first-admin", users[0]["username"])
+                with foundation.db.get_connection() as connection:
+                    before = [dict(row) for row in connection.execute("SELECT * FROM users")]
+                for repeated_environment in ({}, {
+                    "BOOTSTRAP_ADMIN_USERNAME": "replacement-admin",
+                    "BOOTSTRAP_ADMIN_PASSWORD": "Replacement-password-2026!",
+                }):
+                    with _hosting_application(entrypoint, repeated_environment):
+                        with foundation.db.get_connection() as connection:
+                            self.assertEqual(before, [dict(row) for row in connection.execute("SELECT * FROM users")])
+                        self.assertIsNotNone(foundation.repo.authenticate_user(
+                            environment["BOOTSTRAP_ADMIN_USERNAME"], environment["BOOTSTRAP_ADMIN_PASSWORD"],
+                        ))
+                        self.assertIsNone(foundation.repo.authenticate_user(
+                            environment["BOOTSTRAP_ADMIN_USERNAME"], "Replacement-password-2026!",
+                        ))
+
+    def test_wsgi_empty_database_refuses_missing_partial_and_invalid_credentials(self) -> None:
+        configurations = (
+            {},
+            {"BOOTSTRAP_ADMIN_USERNAME": "hosted-first-admin"},
+            {"BOOTSTRAP_ADMIN_PASSWORD": "Synthetic-hosting-password-2026!"},
+            {"BOOTSTRAP_ADMIN_USERNAME": "hosted-first-admin", "BOOTSTRAP_ADMIN_PASSWORD": "short"},
+            {"BOOTSTRAP_ADMIN_USERNAME": "invalid user", "BOOTSTRAP_ADMIN_PASSWORD": "Synthetic-hosting-password-2026!"},
+        )
+        for entrypoint in ("server.py", "passenger_wsgi.py"):
+            for environment in configurations:
+                with self.subTest(entrypoint=entrypoint, keys=tuple(environment)):
+                    foundation._remove_test_runtime_files()
+                    if entrypoint == "server.py":
+                        with _hosting_application(entrypoint, environment) as application:
+                            with httpx.Client(transport=httpx.WSGITransport(app=application),
+                                              base_url="http://testserver") as client:
+                                response = client.get("/health")
+                            self.assertEqual(500, response.status_code)
+                            error_message = response.text
+                    else:
+                        with self.assertRaises(auth_bootstrap.AuthBootstrapError) as error:
+                            with _hosting_application(entrypoint, environment):
+                                self.fail("Invalid bootstrap must stop Passenger startup")
+                        error_message = str(error.exception)
+                    self.assertIn("BOOTSTRAP_ADMIN_USERNAME", error_message)
+                    self.assertIn("BOOTSTRAP_ADMIN_PASSWORD", error_message)
+                    for value in environment.values():
+                        self.assertNotIn(value, error_message)
+                    self.assertEqual([], foundation.repo.list_users())
+
+    def test_wsgi_existing_users_are_unchanged_without_or_with_changed_settings(self) -> None:
+        foundation.db.init_db()
+        user = foundation.repo.create_user("existing-viewer", "Existing-password-2026!", "Existing", "viewer")
+        foundation.repo.update_user(int(user["id"]), is_active=False)
+        with foundation.db.get_connection() as connection:
+            before = [dict(row) for row in connection.execute("SELECT * FROM users")]
+        for entrypoint in ("server.py", "passenger_wsgi.py"):
+            for environment in ({}, {
+                "BOOTSTRAP_ADMIN_USERNAME": "different-admin",
+                "BOOTSTRAP_ADMIN_PASSWORD": "Different-password-2026!",
+            }):
+                with self.subTest(entrypoint=entrypoint, keys=tuple(environment)):
+                    with _hosting_application(entrypoint, environment) as application:
+                        with httpx.Client(transport=httpx.WSGITransport(app=application),
+                                          base_url="http://testserver") as client:
+                            self.assertEqual(200, client.get("/health").status_code)
+                    with foundation.db.get_connection() as connection:
+                        self.assertEqual(before, [dict(row) for row in connection.execute("SELECT * FROM users")])
+
+    def test_concurrent_bootstrap_serializes_empty_check_on_separate_connections(self) -> None:
+        foundation.db.init_db()
+        original_connection = foundation.repo.get_connection
+        start = threading.Barrier(2)
+        unlocked_reads = threading.Barrier(2)
+        connections = []
+
+        class ObservedConnection:
+            def __init__(self, connection):
+                self.connection = connection
+
+            def execute(self, statement, *args):
+                cursor = self.connection.execute(statement, *args)
+                # Force the old unlocked COUNT -> INSERT race deterministically.
+                # With BEGIN IMMEDIATE the second worker waits before its check.
+                if statement.startswith("SELECT COUNT(*) AS c FROM users") and not self.connection.in_transaction:
+                    unlocked_reads.wait(timeout=5)
+                return cursor
+
+        @contextmanager
+        def observed_connection():
+            with original_connection() as connection:
+                connections.append(connection)
+                yield ObservedConnection(connection)
+
+        def bootstrap(username):
+            start.wait(timeout=5)
+            return foundation.repo.ensure_initial_admin(username, "Concurrent-password-2026!")
+
+        with mock.patch.object(foundation.repo, "get_connection", observed_connection):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                results = list(executor.map(bootstrap, ("first-candidate", "second-candidate")))
+        self.assertEqual(2, len(connections))
+        self.assertIsNot(connections[0], connections[1])
+        self.assertEqual(1, sum(result is not None for result in results))
+        self.assertEqual(1, len(foundation.repo.list_users()))
 
 
 def _request(
@@ -63,7 +253,7 @@ class BootstrapAdminSecurityTests(unittest.TestCase):
         with mock.patch.object(main.repo, "users_exist", return_value=True), mock.patch.object(
             main.repo, "ensure_initial_admin"
         ) as ensure_admin, mock.patch.dict(os.environ, {}, clear=True):
-            self.assertIsNone(main._ensure_initial_admin())
+            self.assertIsNone(main.ensure_initial_admin())
         ensure_admin.assert_not_called()
 
     def test_empty_users_without_or_with_partial_credentials_fail_closed(self) -> None:
@@ -79,7 +269,7 @@ class BootstrapAdminSecurityTests(unittest.TestCase):
                 os.environ, environment, clear=True
             ):
                 with self.assertRaises(auth_bootstrap.AuthBootstrapError) as error:
-                    main._ensure_initial_admin()
+                    main.ensure_initial_admin()
                 password = environment.get("BOOTSTRAP_ADMIN_PASSWORD")
                 if password:
                     self.assertNotIn(password, str(error.exception))
@@ -98,7 +288,7 @@ class BootstrapAdminSecurityTests(unittest.TestCase):
         ) as ensure_admin, mock.patch("builtins.print") as print_mock, mock.patch.dict(
             os.environ, environment, clear=True
         ):
-            created = main._ensure_initial_admin()
+            created = main.ensure_initial_admin()
         self.assertEqual(1, created["id"])
         ensure_admin.assert_called_once_with("unique-admin", "StrongPassword-2026!", "Initial Administrator")
         output = " ".join(str(value) for call in print_mock.call_args_list for value in call.args)
@@ -125,8 +315,8 @@ class BootstrapAdminSecurityTests(unittest.TestCase):
         with mock.patch.object(main.repo, "users_exist", side_effect=users_exist), mock.patch.object(
             main.repo, "ensure_initial_admin", side_effect=create_admin
         ) as ensure_admin, mock.patch("builtins.print"), mock.patch.dict(os.environ, environment, clear=True):
-            main._ensure_initial_admin()
-            main._ensure_initial_admin()
+            main.ensure_initial_admin()
+            main.ensure_initial_admin()
         ensure_admin.assert_called_once()
         self.assertEqual("StrongPassword-2026!", stored_password)
 
@@ -143,9 +333,9 @@ class BootstrapAdminSecurityTests(unittest.TestCase):
         }
         try:
             with mock.patch("builtins.print"), mock.patch.dict(os.environ, initial_environment, clear=True):
-                self.assertIsNotNone(main._ensure_initial_admin())
+                self.assertIsNotNone(main.ensure_initial_admin())
             with mock.patch("builtins.print"), mock.patch.dict(os.environ, changed_environment, clear=True):
-                self.assertIsNone(main._ensure_initial_admin())
+                self.assertIsNone(main.ensure_initial_admin())
             users = foundation.repo.list_users()
             self.assertEqual(1, len(users))
             self.assertEqual("unique-admin", users[0]["username"])

@@ -2274,7 +2274,8 @@ async def _background_sync_loop() -> None:
         await asyncio.sleep(interval)
 
 
-def _ensure_initial_admin() -> dict[str, Any] | None:
+def ensure_initial_admin() -> dict[str, Any] | None:
+    """Bootstrap an empty user store for either ASGI or hosted WSGI startup."""
     if repo.users_exist():
         return None
     credentials = resolve_bootstrap_admin_credentials(
@@ -2307,7 +2308,7 @@ async def on_startup() -> None:
         repo.ensure_login_security_tables()
     except Exception as exc:
         print(f"[Arti CRM] Security table migration failed: {_mask_sensitive(str(exc))}")
-    _ensure_initial_admin()
+    ensure_initial_admin()
     repo.cleanup_expired_sessions()
     repo.delete_mock_chats()
     repo.delete_ozon_support_chats()

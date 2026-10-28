@@ -47,8 +47,10 @@ schema must stop with a safe error; do not disable its validators to force start
    `a2wsgi==1.10.10` is included for the existing WSGI entry points; Uvicorn remains
    the ASGI server option. Keep deployment configuration/private data outside the
    release and use absolute writable storage paths.
-4. Start one maintenance instance. Both ASGI startup and hosted WSGI use the same
-   `init_db()`. The known legacy conversion uses one `BEGIN IMMEDIATE` transaction
+4. For an empty user table, privately configure the one-time `BOOTSTRAP_ADMIN_*`
+   settings described below before starting one maintenance instance. Both ASGI
+   startup and hosted WSGI use the same `init_db()` and `ensure_initial_admin()`.
+   The known legacy conversion uses one `BEGIN IMMEDIATE` transaction
    before normal initialization. Unsupported schema or conversion errors roll it
    back; do not ignore the error or run an old dispatcher against it.
 5. Validate migration markers, preserved audit counts and the modern schema in the
@@ -59,6 +61,41 @@ schema must stop with a safe error; do not disable its validators to force start
    The WSGI adapter does not promise ASGI lifespan/background-loop execution; hosting
    must continue to call the existing authenticated `/api/background/tick` job for
    deferred drain/sync. Do not add a second sender or share incompatible releases.
+
+## First administrator on an empty database
+
+An empty `users` table requires explicit `BOOTSTRAP_ADMIN_USERNAME` and
+`BOOTSTRAP_ADMIN_PASSWORD`. The deployment owner supplies these values privately
+through the hosting configuration; do not send a password to the agent, put it in
+source code, commit it, or paste it into diagnostics. There are no default login
+credentials and `CRM_AUTH_DISABLED` is not a bootstrap or recovery mechanism.
+
+Choose a unique username of 2–120 printable characters without whitespace; the
+former default `admin` is rejected. Use a strong, unique password of 12–500
+characters; former default passwords are rejected. Optional
+`BOOTSTRAP_ADMIN_DISPLAY_NAME` is limited to 160 characters and otherwise defaults
+to the username. Missing, partial, or invalid settings stop an empty-database
+startup with a fixed error naming the required settings, never their values.
+
+Both `server.py` and `passenger_wsgi.py` bootstrap after schema initialization and
+before constructing the WSGI adapter. They do not invoke the full ASGI startup,
+cleanup, repairs, or background loops. The shared repository operation takes
+`BEGIN IMMEDIATE`, checks the user table again inside that transaction, and inserts
+only the first administrator. Concurrent startup workers cannot create additional
+initial administrators, even with different configured usernames.
+
+Once any user exists (including an inactive or non-admin user), bootstrap is a
+no-op: settings are no longer required and cannot reset a password, rename,
+reactivate, promote, or replace an existing account. After the owner verifies
+password login, remove the one-time settings from the private deployment
+configuration and restart. Forgotten credentials or an inactive existing account
+require the normal owner-controlled account recovery process, not deleting users
+or changing bootstrap settings.
+
+This fix changes no schema and needs no data migration. If the application is
+rolled back, the created user and password hash remain usable; older WSGI code
+still cannot bootstrap a new empty user table. Do not delete existing users as a
+rollback step.
 
 ## Recovery
 
@@ -79,3 +116,9 @@ reference remapping, immutable audit, concurrent registration/conversion, HTTP
 replay/polling, task lifecycle and real a2wsgi entry-point requests. It does not
 claim a live hosting deployment, provider-send verification or support for every
 unknown database variant.
+
+`tests/test_auth_bootstrap_security.py` additionally exercises real WSGI password
+login on an empty temporary database, invalid/missing bootstrap settings,
+unchanged existing users and repeated startup, plus concurrent first-admin writes
+on separate SQLite connections. Dotenv and external networking are disabled;
+these tests never inspect or modify a deployed database or configuration.
