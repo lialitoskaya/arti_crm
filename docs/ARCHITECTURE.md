@@ -25,6 +25,21 @@ app/
 
 ## Главные зоны ответственности
 
+### Startup configuration boundary
+
+`app.runtime_config` owns dotenv priority and absolute SQLite path selection for
+ASGI, `server.py`, `passenger_wsgi.py` and direct DB imports. Hosting environment
+wins; relative paths resolve from the installation root. Configuration performs no
+DB I/O, migration or automatic relocation. Ambiguous old defaults fail closed.
+Each serving entry point initializes schema before invoking the single
+`app.main.ensure_initial_admin()` operation; its repository transaction serializes
+the first-user check/insert. WSGI does not invoke the full ASGI lifecycle.
+
+`app.startup_diagnostics` owns the shared safe WSGI failure response and private,
+value-free frame diagnostics. It neither writes public site-root logs nor returns
+exception details to clients. Deployment/configuration and rollback requirements
+are documented in `docs/HOSTING_UPGRADE.md`.
+
 ### Connectors
 
 Connectors должны только:

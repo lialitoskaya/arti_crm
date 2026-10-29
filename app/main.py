@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from app.runtime_config import load_runtime_config
+
+load_runtime_config()
+
 import asyncio
 import json
 import logging

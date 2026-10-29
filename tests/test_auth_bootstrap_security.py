@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 import json
 import os
 import tempfile
@@ -18,7 +18,7 @@ from starlette.responses import JSONResponse
 from starlette.datastructures import State
 
 import test_regression_foundation as foundation  # noqa: E402
-from app import auth_bootstrap  # noqa: E402
+from app import auth_bootstrap, startup_diagnostics  # noqa: E402
 
 
 main = foundation.main
@@ -120,6 +120,42 @@ class HostedBootstrapSecurityTests(unittest.TestCase):
                             environment["BOOTSTRAP_ADMIN_USERNAME"], "Replacement-password-2026!",
                         ))
 
+    def test_asgi_empty_database_bootstraps_once_and_invalid_settings_fail_closed(self) -> None:
+        async def idle_loop():
+            await asyncio.Event().wait()
+
+        async def exercise():
+            await main.on_startup()
+            await main.on_shutdown()
+
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.object(main.app, "state", State()))
+            for name in ("_background_sync_loop", "_wb_events_import_planner_loop",
+                         "_push_outbox_loop", "_message_send_outbox_loop"):
+                stack.enter_context(mock.patch.object(main, name, side_effect=idle_loop))
+            for name in ("cleanup_expired_sessions", "delete_mock_chats", "delete_ozon_support_chats",
+                         "normalize_legacy_outbound_timestamps", "repair_chat_last_message_cache",
+                         "repair_wb_lastmessage_directions"):
+                stack.enter_context(mock.patch.object(main.repo, name))
+            stack.enter_context(mock.patch.object(main, "repair_wb_local_messages_from_metadata"))
+            stack.enter_context(mock.patch.object(main, "_ensure_wb_events_auto_plan_from_env"))
+            with mock.patch.dict(os.environ, {
+                "BOOTSTRAP_ADMIN_USERNAME": "", "BOOTSTRAP_ADMIN_PASSWORD": "",
+            }):
+                with self.assertRaises(auth_bootstrap.AuthBootstrapError):
+                    asyncio.run(exercise())
+                self.assertEqual([], foundation.repo.list_users())
+            with mock.patch.dict(os.environ, {
+                "BOOTSTRAP_ADMIN_USERNAME": "asgi-owner",
+                "BOOTSTRAP_ADMIN_PASSWORD": "Synthetic-asgi-password-2026!",
+            }):
+                asyncio.run(exercise())
+                users = foundation.repo.list_users()
+                self.assertEqual(1, len(users))
+                self.assertEqual("admin", users[0]["role"])
+                asyncio.run(exercise())
+                self.assertEqual(users, foundation.repo.list_users())
+
     def test_wsgi_empty_database_refuses_missing_partial_and_invalid_credentials(self) -> None:
         configurations = (
             {},
@@ -132,22 +168,21 @@ class HostedBootstrapSecurityTests(unittest.TestCase):
             for environment in configurations:
                 with self.subTest(entrypoint=entrypoint, keys=tuple(environment)):
                     foundation._remove_test_runtime_files()
-                    if entrypoint == "server.py":
+                    with self.assertLogs("arti_crm.startup", level="ERROR") as logs:
                         with _hosting_application(entrypoint, environment) as application:
                             with httpx.Client(transport=httpx.WSGITransport(app=application),
                                               base_url="http://testserver") as client:
                                 response = client.get("/health")
                             self.assertEqual(500, response.status_code)
-                            error_message = response.text
-                    else:
-                        with self.assertRaises(auth_bootstrap.AuthBootstrapError) as error:
-                            with _hosting_application(entrypoint, environment):
-                                self.fail("Invalid bootstrap must stop Passenger startup")
-                        error_message = str(error.exception)
+                            self.assertEqual(startup_diagnostics.STARTUP_FAILURE_MESSAGE, response.text)
+                            self.assertNotIn("BOOTSTRAP_ADMIN", response.text)
+                            self.assertNotIn("Traceback", response.text)
+                    error_message = "\n".join(logs.output)
                     self.assertIn("BOOTSTRAP_ADMIN_USERNAME", error_message)
                     self.assertIn("BOOTSTRAP_ADMIN_PASSWORD", error_message)
                     for value in environment.values():
                         self.assertNotIn(value, error_message)
+                        self.assertNotIn(value, response.text)
                     self.assertEqual([], foundation.repo.list_users())
 
     def test_wsgi_existing_users_are_unchanged_without_or_with_changed_settings(self) -> None:

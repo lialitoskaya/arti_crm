@@ -1,5 +1,22 @@
 # Security boundaries
 
+## Startup configuration and diagnostics
+
+`app.runtime_config` loads the installation-root configuration before environment
+consumers. Hosting/process environment has priority (`override=False`); SQLite
+paths resolve from the project root, not the current working directory. Ambiguous
+historical defaults and a missing configured file beside a known existing database
+fail closed; startup never silently chooses or copies another database.
+
+Both WSGI entry points return a fixed, non-cacheable HTTP 500 on startup failure.
+The shared diagnostics logger emits only exception type, frame locations and fixed
+allowlisted hints, never raw exception messages, source lines, locals or configured
+values. Deployment must keep process logs private and block old site-root
+`startup_error.log` copies; this code no longer writes that public file and does not
+delete historical copies. `docs/HOSTING_UPGRADE.md` defines operator rollout and
+rollback precautions. Schema compatibility checks and message-send semantics are
+unchanged.
+
 ## First-administrator bootstrap
 
 ASGI startup and both hosted WSGI entry points use the same

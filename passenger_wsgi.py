@@ -1,16 +1,18 @@
-import os
-from pathlib import Path
+from app.startup_diagnostics import report_startup_failure, startup_failure_application
 
-from a2wsgi import ASGIMiddleware
-from dotenv import load_dotenv
+try:
+    from app.runtime_config import load_runtime_config
 
-BASE_DIR = Path(__file__).resolve().parent
-load_dotenv(BASE_DIR / ".env")
+    load_runtime_config()
 
-from app.db import init_db
-from app.main import app as fastapi_app
-from app.main import ensure_initial_admin
+    from a2wsgi import ASGIMiddleware
+    from app.db import init_db
+    from app.main import app as fastapi_app
+    from app.main import ensure_initial_admin
 
-init_db()
-ensure_initial_admin()
-application = ASGIMiddleware(fastapi_app)
+    init_db()
+    ensure_initial_admin()
+    application = ASGIMiddleware(fastapi_app)
+except Exception as error:
+    application = startup_failure_application
+    report_startup_failure(error)

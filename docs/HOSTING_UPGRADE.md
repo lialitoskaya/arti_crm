@@ -62,6 +62,40 @@ schema must stop with a safe error; do not disable its validators to force start
    must continue to call the existing authenticated `/api/background/tick` job for
    deferred drain/sync. Do not add a second sender or share incompatible releases.
 
+## Startup configuration and database selection
+
+All entry points load configuration through `app.runtime_config` before importing
+modules that read environment settings. Only the installation root's dotenv file
+is considered, with `override=False`: values provided by the hosting panel or
+process manager take precedence. The process working directory is not the source
+of database identity.
+
+`DATABASE_PATH` is made absolute relative to the project root. Without an explicit
+value, the single default is `<project root>/crm.sqlite3`. The loader does not open,
+create, move or copy a database. A fresh installation with no known existing DB may
+initialize this path normally. An existing root DB is reused. If the former
+`data/crm.sqlite3` exists and no path is specified, startup refuses to guess, even
+if the root DB also exists. Select the intended existing file explicitly. An
+explicit missing file is also rejected while either known default file exists,
+to prevent a typo from silently creating a second DB. Existing explicitly selected
+files are honored. Empty values, directories, SQLite memory/URI selectors and
+unresolvable paths are rejected with a value-free configuration error.
+
+Keep an absolute `DATABASE_PATH` configured for every deployment, including code
+rollback: older releases had different defaults. This change neither alters schema
+migrations nor relocates data. Do not copy a database over newer live data or deploy
+individual modules from this release over an unrelated historical release.
+
+WSGI startup failures return only a fixed, non-cacheable HTTP 500 message. Details
+go to the `arti_crm.startup` logger (normally the process manager's stderr): exception
+type and frame file/line/function, without raw exception arguments, source lines,
+locals or configuration values. Restrict these process logs to operators, outside
+the web document root. Fixed diagnostic hints identify bootstrap or database-path
+configuration errors without exposing their values. No new `startup_error.log` is
+written in the site root. Existing copies are not deleted automatically; the
+operator must restrict public access and archive/remove old diagnostic files
+according to the deployment's retention policy.
+
 ## First administrator on an empty database
 
 An empty `users` table requires explicit `BOOTSTRAP_ADMIN_USERNAME` and
@@ -122,3 +156,8 @@ login on an empty temporary database, invalid/missing bootstrap settings,
 unchanged existing users and repeated startup, plus concurrent first-admin writes
 on separate SQLite connections. Dotenv and external networking are disabled;
 these tests never inspect or modify a deployed database or configuration.
+
+`tests/test_runtime_startup.py` covers canonical path resolution independent of
+working directory, panel-over-dotenv priority, repeat loading, ambiguous and invalid
+paths, lazy DB initialization, ASGI configuration ordering, both WSGI entry points,
+safe HTTP failures and value-free diagnostics. Dotenv is simulated, never read.

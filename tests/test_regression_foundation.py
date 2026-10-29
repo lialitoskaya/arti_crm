@@ -70,6 +70,11 @@ import dotenv  # noqa: E402  (must be patched before app.db is imported)
 _DOTENV_PATCHER = mock.patch.object(dotenv, "load_dotenv", return_value=False)
 _DOTENV_PATCHER.start()
 
+from app import runtime_config  # noqa: E402  (pure definitions; no configuration read)
+
+_CONFIG_ROOT_PATCHER = mock.patch.object(runtime_config, "PROJECT_ROOT", _TEMP_ROOT)
+_CONFIG_ROOT_PATCHER.start()
+
 _NETWORK_ATTEMPTS: list[str] = []
 _REAL_SOCKET = socket.socket
 _TEST_EVENT_LOOP = asyncio.new_event_loop()
@@ -163,6 +168,7 @@ def tearDownModule() -> None:
     for patcher in reversed(_NETWORK_PATCHERS):
         patcher.stop()
     _DOTENV_PATCHER.stop()
+    _CONFIG_ROOT_PATCHER.stop()
     _ENV_PATCHER.stop()
     if pytest_current_test is not None:
         os.environ["PYTEST_CURRENT_TEST"] = pytest_current_test
