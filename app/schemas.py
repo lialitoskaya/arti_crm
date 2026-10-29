@@ -222,3 +222,9 @@ class ReplyTemplateUpdate(BaseModel):
     content: str | None = Field(default=None, min_length=1, max_length=8000)
     sort_order: int | None = None
     is_active: bool | None = None
+
+
+class OzonFboRunAnswer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    answer: Literal["yes", "no"]

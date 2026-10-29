@@ -43,6 +43,13 @@ _ADMIN_ONLY_ROUTES = (
     ("GET", "/api/supply-planning/sync"),
     ("GET", "/api/supply-planning/sync/"),
     ("GET", "/api/chat-uploads/example.jpg"),
+    ("GET", "/api/ozon-fbo/status"),
+    ("GET", "/api/ozon-fbo/runs"),
+    ("GET", "/api/ozon-fbo/runs/1"),
+    ("GET", "/api/ozon-fbo/runs/1/report.txt"),
+    ("POST", "/api/ozon-fbo/runs"),
+    ("PUT", "/api/ozon-fbo/settings"),
+    ("POST", "/api/ozon-fbo/runs/1/answer"),
     ("POST", "/api/chats/1/messages"),
     ("POST", "/api/reviews/1/reply"),
     ("POST", "/api/questions/1/answer"),
@@ -246,6 +253,7 @@ class RouteRbacTests(unittest.TestCase):
             and (
                 route.path.startswith("/api/debug/")
                 or route.path.startswith("/api/chat-uploads/")
+                or route.path.startswith("/api/ozon-fbo/")
                 or route.path.rstrip("/")
                 in {"/api/supply-planning/status", "/api/supply-planning/sync"}
             )

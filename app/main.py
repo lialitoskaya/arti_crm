@@ -53,6 +53,8 @@ from app.marketplace_sender import (
 )
 from app.notifications_router import create_notifications_router
 from app.reply_templates_router import create_reply_templates_router
+from app import ozon_fbo_repository
+from app.ozon_fbo_router import create_ozon_fbo_router
 from app.services.analytics import build_chat_analytics, build_chat_analytics_drilldown
 from app.services.knowledge_images import (
     article_knowledge_image_url,
@@ -5989,6 +5991,7 @@ def api_update_knowledge_article(article_id: int, payload: KnowledgeArticleUpdat
 
 
 app.include_router(create_reply_templates_router(repo, _current_user, _require_admin))
+app.include_router(create_ozon_fbo_router(ozon_fbo_repository, _require_admin))
 
 
 def _frontend_operator_sync_lock() -> asyncio.Lock:

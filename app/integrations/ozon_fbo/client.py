@@ -107,11 +107,17 @@ class RunLog:
     def dump(self, name, path, body, status, data) -> Optional[Path]:
         if self.dir is None:
             return None
-        self.dir.mkdir(parents=True, exist_ok=True)
         self.counter += 1
         f = self.dir / f"{self.counter:03d}_{safe_name(name)}.json"
-        f.write_text(json.dumps({"method": path, "request": body, "http": status, "response": data},
-                                ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        try:
+            self.dir.mkdir(parents=True, exist_ok=True)
+            f.write_text(json.dumps({"method": path, "request": body, "http": status, "response": data},
+                                    ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        except OSError as e:
+            # недоступный каталог логов не должен останавливать прогон: дальше работаем без дампов
+            self.base_dir = self.dir = None
+            self.say(f"      журнал запросов Ozon недоступен ({type(e).__name__}) — продолжаю без него")
+            return None
         return f
 
     def say(self, text="") -> None:

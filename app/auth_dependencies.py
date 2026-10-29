@@ -30,7 +30,7 @@ _ADMIN_GET_ROUTES = frozenset(
         "/api/supply-planning/sync",
     }
 )
-_ADMIN_GET_PREFIXES = ("/api/debug/", "/api/chat-uploads/")
+_ADMIN_GET_PREFIXES = ("/api/debug/", "/api/chat-uploads/", "/api/ozon-fbo/")
 _NOTIFICATION_READ_ROUTE_RE = re.compile(r"^/api/notifications/[^/]+/read$")
 _CHAT_READ_STATE_ROUTE_RE = re.compile(r"^/api/chats/[^/]+/read-state$")
 _CHAT_PIN_STATE_ROUTE_RE = re.compile(r"^/api/chats/[^/]+/pin-state$")
