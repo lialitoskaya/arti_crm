@@ -11,6 +11,11 @@ app/
   schemas.py              Pydantic DTO
   services/
     analytics.py          SQL analytics/dashboard calculations
+    ozon_fbo/             FBO supply pipeline: rules, drafts, dedupe, orders, cargo, runner
+  integrations/
+    ozon_fbo/client.py    Ozon Seller API client for FBO supplies (httpx, rate limits, dumps)
+  ozon_fbo_router.py      admin-only /api/ozon-fbo/* routes
+  ozon_fbo_repository.py  ozon_fbo_* tables (settings, runs, state, warehouse map)
   connectors/
     base.py               unified connector contracts
     ozon.py               Ozon Seller API connector
@@ -422,3 +427,48 @@ Before rolling application code back, operators must run the idempotent
 releases task ownership and restores only an active baseline (or the active default)
 without undoing manual or provider overrides. A plain code rollback while effects
 remain active is unsupported.
+
+## Ozon FBO supplies
+
+The «Поставки FBO» section ports the desktop `ozon_fbo` application into the CRM
+without changing its business rules. The boundaries follow `AGENTS.md`:
+
+```text
+POST /api/ozon-fbo/runs (admin, multipart plan)
+  -> app/ozon_fbo_router.py validates input and registers the run
+    -> app/ozon_fbo_repository.create_run(): BEGIN IMMEDIATE + partial unique index
+       idx_ozon_fbo_runs_single_active (at most one queued/running/awaiting run)
+      -> app/services/ozon_fbo/runner.start_run(): worker thread in the web process
+        -> services/ozon_fbo/pipeline.run_pipeline / run_live_batch / cargo.run_cargo_orders_pipeline
+          -> integrations/ozon_fbo/client.OzonFboApi (httpx, trust_env=False, 1 req/s,
+             2 drafts/min, header-free JSON dumps under OZON_FBO_LOG_DIR/run_<id>/)
+          -> ozon_fbo_repository (RepositoryStateStore): article memory, order cargo state,
+             learned warehouse→cluster map
+```
+
+Routes contain no SQL, retry or marketplace mapping. Business rules
+(`rules.py`, `drafts.py`, `dedupe.py`, `cargo.py`) are deterministic and take an
+API object and a state store; tests exercise them with fakes and an in-memory
+store. Mutable settings are a frozen `FboSettings` dataclass held in a
+`ContextVar` for the duration of a run, not module-global state.
+
+Run lifecycle is persisted in `ozon_fbo_runs`: `queued -> running -> awaiting_answer
+-> running -> finished | failed | stopped | interrupted`. The worker appends journal
+lines to `ozon_fbo_run_log` (monotonic `seq` under `BEGIN IMMEDIATE`), rewrites
+`ozon_fbo_run_rows` after each article, stores a pending question
+(`question_kind`, `question_text`) and polls the same row for `answer` and
+`stop_requested`; a heartbeat thread refreshes `heartbeat_at` every 10 s. Because
+every interaction goes through SQLite, the browser can poll, answer and stop from any
+hosting process. A run whose heartbeat is older than 180 s is marked `interrupted` by
+`GET /api/ozon-fbo/status` or the explicit `release` route (forward recovery after a
+process restart); orders already created were saved per article, so nothing is lost
+or replayed. Draft TTL (30 min) is handled by the pipeline itself through
+`refresh_draft`; an unanswered question times out as «no» after two hours.
+
+Schema: `ozon_fbo_settings`, `ozon_fbo_runs`, `ozon_fbo_run_log`, `ozon_fbo_run_rows`,
+`ozon_fbo_article_state`, `ozon_fbo_order_state`, `ozon_fbo_warehouse_map`,
+`ozon_fbo_learned_clusters`, all created with `CREATE TABLE IF NOT EXISTS` in
+`init_db()`. Uploaded plans and result workbooks are stored as BLOBs on the run row.
+Rolling back to older application code leaves the tables unused; no destructive
+migration exists. The frontend (`#ozonFboView`, route `#fbo`) keeps only transport and
+view state: the server decides modes, safeguards, duplicates and results.

@@ -305,3 +305,58 @@ unread metadata and the global CRM workflow status are not personal read state.
    message bubble. A durable send-operation status takes precedence over the
    canonical marketplace sent/read receipt, so an unresolved operation is never
    presented as sent by a generic receipt fallback.
+
+## Ozon FBO supply orders
+
+1. The section is admin-only. Ozon keys come from the server environment
+   (`OZON_FBO_CLIENT_ID`/`OZON_FBO_API_KEY`, else `OZON_CLIENT_ID`/`OZON_API_KEY`) and are
+   never entered, stored or displayed in the CRM.
+2. A trial run creates only calculation drafts and writes «Факт»; it never creates a
+   supply order. Live runs create orders only after an explicit user answer to the plan
+   question (or the explicit «без подтверждения» flag), and a browser confirmation
+   precedes every live start.
+3. Quantity per cluster: plan P when the cluster accepts P; otherwise the accepted
+   amount rounded down to a multiple of `step` (5) when it is at least `min_qty` (10);
+   otherwise the cluster is excluded with fact 0. A plan below `min_qty` accepted in
+   full is shipped as is.
+4. One combined draft per article is tried first; only rejected or trimmed clusters are
+   searched individually; the final combined draft is retried once, then rejected
+   clusters are excluded and trimmed ones re-searched, at most `FINAL_REBUILD_LIMIT`
+   (4) final drafts. A composition mismatch is a manual check, never an automatic order.
+5. The slot is the latest available drop-off timeslot not earlier than today plus
+   `min_slot_offset_days` (7) Moscow days, searched in 28-day windows
+   (`slot_max_windows`, 6). Without such a slot the article goes to manual check.
+6. Safeguards before every order: fact ≤ plan; fact equals plan or is a multiple of
+   `step`; fact is 0 or ≥ `min_qty` unless the whole small plan was accepted; the final
+   draft quantity equals the fact; the slot is not earlier than the minimum date; no
+   order was already created for the article; no identical supply exists at Ozon today
+   unless the user explicitly allowed duplicates. Any violation blocks the order.
+7. Duplicate protection uses Ozon's own orders created today (Moscow date), including
+   orders created in the seller cabinet: the key is (article, warehouse) when the
+   supply has a storage warehouse, otherwise (article, cluster). A CRM supply «to a
+   cluster» is blocked by any today's order into that cluster, because Ozon picks the
+   warehouse. Missing warehouse→cluster links are learned through free direct-supply
+   drafts and persisted in `ozon_fbo_warehouse_map`.
+8. «Всё равно сделать» is one explicit decision per run that covers both Ozon
+   duplicates and CRM memory of orders created for the same list; it is never implied
+   by `auto_confirm`. Allowed rows are marked «дубль по решению пользователя» in the
+   plan, results and table notes.
+9. CRM memory (`ozon_fbo_article_state`) skips an article whose order for the same
+   list is still active at Ozon; a cancelled order is forgotten and the article is
+   processed again. The «Повторить» flag disables this memory but never the daily
+   duplicate rule.
+10. Cargo per supply is mono-SKU, boxes of `default_cargo_capacity` (50) or the
+    per-article capacity, remainder in the last box. Before sending, the order and
+    bundle are re-read; every supply must be `DATA_FILLING`, box sums must equal the
+    bundle, no box may be empty or exceed capacity, no foreign article may appear.
+    Cancelled or already filled supplies inside an order are skipped, not failed.
+11. Ozon drafts live 30 minutes; a draft older than 25 minutes is rebuilt from the
+    selected quantities before the order, and a draft rejected at order creation is
+    rebuilt and retried once. A status without an order id is a manual check, never a
+    retry (the order may exist).
+12. At most one run is active at a time (database unique index). A pending question
+    unanswered for two hours is treated as «no»; stopping a run answers «no» and ends
+    after the current article. Runs without heartbeat for 180 s are interrupted; created
+    orders stay recorded.
+13. Settings are validated as a whole: any invalid value rejects the save and leaves the
+    stored settings unchanged.

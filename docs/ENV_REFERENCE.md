@@ -48,6 +48,21 @@ OZON_MARK_SYSTEM_HISTORY_CHATS=0
 
 Смысл: по умолчанию CRM не удаляет и не выбрасывает Ozon-чаты автоматически. Это защищает историю от ошибочной фильтрации.
 
+## Ozon FBO supplies
+
+```env
+OZON_CLIENT_ID=
+OZON_API_KEY=
+OZON_FBO_CLIENT_ID=
+OZON_FBO_API_KEY=
+OZON_FBO_LOG_DIR=logs/ozon_fbo
+```
+
+Раздел «Поставки FBO» использует общие ключи Ozon Seller API; `OZON_FBO_CLIENT_ID` и
+`OZON_FBO_API_KEY` задаются только когда для поставок нужен отдельный ключ (у ключа должны быть
+права на поставки FBO и на товары). `OZON_FBO_LOG_DIR` — каталог сырых запросов и ответов Ozon
+по каждому прогону (без заголовков); относительный путь считается от корня установки.
+
 ## Ozon reviews/questions
 
 ```env

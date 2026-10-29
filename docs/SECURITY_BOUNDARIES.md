@@ -188,3 +188,29 @@ migration, and generalized orphan cleanup are intentionally outside this change.
 
 Regression coverage is in `tests/test_knowledge_image_security.py` and uses only a
 temporary SQLite database and synthetic files under the test temporary directory.
+
+## Ozon FBO supplies
+
+Every `/api/ozon-fbo/*` route, including GET, is admin-only through the
+`_ADMIN_GET_PREFIXES` entry and the general unsafe-method rule; the inventory test in
+`tests/test_route_rbac.py` enforces it. The navigation entry and mobile item carry
+`admin-only hidden`, but the backend remains the source of truth.
+
+Ozon credentials are read only from the process environment inside
+`app/integrations/ozon_fbo/client.py`. They are never accepted from the browser,
+written to SQLite, returned by any route or included in journal lines, error texts
+or raw request dumps; dumps contain method path, request body, HTTP status and
+response only. `GET /api/ozon-fbo/status` exposes a boolean `keys_configured`, nothing
+else about the keys. The client uses `trust_env=False`, so system proxies are ignored.
+
+Uploaded plans must be `.xlsx`, are capped at 20 MiB, are parsed with `openpyxl`
+before a run is registered and are stored as a BLOB on the run row; the result
+workbook is served only to administrators with an attachment header. Raw Ozon dumps
+are written under `OZON_FBO_LOG_DIR` (default `logs/ozon_fbo/`, git-ignored) and
+downloaded through an admin-only route as a zip; a non-writable directory disables
+dumps without stopping the run.
+
+Live order and cargo creation have exactly one code path each (`orders.create_order`
+and `cargo.send_cargoes`), both guarded by the safeguards above. Tests use fake API
+objects and an in-memory or temporary SQLite store under the regression foundation,
+which blocks non-loopback sockets; no test contacts the Ozon API.
