@@ -56,9 +56,17 @@ _SAFE_ENV = {
     "DATABASE_URL": "",
 }
 
-# Preserve only non-secret Windows runtime paths needed by the already-running
-# interpreter. Application configuration is otherwise replaced, not inherited.
-for _name in ("SYSTEMROOT", "WINDIR", "TEMP", "TMP"):
+# Snapshot executable resolution before isolation so the foundation can prove
+# that subprocess-based tests still find their tools afterwards.
+_PATH_BEFORE_ISOLATION = os.environ.get("PATH")
+_NODE_BEFORE_ISOLATION = shutil.which("node")
+
+# Preserve only non-secret runtime paths: PATH is process-wide and required by
+# tests that spawn tools such as `node`; PATHEXT keeps shutil.which() consistent
+# with the host on interpreters without a built-in default; the remaining
+# Windows paths are needed by the already-running interpreter. Application
+# configuration is otherwise replaced, not inherited.
+for _name in ("PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "TEMP", "TMP"):
     if _name in os.environ:
         _SAFE_ENV[_name] = os.environ[_name]
 
@@ -194,6 +202,12 @@ class RegressionFoundationTests(unittest.TestCase):
         self.assertFalse(_DATABASE_CREATED_DURING_IMPORT)
         self.assertFalse(_ATTACHMENTS_CREATED_DURING_IMPORT)
         self.assertFalse(_DATABASE_PATH.exists())
+
+    def test_isolated_environment_keeps_executable_search_path(self) -> None:
+        # Regression: node-based UI tests passed alone but failed in a full run
+        # because the isolated environment dropped PATH for the whole process.
+        self.assertEqual(_PATH_BEFORE_ISOLATION, os.environ.get("PATH"))
+        self.assertEqual(_NODE_BEFORE_ISOLATION, shutil.which("node"))
 
     def test_asyncio_run_can_create_loopback_socketpair_under_network_guard(self) -> None:
         self.assertEqual("ok", asyncio.run(asyncio.sleep(0, result="ok")))

@@ -40,7 +40,11 @@ python -m unittest discover -s tests -p "test_*.py" -v
 
 Безопасный bootstrap выполняется до первого `import app.*`:
 
-- environment процесса заменяется минимальным test-only набором;
+- environment процесса заменяется минимальным test-only набором; из исходного
+  окружения сохраняются только `PATH`, `PATHEXT` и системные переменные Windows
+  (`SYSTEMROOT`, `WINDIR`, `TEMP`, `TMP`). `PATH` общий для всего процесса, без
+  него тесты, запускающие `node` через `subprocess`, проходят поодиночке, но
+  падают в полном прогоне после импорта foundation другими модулями;
 - `dotenv.load_dotenv` подменяется no-op, поэтому `.env` не читается;
 - `DATABASE_PATH`, attachments и state/cache paths направляются во временный
   каталог;
@@ -64,7 +68,9 @@ python -m unittest discover -s tests -p "test_*.py" -v
    `/static/manifest.webmanifest`;
 3. прямую viewer/admin границу `_require_admin`;
 4. последовательную идемпотентность `repository.add_message` для одинакового
-   external message ID: одна строка, тот же ID и обновлённый preview.
+   external message ID: одна строка, тот же ID и обновлённый preview;
+5. сохранение исходного `PATH` в изолированном environment: `shutil.which("node")`
+   после bootstrap даёт тот же результат, что и до него.
 
 ## Осознанные ограничения
 
@@ -76,7 +82,14 @@ Foundation пока не проверяет:
   содержит DB unique constraint для этого инварианта;
 - contract behavior Ozon, Wildberries и Yandex;
 - реальные HTTP, marketplace credentials и production data;
-- binary fixtures.
+- binary fixtures;
+- произвольный порядок модулей: `tearDownModule` foundation после собственных
+  тестов снимает все process-wide патчи (environment, dotenv no-op, network и
+  SQLite guards) и удаляет временный каталог. Полный алфавитный прогон проходит
+  лишь потому, что промежуточные модули заново создают каталог через
+  `init_db()`; запуск зависимого модуля сразу после foundation (например,
+  `pytest tests/test_regression_foundation.py tests/test_runtime_startup.py`)
+  падает. Это известный долг изоляции, а не гарантия порядка.
 
 Если новый тест требует изменения production-кода, вынесите такое изменение в
 отдельную задачу и отдельный commit.
