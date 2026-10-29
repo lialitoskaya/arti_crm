@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <script src="/static/theme-init.js?v=v79-strict-csp-secure-cookie-20260708"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=v95-19-notifications-today-20260927" />
+  <link rel="stylesheet" href="/static/styles.css?v=v96-ozon-fbo-supplies-20261029" />
 
 </head>
 <body class="auth-pending">
@@ -61,6 +61,7 @@
         <button id="navTasks" class="nav-btn" type="button" aria-label="Задачи"><span class="btn-icon nav-image-icon" aria-hidden="true"><img src="/static/icons/nav-tasks.svg" alt="" loading="eager" decoding="async" /></span><span class="btn-label">Задачи</span></button>
         <button id="navKnowledge" class="nav-btn" type="button" aria-label="База знаний"><span class="btn-icon nav-image-icon" aria-hidden="true"><img src="/static/icons/nav-knowledge.svg" alt="" loading="eager" decoding="async" /></span><span class="btn-label">База знаний</span></button>
         <button id="navSupplyPlanning" class="nav-btn" type="button" aria-label="Планирование поставок"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7h10v10H4z"/><path d="M14 10h3.5l2.5 3v4h-6z"/><circle cx="8" cy="18" r="1.5"/><circle cx="18" cy="18" r="1.5"/><path d="M6.5 5h5"/></svg></span><span class="btn-label">Поставки (beta)</span></button>
+        <button id="navOzonFbo" class="nav-btn admin-only hidden" type="button" aria-label="Поставки FBO Ozon"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 9h16v10H4z"/><path d="M5.5 9l1.3-4h10.4l1.3 4"/><path d="M9 13h6"/></svg></span><span class="btn-label">Поставки FBO</span></button>
         <button id="mobileMoreBtn" class="nav-btn mobile-more-btn" type="button" aria-label="Ещё"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="5" cy="5" r="1.5"/><circle cx="12" cy="5" r="1.5"/><circle cx="19" cy="5" r="1.5"/><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/><circle cx="5" cy="19" r="1.5"/><circle cx="12" cy="19" r="1.5"/><circle cx="19" cy="19" r="1.5"/></svg></span><span class="btn-label">Ещё</span><span id="mobileMoreBadge" class="notification-badge hidden">0</span></button>
         <button id="mobileLogoutBtn" class="nav-btn mobile-logout-btn legacy-logout-btn" type="button" aria-label="Выйти"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg></span><span class="btn-label">Выйти</span></button>
       </nav>
@@ -110,6 +111,7 @@
           <button class="mobile-more-item admin-only hidden" type="button" data-mobile-view="techSettings"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-4"/><path d="M12 10V3"/><path d="M20 21v-9"/><path d="M20 8V3"/><path d="M2 10h4"/><path d="M10 17h4"/><path d="M18 8h4"/></svg></span><span class="mobile-more-copy"><strong>Настройки</strong><small>Статусы, системные параметры</small></span><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></button>
           <button class="mobile-more-item" type="button" data-mobile-view="profile"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M5 20a7 7 0 0 1 14 0"/></svg></span><span class="mobile-more-copy"><strong>Профиль</strong><small>Личные данные и аккаунт</small></span><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></button>
           <button class="mobile-more-item" type="button" data-mobile-view="supplyPlanning"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7h10v10H4z"/><path d="M14 10h3.5l2.5 3v4h-6z"/><circle cx="8" cy="18" r="1.5"/><circle cx="18" cy="18" r="1.5"/><path d="M6.5 5h5"/></svg></span><span class="mobile-more-copy"><strong>Поставки (beta)</strong><small>Расчёт потребности по складам</small></span><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></button>
+          <button class="mobile-more-item admin-only hidden" type="button" data-mobile-view="ozonFbo"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 9h16v10H4z"/><path d="M5.5 9l1.3-4h10.4l1.3 4"/><path d="M9 13h6"/></svg></span><span class="mobile-more-copy"><strong>Поставки FBO</strong><small>Заявки на поставку в Ozon по плану</small></span><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></button>
           <button class="mobile-more-item" type="button" data-mobile-action="theme"><span class="btn-icon theme-toggle-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path class="theme-sun" d="M12 4V2m0 20v-2m8-8h2M2 12h2m13.7-5.7 1.4-1.4M4.9 19.1l1.4-1.4m0-11.4L4.9 4.9m14.2 14.2-1.4-1.4"/><circle class="theme-core" cx="12" cy="12" r="4"/></svg></span><span class="mobile-more-copy"><strong data-theme-label>Тема</strong><small data-theme-description>Светлая / тёмная CRM</small></span></button>
           <button class="mobile-more-item mobile-more-item-danger" type="button" data-mobile-action="logout"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg></span><span class="mobile-more-copy"><strong>Выйти из аккаунта</strong><small>Завершить текущую сессию</small></span></button>
         </div>
@@ -525,6 +527,185 @@
           </div>
           <div id="supplyPlanningRows" class="supply-planning-rows" aria-live="polite"></div>
         </section>
+      </main>
+
+      <main id="ozonFboView" class="tasks-page ozon-fbo-page view hidden" aria-hidden="true">
+        <section class="tasks-toolbar panel-card ozon-fbo-hero">
+          <div>
+            <h2>Поставки FBO Ozon</h2>
+            <p id="ozonFboKeysStatus">Проверяю ключи Ozon…</p>
+          </div>
+          <div class="ozon-fbo-hero-actions">
+            <button id="ozonFboCheckBtn" class="secondary" type="button">Проверить связь с Ozon</button>
+            <a id="ozonFboLkLink" class="button-like secondary" href="https://seller.ozon.ru/app/supply/orders?filter=SupplyPreparation" target="_blank" rel="noopener noreferrer">Заявки в кабинете Ozon</a>
+          </div>
+        </section>
+
+        <div class="ozon-fbo-grid">
+          <section class="settings-card panel-card ozon-fbo-form-card" aria-labelledby="ozonFboFormTitle">
+            <div class="settings-card-head">
+              <div>
+                <h3 id="ozonFboFormTitle">Запуск</h3>
+                <p class="muted">Пробный прогон ничего не создаёт. Заявки появляются только в боевых режимах и только после подтверждения плана.</p>
+              </div>
+            </div>
+            <form id="ozonFboRunForm" class="settings-form ozon-fbo-form" novalidate>
+              <fieldset class="ozon-fbo-fieldset">
+                <legend>Режим</legend>
+                <label class="ozon-fbo-choice"><input type="radio" name="ozonFboMode" value="trial" checked /><span>Пробный прогон — заявки не создаются, только расчёт «Факт» и слотов</span></label>
+                <label class="ozon-fbo-choice"><input type="radio" name="ozonFboMode" value="live" /><span>Боевой — создать заявки и сразу передать грузоместа</span></label>
+                <label class="ozon-fbo-choice"><input type="radio" name="ozonFboMode" value="live_nocargo" /><span>Боевой — создать заявки без грузомест</span></label>
+                <label class="ozon-fbo-choice"><input type="radio" name="ozonFboMode" value="cargo" /><span>Дозаполнить грузоместа по уже созданным заявкам</span></label>
+              </fieldset>
+
+              <div id="ozonFboPlanSource" class="ozon-fbo-source">
+                <fieldset class="ozon-fbo-fieldset ozon-fbo-fieldset-row">
+                  <legend>Откуда брать план</legend>
+                  <label class="ozon-fbo-choice"><input type="radio" name="ozonFboSource" value="file" checked /><span>Таблица .xlsx</span></label>
+                  <label class="ozon-fbo-choice"><input type="radio" name="ozonFboSource" value="manual" /><span>Ручной ввод</span></label>
+                </fieldset>
+                <div id="ozonFboFileSource" class="ozon-fbo-source">
+                  <label>Файл .xlsx — лист, скачанный из Google Таблиц
+                    <input id="ozonFboFile" type="file" accept=".xlsx" />
+                  </label>
+                  <label>Лист
+                    <select id="ozonFboSheet" disabled><option value="">Сначала выберите файл</option></select>
+                  </label>
+                </div>
+                <div id="ozonFboManualSource" class="ozon-fbo-source hidden">
+                  <label>Строки «артикул; кластер; количество» — по одной на кластер
+                    <textarea id="ozonFboManualText" rows="7" spellcheck="false" placeholder="AT-L-A3; Пермь; 10&#10;AT-P-P3; все; 20"></textarea>
+                  </label>
+                  <p class="muted">Вместо артикула можно указать SKU Ozon, вместо кластера — «все». Можно вставить три столбца прямо из таблицы.</p>
+                  <label>Название списка, чтобы помнить созданные заявки
+                    <input id="ozonFboListName" value="ручной ввод" maxlength="120" />
+                  </label>
+                </div>
+                <label>Артикулы через запятую, пусто — все видимые
+                  <input id="ozonFboArticles" autocomplete="off" placeholder="AT-L-A3, AT-P-P3" />
+                </label>
+              </div>
+
+              <div id="ozonFboOrdersSource" class="ozon-fbo-source hidden">
+                <p class="muted">Заявки Ozon, которые ждут грузомест, в том числе созданные в личном кабинете. Загрузите список, оставьте выделенными нужные заявки и нажмите «Запустить».</p>
+                <div class="ozon-fbo-orders-toolbar">
+                  <button id="ozonFboLoadOrdersBtn" class="secondary" type="button">Загрузить заявки из Ozon</button>
+                  <button id="ozonFboSelectAllOrdersBtn" class="secondary" type="button" disabled>Выделить все</button>
+                  <span id="ozonFboOrdersStatus" class="muted">Заявки ещё не загружены.</span>
+                </div>
+                <div class="analytics-table ozon-fbo-orders">
+                  <table>
+                    <thead><tr><th class="ozon-fbo-col-check" aria-label="Выбор"></th><th>Заявка</th><th>Слот и срок</th><th>Склад и товары, коробы по вместимости</th></tr></thead>
+                    <tbody id="ozonFboOrdersRows"><tr><td colspan="4" class="muted">Список пуст.</td></tr></tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="ozon-fbo-flags">
+                <label class="ozon-fbo-choice"><input id="ozonFboForce" type="checkbox" /><span>Повторить по артикулам, у которых заявка уже есть</span></label>
+                <label class="ozon-fbo-choice"><input id="ozonFboConfirmEach" type="checkbox" /><span>Подтверждать каждый артикул отдельно, иначе один общий план после расчёта</span></label>
+                <label class="ozon-fbo-choice"><input id="ozonFboAutoConfirm" type="checkbox" /><span>Не спрашивать подтверждение вообще</span></label>
+              </div>
+
+              <div class="ozon-fbo-form-actions">
+                <p id="ozonFboFormStatus" class="ozon-fbo-status" role="status" aria-live="polite"></p>
+                <button id="ozonFboStartBtn" type="submit">Запустить</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="panel-card ozon-fbo-run-card" aria-labelledby="ozonFboRunTitle">
+            <div class="analytics-panel-head ozon-fbo-run-head">
+              <div>
+                <h3 id="ozonFboRunTitle">Прогон</h3>
+                <p id="ozonFboRunMeta" class="muted">Прогонов ещё не было.</p>
+              </div>
+              <div class="ozon-fbo-run-actions">
+                <button id="ozonFboStopBtn" class="secondary" type="button" disabled>Остановить</button>
+                <button id="ozonFboReleaseBtn" class="secondary hidden" type="button">Снять зависший прогон</button>
+              </div>
+            </div>
+            <div id="ozonFboQuestionBar" class="ozon-fbo-question-bar hidden" role="status">
+              <span id="ozonFboQuestionBarText">Прогон ждёт вашего ответа.</span>
+              <button id="ozonFboOpenQuestionBtn" type="button">Открыть вопрос</button>
+            </div>
+            <div id="ozonFboRunFiles" class="ozon-fbo-run-files hidden">
+              <a id="ozonFboResultLink" class="link-btn hidden" href="#">Скачать результат .xlsx</a>
+              <a id="ozonFboReportLink" class="link-btn" href="#">Отчёт прогона</a>
+              <a id="ozonFboApiLogLink" class="link-btn" href="#">Логи запросов Ozon</a>
+            </div>
+            <pre id="ozonFboLog" class="ozon-fbo-log" tabindex="0" aria-label="Журнал прогона"></pre>
+            <div class="analytics-table ozon-fbo-results">
+              <table>
+                <thead><tr><th>Артикул</th><th>Кластер</th><th class="ozon-fbo-num">План</th><th class="ozon-fbo-num">Факт</th><th>Статус</th><th>Примечание</th></tr></thead>
+                <tbody id="ozonFboRows"><tr><td colspan="6" class="muted">Результатов пока нет.</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <div class="settings-grid ozon-fbo-bottom">
+          <section class="settings-card panel-card" aria-labelledby="ozonFboHistoryTitle">
+            <div class="settings-card-head">
+              <div>
+                <h3 id="ozonFboHistoryTitle">История прогонов</h3>
+                <p class="muted">Последние прогоны. Журнал, результаты и файлы открываются в панели прогона.</p>
+              </div>
+              <button id="ozonFboHistoryRefreshBtn" class="secondary small" type="button">Обновить</button>
+            </div>
+            <div class="analytics-table ozon-fbo-history">
+              <table>
+                <thead><tr><th>Дата</th><th>Режим</th><th>Список</th><th>Статус</th><th>Итог</th><th aria-label="Действия"></th></tr></thead>
+                <tbody id="ozonFboHistoryRows"><tr><td colspan="6" class="muted">Прогонов ещё не было.</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="settings-card panel-card" aria-labelledby="ozonFboSettingsTitle">
+            <div class="settings-card-head">
+              <div>
+                <h3 id="ozonFboSettingsTitle">Настройки</h3>
+                <p class="muted">Параметры расчёта и грузомест. Ключи Ozon здесь не хранятся: они берутся из переменных среды сервера.</p>
+              </div>
+            </div>
+            <form id="ozonFboSettingsForm" class="settings-form ozon-fbo-settings" novalidate>
+              <div class="ozon-fbo-settings-grid">
+                <label>Вместимость грузоместа по умолчанию, шт.<input id="ozonFboSetting_default_cargo_capacity" type="number" min="1" step="1" /></label>
+                <label>Тип грузоместа для Ozon, BOX — короб<input id="ozonFboSetting_cargo_type" /></label>
+                <label>Точка сдачи, название как у Ozon<input id="ozonFboSetting_drop_off_name" /></label>
+                <label>Слот не раньше чем через N дней<input id="ozonFboSetting_min_slot_offset_days" type="number" min="0" step="1" /></label>
+                <label>Сколько окон по 28 дней смотреть вперёд<input id="ozonFboSetting_slot_max_windows" type="number" min="1" step="1" /></label>
+                <label>Минимум штук в кластер<input id="ozonFboSetting_min_qty" type="number" min="1" step="1" /></label>
+                <label>Кратность количества, если не равно плану<input id="ozonFboSetting_step" type="number" min="1" step="1" /></label>
+                <label>Пауза перед повтором при «кластер недоступен», сек<input id="ozonFboSetting_unavailable_retry_sec" type="number" min="1" step="1" /></label>
+              </div>
+              <label>Вместимость для отдельных артикулов: артикул = штук, по одному на строку<textarea id="ozonFboSetting_cargo_capacity" rows="4" spellcheck="false" placeholder="AT-L-AM-S = 5"></textarea></label>
+              <label>Какие кластеры считать «все»: названия как у Ozon, по одному на строку; пусто — все кластеры России<textarea id="ozonFboSetting_all_clusters" rows="4" spellcheck="false"></textarea></label>
+              <div class="ozon-fbo-form-actions">
+                <p id="ozonFboSettingsStatus" class="ozon-fbo-status" role="status" aria-live="polite"></p>
+                <button id="ozonFboSaveSettingsBtn" class="secondary" type="submit">Сохранить настройки</button>
+              </div>
+            </form>
+          </section>
+        </div>
+
+        <div id="ozonFboDecisionModal" class="user-create-modal hidden" aria-hidden="true">
+          <div class="user-create-modal-backdrop" data-ozon-fbo-decision-close></div>
+          <div class="user-create-modal-dialog ozon-fbo-decision-dialog" role="dialog" aria-modal="true" aria-labelledby="ozonFboDecisionTitle">
+            <div class="user-create-modal-topbar">
+              <div>
+                <strong id="ozonFboDecisionTitle">Подтверждение</strong>
+                <p id="ozonFboDecisionHint" class="muted">Данные уйдут в Ozon только после подтверждения.</p>
+              </div>
+              <button id="ozonFboDecisionCloseBtn" class="user-create-modal-close" type="button" aria-label="Закрыть">×</button>
+            </div>
+            <pre id="ozonFboDecisionText" class="ozon-fbo-log ozon-fbo-decision-text" tabindex="0"></pre>
+            <div class="user-create-form-actions">
+              <button id="ozonFboDecisionNoBtn" class="user-light-btn" type="button">Нет</button>
+              <button id="ozonFboDecisionYesBtn" class="user-light-btn user-light-btn-primary" type="button">Да</button>
+            </div>
+          </div>
+        </div>
       </main>
 
       <main id="reviewsView" class="reviews-page view hidden">
@@ -1025,6 +1206,6 @@
 
   <div id="notificationToasts" class="notification-toast-stack" aria-live="polite"></div>
 
-  <script src="/static/app.js?v=v95-19-notifications-today-20260927"></script>
+  <script src="/static/app.js?v=v96-ozon-fbo-supplies-20261029"></script>
 </body>
 </html>

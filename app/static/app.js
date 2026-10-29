@@ -23,11 +23,12 @@ let chatImageLazyObserver = null;
 let chatImageLazyObserverRoot = null;
 let activeView = 'chats';
 const ROUTE_STORAGE_KEY = 'artiCrm.activeView';
-const VALID_VIEWS = ['chats', 'analytics', 'supplyPlanning', 'tasks', 'reviews', 'questions', 'knowledge', 'users', 'techSettings', 'profile'];
+const VALID_VIEWS = ['chats', 'analytics', 'supplyPlanning', 'ozonFbo', 'tasks', 'reviews', 'questions', 'knowledge', 'users', 'techSettings', 'profile'];
 const VIEW_ROUTES = {
   chats: 'chats',
   analytics: 'analytics',
   supplyPlanning: 'supply',
+  ozonFbo: 'fbo',
   tasks: 'tasks',
   reviews: 'reviews',
   questions: 'questions',
@@ -178,6 +179,10 @@ const ROUTE_VIEWS = {
   supplies: 'supplyPlanning',
   planning: 'supplyPlanning',
   supplyplanning: 'supplyPlanning',
+  fbo: 'ozonFbo',
+  ozonfbo: 'ozonFbo',
+  'ozon-fbo': 'ozonFbo',
+  ozonFbo: 'ozonFbo',
   tasks: 'tasks',
   task: 'tasks',
   reviews: 'reviews',
@@ -7108,7 +7113,7 @@ function bindSupplyPlanningControls() {
 
 
 function isMobileSecondaryView(view) {
-  return ['supplyPlanning', 'questions', 'knowledge', 'users', 'techSettings', 'profile'].includes(String(view || ''));
+  return ['supplyPlanning', 'ozonFbo', 'questions', 'knowledge', 'users', 'techSettings', 'profile'].includes(String(view || ''));
 }
 
 function setMobileMoreActiveState(view = activeView) {
@@ -7294,11 +7299,16 @@ function showView(view, options = {}) {
   if (normalizedView !== 'knowledge') {
     closeKnowledgeModal();
   }
+  if (normalizedView !== 'ozonFbo') {
+    stopOzonFboPolling();
+    closeOzonFboDecision();
+  }
 
   const viewMap = {
     chats: $('chatsView'),
     analytics: $('analyticsView'),
     supplyPlanning: $('supplyPlanningView'),
+    ozonFbo: $('ozonFboView'),
     tasks: $('tasksView'),
     reviews: $('reviewsView'),
     questions: $('questionsView'),
@@ -7319,6 +7329,7 @@ function showView(view, options = {}) {
     chats: $('navChats'),
     analytics: $('navAnalytics'),
     supplyPlanning: $('navSupplyPlanning'),
+    ozonFbo: $('navOzonFbo'),
     tasks: $('navTasks'),
     reviews: $('navReviews'),
     questions: $('navQuestions'),
@@ -7341,6 +7352,7 @@ function showView(view, options = {}) {
 
   if (normalizedView === 'analytics') loadAnalytics().catch(err => notify('Ошибка загрузки аналитики', String(err.message || err)));
   if (normalizedView === 'supplyPlanning') loadSupplyPlanning();
+  if (normalizedView === 'ozonFbo') loadOzonFbo();
   if (normalizedView === 'tasks') {
     loadTaskTypes({ silent: true }).finally(() => loadAllTasks()).catch(err => notify('Ошибка загрузки задач', String(err.message || err)));
   }
@@ -8357,9 +8369,11 @@ function init() {
     standaloneTaskForm.addEventListener('submit', submitStandaloneTaskCreate);
   }
   bindSupplyPlanningControls();
+  bindOzonFboControls();
   bind('navChats', 'click', () => showView('chats'));
   bind('navAnalytics', 'click', () => showView('analytics'));
   bind('navSupplyPlanning', 'click', () => showView('supplyPlanning'));
+  bind('navOzonFbo', 'click', () => showView('ozonFbo'));
   bind('navTasks', 'click', () => showView('tasks'));
   bind('navReviews', 'click', () => showView('reviews'));
   bind('navQuestions', 'click', () => showView('questions'));
@@ -8378,11 +8392,11 @@ function init() {
     handleMobileMoreAction(button.dataset.mobileAction || '', button.dataset.mobileView || '');
   });
   document.querySelector('.main-nav')?.addEventListener('click', (event) => {
-    const button = event.target.closest('#navChats, #navAnalytics, #navSupplyPlanning, #navTasks, #navReviews, #navQuestions, #navKnowledge, #navUsers, #navTechSettings, #navProfile, #mobileMoreBtn');
+    const button = event.target.closest('#navChats, #navAnalytics, #navSupplyPlanning, #navOzonFbo, #navTasks, #navReviews, #navQuestions, #navKnowledge, #navUsers, #navTechSettings, #navProfile, #mobileMoreBtn');
     if (!button) return;
     if (button.id === 'mobileMoreBtn') return;
     event.preventDefault();
-    const targetView = ({ navAnalytics: 'analytics', navSupplyPlanning: 'supplyPlanning', navTasks: 'tasks', navReviews: 'reviews', navQuestions: 'questions', navKnowledge: 'knowledge', navUsers: 'users', navTechSettings: 'techSettings', navProfile: 'profile' })[button.id] || 'chats';
+    const targetView = ({ navAnalytics: 'analytics', navSupplyPlanning: 'supplyPlanning', navOzonFbo: 'ozonFbo', navTasks: 'tasks', navReviews: 'reviews', navQuestions: 'questions', navKnowledge: 'knowledge', navUsers: 'users', navTechSettings: 'techSettings', navProfile: 'profile' })[button.id] || 'chats';
     showView(targetView);
   });
   bind('analyticsRefreshBtn', 'click', loadAnalytics);
@@ -9027,4 +9041,662 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
     if (!$('userEditModal')?.classList.contains('hidden')) closeUserEditModal();
   }
+});
+
+// ---------------------------------------------------------------------------
+// Поставки FBO Ozon: запуск прогона, опрос состояния из БД, вопросы пользователю,
+// история и настройки. Бизнес-правила живут на сервере (app/services/ozon_fbo);
+// здесь только transport, server state и рендер.
+// ---------------------------------------------------------------------------
+const OZON_FBO_POLL_MS = 2000;
+const OZON_FBO_MODE_LABELS = {
+  trial: 'Пробный прогон',
+  live: 'Боевой с грузоместами',
+  live_nocargo: 'Боевой без грузомест',
+  cargo: 'Дозаполнение грузомест',
+};
+const OZON_FBO_STATUS_LABELS = {
+  queued: 'В очереди',
+  running: 'Выполняется',
+  awaiting_answer: 'Ждёт ответа',
+  finished: 'Завершён',
+  failed: 'Ошибка',
+  stopped: 'Остановлен',
+  interrupted: 'Прерван',
+};
+const OZON_FBO_SETTING_KEYS = [
+  'default_cargo_capacity', 'cargo_type', 'drop_off_name', 'min_slot_offset_days', 'slot_max_windows',
+  'min_qty', 'step', 'unavailable_retry_sec', 'cargo_capacity', 'all_clusters',
+];
+const ozonFbo = {
+  status: null,
+  run: null,
+  runId: null,
+  logSeq: 0,
+  pollTimer: null,
+  pollInFlight: false,
+  submitInFlight: false,
+  ordersInFlight: false,
+  orders: [],
+  selectedOrders: new Set(),
+  questionKey: '',
+  staleAfterSeconds: 180,
+};
+
+function ozonFboSetStatus(id, text, kind = '') {
+  const el = $(id);
+  if (!el) return;
+  el.textContent = text || '';
+  if (kind) el.dataset.kind = kind; else delete el.dataset.kind;
+}
+
+function ozonFboErrorText(err) {
+  const detail = err?.parsed?.detail ?? err?.detail;
+  if (detail && typeof detail === 'object') {
+    const items = Array.isArray(detail.errors) ? detail.errors : [];
+    return [detail.message, ...items].filter(Boolean).join(' · ');
+  }
+  if (typeof detail === 'string' && detail) return detail;
+  return String(err?.message || err || 'Неизвестная ошибка');
+}
+
+function ozonFboParseServerTime(value) {
+  if (!value) return null;
+  const text = String(value).trim();
+  const date = new Date(text.includes('T') || text.endsWith('Z') ? text : `${text.replace(' ', 'T')}Z`);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function ozonFboFormatTime(value, withDate = true) {
+  const date = ozonFboParseServerTime(value);
+  if (!date) return '';
+  const time = date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  if (!withDate) return time;
+  return `${date.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })} ${time}`;
+}
+
+function ozonFboStatusBadge(status) {
+  const key = String(status || 'queued');
+  return `<span class="status-badge ozon-fbo-state-${escapeHtml(key)}">${escapeHtml(OZON_FBO_STATUS_LABELS[key] || key)}</span>`;
+}
+
+function ozonFboSelectedMode() {
+  return document.querySelector('input[name="ozonFboMode"]:checked')?.value || 'trial';
+}
+
+function ozonFboSelectedSource() {
+  return document.querySelector('input[name="ozonFboSource"]:checked')?.value || 'file';
+}
+
+function ozonFboApplyModeVisibility() {
+  const mode = ozonFboSelectedMode();
+  const source = ozonFboSelectedSource();
+  $('ozonFboPlanSource')?.classList.toggle('hidden', mode === 'cargo');
+  $('ozonFboOrdersSource')?.classList.toggle('hidden', mode !== 'cargo');
+  $('ozonFboFileSource')?.classList.toggle('hidden', source !== 'file');
+  $('ozonFboManualSource')?.classList.toggle('hidden', source !== 'manual');
+  const force = $('ozonFboForce');
+  if (force) force.disabled = mode === 'cargo';
+  const startBtn = $('ozonFboStartBtn');
+  if (startBtn) {
+    startBtn.textContent = mode === 'cargo' ? 'Запустить передачу грузомест'
+      : mode === 'trial' ? 'Запустить пробный прогон' : 'Запустить боевой прогон';
+  }
+}
+
+async function loadOzonFbo() {
+  try {
+    await loadOzonFboStatus();
+  } catch (err) {
+    ozonFboSetStatus('ozonFboFormStatus', `Не удалось загрузить состояние раздела: ${ozonFboErrorText(err)}`, 'error');
+  }
+  loadOzonFboHistory().catch(err => console.warn('ozon fbo history failed', err));
+}
+
+async function loadOzonFboStatus() {
+  const status = await api('/api/ozon-fbo/status');
+  ozonFbo.status = status;
+  ozonFbo.staleAfterSeconds = Number(status?.stale_after_seconds) || 180;
+  const keysEl = $('ozonFboKeysStatus');
+  if (keysEl) {
+    keysEl.textContent = status?.keys_configured
+      ? 'Ключи Ozon заданы на сервере, значения скрыты. Пробный прогон ничего не создаёт в кабинете.'
+      : 'Ключи Ozon не заданы: задайте OZON_CLIENT_ID и OZON_API_KEY в окружении сервера и перезапустите приложение.';
+    keysEl.dataset.kind = status?.keys_configured ? '' : 'error';
+  }
+  const lk = $('ozonFboLkLink');
+  if (lk && status?.lk_url) lk.href = status.lk_url;
+  fillOzonFboSettings(status?.settings || {});
+  if (Array.isArray(status?.settings_errors) && status.settings_errors.length) {
+    ozonFboSetStatus('ozonFboSettingsStatus', `Ошибки в сохранённых настройках: ${status.settings_errors.join('; ')}`, 'warning');
+  }
+  const startBtn = $('ozonFboStartBtn');
+  if (startBtn) startBtn.disabled = !status?.keys_configured || Boolean(status?.active_run);
+  if (status?.active_run) {
+    watchOzonFboRun(status.active_run.id, { reset: ozonFbo.runId !== status.active_run.id });
+  } else if (!ozonFbo.runId) {
+    const runs = await api('/api/ozon-fbo/runs?limit=1');
+    if (Array.isArray(runs) && runs.length) watchOzonFboRun(runs[0].id, { reset: true });
+  }
+}
+
+function fillOzonFboSettings(settings) {
+  OZON_FBO_SETTING_KEYS.forEach((key) => {
+    const el = $(`ozonFboSetting_${key}`);
+    if (!el) return;
+    const value = settings?.[key];
+    if (key === 'cargo_capacity') {
+      el.value = Object.entries(value || {}).map(([article, qty]) => `${article} = ${qty}`).join('\n');
+    } else if (key === 'all_clusters') {
+      el.value = Array.isArray(value) ? value.join('\n') : '';
+    } else {
+      el.value = value === undefined || value === null ? '' : String(value);
+    }
+  });
+}
+
+function readOzonFboSettingsForm() {
+  const data = {};
+  OZON_FBO_SETTING_KEYS.forEach((key) => {
+    const el = $(`ozonFboSetting_${key}`);
+    if (el) data[key] = el.value;
+  });
+  return data;
+}
+
+async function saveOzonFboSettings(event) {
+  event?.preventDefault?.();
+  const btn = $('ozonFboSaveSettingsBtn');
+  if (btn) btn.disabled = true;
+  ozonFboSetStatus('ozonFboSettingsStatus', 'Сохраняю…', '');
+  try {
+    const result = await api('/api/ozon-fbo/settings', { method: 'PUT', body: JSON.stringify(readOzonFboSettingsForm()) });
+    fillOzonFboSettings(result?.settings || {});
+    if (ozonFbo.status) ozonFbo.status.settings = result?.settings || ozonFbo.status.settings;
+    ozonFboSetStatus('ozonFboSettingsStatus', 'Настройки сохранены.', 'success');
+  } catch (err) {
+    ozonFboSetStatus('ozonFboSettingsStatus', `Не сохранено: ${ozonFboErrorText(err)}`, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function checkOzonFboConnection() {
+  const btn = $('ozonFboCheckBtn');
+  if (!btn || btn.disabled) return;
+  const oldText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Проверяю…';
+  ozonFboSetStatus('ozonFboFormStatus', 'Отправляю безопасный запрос к Ozon…', '');
+  try {
+    const result = await api('/api/ozon-fbo/check-connection', { method: 'POST', body: '{}', timeoutMs: 90000 });
+    ozonFboSetStatus('ozonFboFormStatus', `Связь есть: Ozon вернул ${Number(result?.clusters || 0)} кластеров.`, 'success');
+  } catch (err) {
+    ozonFboSetStatus('ozonFboFormStatus', `Ozon не ответил как надо: ${ozonFboErrorText(err)}`, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = oldText;
+  }
+}
+
+async function handleOzonFboFileChange() {
+  const input = $('ozonFboFile');
+  const select = $('ozonFboSheet');
+  if (!input || !select) return;
+  const file = input.files?.[0];
+  select.innerHTML = '<option value="">Сначала выберите файл</option>';
+  select.disabled = true;
+  if (!file) return;
+  ozonFboSetStatus('ozonFboFormStatus', 'Читаю список листов…', '');
+  try {
+    const form = new FormData();
+    form.append('file', file, file.name);
+    const result = await apiForm('/api/ozon-fbo/workbook-sheets', form);
+    const sheets = Array.isArray(result?.sheets) ? result.sheets : [];
+    if (!sheets.length) throw new Error('в файле нет листов');
+    select.innerHTML = sheets.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+    select.value = sheets[sheets.length - 1];
+    select.disabled = false;
+    ozonFboSetStatus('ozonFboFormStatus', `Файл ${file.name}: листов ${sheets.length}, выбран последний.`, '');
+  } catch (err) {
+    ozonFboSetStatus('ozonFboFormStatus', `Не удалось открыть файл: ${ozonFboErrorText(err)}`, 'error');
+  }
+}
+
+async function loadOzonFboOrders() {
+  if (ozonFbo.ordersInFlight) return;
+  const btn = $('ozonFboLoadOrdersBtn');
+  ozonFbo.ordersInFlight = true;
+  if (btn) btn.disabled = true;
+  const statusEl = $('ozonFboOrdersStatus');
+  if (statusEl) statusEl.textContent = 'Загружаю заявки из Ozon…';
+  try {
+    const result = await api('/api/ozon-fbo/awaiting-cargo-orders', { timeoutMs: 180000 });
+    ozonFbo.orders = Array.isArray(result?.orders) ? result.orders : [];
+    ozonFbo.selectedOrders = new Set(ozonFbo.orders.map(o => String(o.number)));
+    renderOzonFboOrders();
+    if (statusEl) {
+      statusEl.textContent = ozonFbo.orders.length
+        ? `Заявок, ожидающих грузомест: ${ozonFbo.orders.length}.`
+        : 'Заявок, ожидающих грузомест, нет.';
+    }
+  } catch (err) {
+    if (statusEl) statusEl.textContent = 'Не удалось загрузить заявки.';
+    ozonFboSetStatus('ozonFboFormStatus', `Ozon не ответил как надо: ${ozonFboErrorText(err)}`, 'error');
+  } finally {
+    ozonFbo.ordersInFlight = false;
+    if (btn) btn.disabled = false;
+    const selectAll = $('ozonFboSelectAllOrdersBtn');
+    if (selectAll) selectAll.disabled = !ozonFbo.orders.length;
+  }
+}
+
+function ozonFboOrderContentHtml(order) {
+  const parts = (order.supplies || []).map((supply) => {
+    if (supply.skipped) return `${escapeHtml(supply.where)}: ${escapeHtml(supply.skipped)}`;
+    const items = (supply.items || []).map(it => `${escapeHtml(it.offer_id)} ${Number(it.quantity)} шт. (${escapeHtml(it.layout)})`).join(', ');
+    return `${escapeHtml(supply.where)}: ${items || 'состав пустой'}`;
+  });
+  return parts.join('<br />') || '<span class="muted">состав пустой</span>';
+}
+
+function renderOzonFboOrders() {
+  const tbody = $('ozonFboOrdersRows');
+  if (!tbody) return;
+  if (!ozonFbo.orders.length) {
+    tbody.innerHTML = '<tr><td colspan="4" class="muted">Список пуст.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = ozonFbo.orders.map((order) => {
+    const number = String(order.number);
+    const checked = ozonFbo.selectedOrders.has(number) ? ' checked' : '';
+    return `<tr>
+      <td class="ozon-fbo-col-check"><input type="checkbox" data-ozon-fbo-order="${escapeHtml(number)}" aria-label="Заявка ${escapeHtml(number)}"${checked} /></td>
+      <td class="ozon-fbo-order-cell">№${escapeHtml(number)}${order.created ? `<br /><span class="muted">создана ${escapeHtml(order.created)}</span>` : ''}</td>
+      <td class="ozon-fbo-order-cell">${order.slot ? `слот ${escapeHtml(order.slot)}` : ''}${order.deadline ? `<br /><span class="muted">заполнить до ${escapeHtml(order.deadline)}</span>` : ''}</td>
+      <td class="ozon-fbo-note">${ozonFboOrderContentHtml(order)}</td>
+    </tr>`;
+  }).join('');
+}
+
+function ozonFboSelectedOrderKeys() {
+  return ozonFbo.orders.map(o => String(o.number)).filter(number => ozonFbo.selectedOrders.has(number));
+}
+
+async function submitOzonFboRun(event) {
+  event?.preventDefault?.();
+  if (ozonFbo.submitInFlight) return;
+  const mode = ozonFboSelectedMode();
+  const form = new FormData();
+  form.append('mode', mode);
+  form.append('force', $('ozonFboForce')?.checked ? 'true' : 'false');
+  form.append('confirm_each', $('ozonFboConfirmEach')?.checked ? 'true' : 'false');
+  form.append('auto_confirm', $('ozonFboAutoConfirm')?.checked ? 'true' : 'false');
+  if (mode === 'cargo') {
+    const keys = ozonFboSelectedOrderKeys();
+    if (!keys.length) {
+      ozonFboSetStatus('ozonFboFormStatus', 'Сначала загрузите заявки из Ozon и выделите те, по которым передать грузоместа.', 'error');
+      return;
+    }
+    form.append('order_keys', keys.join(','));
+  } else {
+    const source = ozonFboSelectedSource();
+    form.append('source_kind', source);
+    form.append('articles', $('ozonFboArticles')?.value || '');
+    if (source === 'file') {
+      const file = $('ozonFboFile')?.files?.[0];
+      const sheet = $('ozonFboSheet')?.value || '';
+      if (!file || !sheet) {
+        ozonFboSetStatus('ozonFboFormStatus', 'Выберите файл .xlsx и лист.', 'error');
+        return;
+      }
+      form.append('file', file, file.name);
+      form.append('sheet_name', sheet);
+    } else {
+      form.append('manual_text', $('ozonFboManualText')?.value || '');
+      form.append('list_name', $('ozonFboListName')?.value || '');
+    }
+  }
+  if (mode !== 'trial') {
+    const what = mode === 'cargo'
+      ? 'Грузоместа уйдут в Ozon по выбранным заявкам после подтверждения плана.'
+      : 'Будут созданы НАСТОЯЩИЕ заявки на поставку в Ozon после подтверждения плана.';
+    const how = $('ozonFboAutoConfirm')?.checked
+      ? 'ВНИМАНИЕ: подтверждения отключены — всё создастся без вопросов.'
+      : 'Создание начнётся только после вашего ответа на вопрос в этом разделе.';
+    if (!window.confirm(`${what}\n\n${how}\n\nПродолжить?`)) return;
+  }
+  ozonFbo.submitInFlight = true;
+  const btn = $('ozonFboStartBtn');
+  if (btn) btn.disabled = true;
+  ozonFboSetStatus('ozonFboFormStatus', 'Запускаю прогон…', '');
+  try {
+    const run = await apiForm('/api/ozon-fbo/runs', form);
+    ozonFboSetStatus('ozonFboFormStatus', `Прогон №${run.id} запущен.`, 'success');
+    watchOzonFboRun(run.id, { reset: true });
+    loadOzonFboHistory().catch(() => {});
+  } catch (err) {
+    ozonFboSetStatus('ozonFboFormStatus', `Прогон не запущен: ${ozonFboErrorText(err)}`, 'error');
+    if (btn) btn.disabled = false;
+  } finally {
+    ozonFbo.submitInFlight = false;
+  }
+}
+
+function stopOzonFboPolling() {
+  if (ozonFbo.pollTimer) {
+    clearTimeout(ozonFbo.pollTimer);
+    ozonFbo.pollTimer = null;
+  }
+}
+
+function scheduleOzonFboPoll(delay = OZON_FBO_POLL_MS) {
+  stopOzonFboPolling();
+  ozonFbo.pollTimer = setTimeout(() => {
+    ozonFbo.pollTimer = null;
+    pollOzonFboRun().catch(err => console.warn('ozon fbo poll failed', err));
+  }, delay);
+}
+
+function watchOzonFboRun(runId, options = {}) {
+  const id = Number(runId);
+  if (!Number.isFinite(id) || id <= 0) return;
+  if (options.reset || ozonFbo.runId !== id) {
+    ozonFbo.runId = id;
+    ozonFbo.run = null;
+    ozonFbo.logSeq = 0;
+    ozonFbo.questionKey = '';
+    const log = $('ozonFboLog');
+    if (log) log.textContent = '';
+    renderOzonFboRows([]);
+    closeOzonFboDecision();
+  }
+  pollOzonFboRun().catch(err => console.warn('ozon fbo poll failed', err));
+}
+
+async function pollOzonFboRun() {
+  if (ozonFbo.pollInFlight || !ozonFbo.runId) return;
+  const id = ozonFbo.runId;
+  ozonFbo.pollInFlight = true;
+  try {
+    const detail = await api(`/api/ozon-fbo/runs/${id}?after=${ozonFbo.logSeq}`);
+    if (ozonFbo.runId !== id) return;
+    const run = detail?.run;
+    if (!run) return;
+    const wasActive = Boolean(ozonFbo.run?.is_active);
+    ozonFbo.run = run;
+    appendOzonFboLog(detail.log || []);
+    renderOzonFboRows(detail.rows || []);
+    renderOzonFboRun(run);
+    if (run.is_active) {
+      if (activeView === 'ozonFbo') scheduleOzonFboPoll(document.hidden ? OZON_FBO_POLL_MS * 3 : OZON_FBO_POLL_MS);
+    } else {
+      stopOzonFboPolling();
+      const startBtn = $('ozonFboStartBtn');
+      if (startBtn) startBtn.disabled = !ozonFbo.status?.keys_configured;
+      if (wasActive) loadOzonFboHistory().catch(() => {});
+    }
+  } finally {
+    ozonFbo.pollInFlight = false;
+  }
+}
+
+function appendOzonFboLog(lines) {
+  if (!lines.length) return;
+  const log = $('ozonFboLog');
+  if (!log) return;
+  const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+  const text = lines.map(item => item.text).join('\n');
+  log.textContent = log.textContent ? `${log.textContent}\n${text}` : text;
+  ozonFbo.logSeq = Math.max(ozonFbo.logSeq, ...lines.map(item => Number(item.seq) || 0));
+  if (nearBottom) log.scrollTop = log.scrollHeight;
+}
+
+const OZON_FBO_TONE_LABELS = { zero: 'исключён', manual: 'ручная проверка', ok: 'принято' };
+
+function ozonFboToneBadge(tone) {
+  const label = OZON_FBO_TONE_LABELS[tone];
+  if (!label) return '';
+  return `<span class="status-badge ozon-fbo-tone-${tone}">${label}</span>`;
+}
+
+function renderOzonFboRows(rows) {
+  const tbody = $('ozonFboRows');
+  if (!tbody) return;
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="muted">Результатов пока нет.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map((row) => {
+    const fact = row.fact === null || row.fact === undefined ? '' : String(row.fact);
+    return `<tr><td>${escapeHtml(row.article)}</td><td>${escapeHtml(row.cluster)}</td><td class="ozon-fbo-num">${escapeHtml(String(row.plan ?? ''))}</td><td class="ozon-fbo-num">${escapeHtml(fact)}</td><td class="ozon-fbo-tone">${ozonFboToneBadge(row.tone)}</td><td class="ozon-fbo-note">${escapeHtml(row.note || '')}</td></tr>`;
+  }).join('');
+}
+
+function ozonFboHeartbeatAge(run) {
+  const beat = ozonFboParseServerTime(run?.heartbeat_at);
+  if (!beat) return null;
+  return Math.max(0, Math.round((Date.now() - beat.getTime()) / 1000));
+}
+
+function renderOzonFboRun(run) {
+  const title = $('ozonFboRunTitle');
+  if (title) title.textContent = `Прогон №${run.id}`;
+  const meta = $('ozonFboRunMeta');
+  if (meta) {
+    const parts = [
+      OZON_FBO_MODE_LABELS[run.mode] || run.mode,
+      run.sheet_name ? `«${run.sheet_name}»` : '',
+      run.created_by_label ? `запустил ${run.created_by_label}` : '',
+      run.created_at ? `начат ${ozonFboFormatTime(run.created_at)}` : '',
+      run.finished_at ? `завершён ${ozonFboFormatTime(run.finished_at, false)}` : '',
+    ].filter(Boolean);
+    const age = run.is_active ? ozonFboHeartbeatAge(run) : null;
+    const stale = age !== null && age > ozonFbo.staleAfterSeconds;
+    meta.innerHTML = `${ozonFboStatusBadge(run.status)} ${escapeHtml(parts.join(' · '))}`
+      + (run.error_text ? `<br /><span class="ozon-fbo-error">${escapeHtml(run.error_text)}</span>` : '')
+      + (stale ? `<br /><span class="ozon-fbo-error">Рабочий процесс не отвечает ${age} с.</span>` : '');
+    const releaseBtn = $('ozonFboReleaseBtn');
+    if (releaseBtn) releaseBtn.classList.toggle('hidden', !stale);
+  }
+  const stopBtn = $('ozonFboStopBtn');
+  if (stopBtn) {
+    stopBtn.disabled = !run.is_active || Boolean(run.stop_requested);
+    stopBtn.textContent = run.stop_requested && run.is_active ? 'Останавливаю…' : 'Остановить';
+  }
+  const files = $('ozonFboRunFiles');
+  if (files) {
+    files.classList.remove('hidden');
+    const result = $('ozonFboResultLink');
+    if (result) {
+      result.classList.toggle('hidden', !run.has_result_file);
+      result.href = `/api/ozon-fbo/runs/${run.id}/result.xlsx`;
+    }
+    const report = $('ozonFboReportLink');
+    if (report) report.href = `/api/ozon-fbo/runs/${run.id}/report.txt`;
+    const apiLog = $('ozonFboApiLogLink');
+    if (apiLog) apiLog.href = `/api/ozon-fbo/runs/${run.id}/api-log.zip`;
+  }
+  const awaiting = run.status === 'awaiting_answer' && run.question_text;
+  const bar = $('ozonFboQuestionBar');
+  if (bar) bar.classList.toggle('hidden', !awaiting);
+  if (awaiting) {
+    const barText = $('ozonFboQuestionBarText');
+    if (barText) {
+      barText.textContent = run.question_kind === 'duplicates'
+        ? 'Сегодня уже есть такие заявки — прогон ждёт вашего решения.'
+        : run.question_kind === 'plan' ? 'План готов — прогон ждёт подтверждения.' : 'Прогон ждёт вашего ответа.';
+    }
+    const key = `${run.id}:${run.question_kind}:${String(run.question_text).length}`;
+    if (key !== ozonFbo.questionKey) {
+      ozonFbo.questionKey = key;
+      openOzonFboDecision(run);
+    }
+  } else if (ozonFbo.questionKey) {
+    ozonFbo.questionKey = '';
+    closeOzonFboDecision();
+  }
+}
+
+function ozonFboDecisionLabels(run) {
+  const text = String(run?.question_text || '');
+  if (run?.question_kind === 'duplicates') {
+    return { title: 'Сегодня уже есть такие заявки', hint: '«Всё равно сделать» — строки пойдут в поставку, на один склад уйдёт вторая заявка за день.', yes: 'Всё равно сделать', no: 'Пропустить дубли' };
+  }
+  if (run?.question_kind === 'plan') {
+    const cargo = text.startsWith('ГРУЗОМЕСТА');
+    const yes = cargo ? 'Передать грузоместа' : 'Создать заявки';
+    return { title: cargo ? 'План грузомест' : 'План поставок', hint: `Проверьте план. Данные уйдут в Ozon только после нажатия «${yes}».`, yes, no: 'Отмена' };
+  }
+  return { title: 'Подтверждение', hint: 'Нажмите «Да», чтобы выполнить, или «Нет», чтобы пропустить этот шаг.', yes: 'Да', no: 'Нет' };
+}
+
+function openOzonFboDecision(run) {
+  const modal = $('ozonFboDecisionModal');
+  if (!modal || !run?.question_text) return;
+  const labels = ozonFboDecisionLabels(run);
+  if ($('ozonFboDecisionTitle')) $('ozonFboDecisionTitle').textContent = labels.title;
+  if ($('ozonFboDecisionHint')) $('ozonFboDecisionHint').textContent = labels.hint;
+  if ($('ozonFboDecisionText')) $('ozonFboDecisionText').textContent = run.question_text;
+  if ($('ozonFboDecisionYesBtn')) { $('ozonFboDecisionYesBtn').textContent = labels.yes; $('ozonFboDecisionYesBtn').disabled = false; }
+  if ($('ozonFboDecisionNoBtn')) { $('ozonFboDecisionNoBtn').textContent = labels.no; $('ozonFboDecisionNoBtn').disabled = false; }
+  modal.classList.remove('hidden');
+  modal.setAttribute('aria-hidden', 'false');
+  setTimeout(() => $('ozonFboDecisionText')?.focus(), 30);
+}
+
+function closeOzonFboDecision() {
+  const modal = $('ozonFboDecisionModal');
+  if (!modal || modal.classList.contains('hidden')) return;
+  modal.classList.add('hidden');
+  modal.setAttribute('aria-hidden', 'true');
+}
+
+async function answerOzonFboDecision(answer) {
+  const run = ozonFbo.run;
+  if (!run || run.status !== 'awaiting_answer') { closeOzonFboDecision(); return; }
+  const yes = $('ozonFboDecisionYesBtn');
+  const no = $('ozonFboDecisionNoBtn');
+  if (yes) yes.disabled = true;
+  if (no) no.disabled = true;
+  try {
+    await api(`/api/ozon-fbo/runs/${run.id}/answer`, { method: 'POST', body: JSON.stringify({ answer }) });
+    closeOzonFboDecision();
+    scheduleOzonFboPoll(200);
+  } catch (err) {
+    ozonFboSetStatus('ozonFboFormStatus', `Ответ не принят: ${ozonFboErrorText(err)}`, 'error');
+    if (yes) yes.disabled = false;
+    if (no) no.disabled = false;
+    scheduleOzonFboPoll(200);
+  }
+}
+
+async function stopOzonFboRun() {
+  const run = ozonFbo.run;
+  if (!run || !run.is_active) return;
+  if (!window.confirm('Остановить прогон после текущего артикула? Созданные заявки останутся.')) return;
+  try {
+    await api(`/api/ozon-fbo/runs/${run.id}/stop`, { method: 'POST', body: '{}' });
+    scheduleOzonFboPoll(200);
+  } catch (err) {
+    ozonFboSetStatus('ozonFboFormStatus', `Не удалось остановить: ${ozonFboErrorText(err)}`, 'error');
+  }
+}
+
+async function releaseOzonFboRun() {
+  const run = ozonFbo.run;
+  if (!run || !run.is_active) return;
+  if (!window.confirm('Пометить прогон прерванным? Делайте это только если рабочий процесс действительно перестал отвечать.')) return;
+  try {
+    await api(`/api/ozon-fbo/runs/${run.id}/release`, { method: 'POST', body: '{}' });
+    scheduleOzonFboPoll(200);
+    loadOzonFboStatus().catch(() => {});
+  } catch (err) {
+    ozonFboSetStatus('ozonFboFormStatus', `Не удалось снять прогон: ${ozonFboErrorText(err)}`, 'error');
+  }
+}
+
+function ozonFboSummaryText(run) {
+  const s = run?.summary || {};
+  if (run?.status === 'failed' || run?.status === 'interrupted') return run.error_text || '';
+  if (!Object.keys(s).length) return '';
+  const parts = [];
+  if (run.mode === 'cargo') {
+    parts.push(`заявок ${Number(s.articles || 0)}`, `грузомест ${Number(s.cargoes || 0)}`);
+  } else {
+    parts.push(`артикулов ${Number(s.articles || 0)}`);
+    if (run.mode !== 'trial') parts.push(`заявок ${Number(s.created || 0)}`, `грузомест ${Number(s.cargoes || 0)}`);
+  }
+  if (Number(s.manual || 0)) parts.push(`ручная проверка ${Number(s.manual)}`);
+  return parts.join(', ');
+}
+
+async function loadOzonFboHistory() {
+  const runs = await api('/api/ozon-fbo/runs?limit=30');
+  renderOzonFboHistory(Array.isArray(runs) ? runs : []);
+}
+
+function renderOzonFboHistory(runs) {
+  const tbody = $('ozonFboHistoryRows');
+  if (!tbody) return;
+  if (!runs.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="muted">Прогонов ещё не было.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = runs.map(run => `<tr>
+    <td>${escapeHtml(ozonFboFormatTime(run.created_at))}</td>
+    <td>${escapeHtml(OZON_FBO_MODE_LABELS[run.mode] || run.mode)}</td>
+    <td class="ozon-fbo-note">${escapeHtml(run.sheet_name || '')}</td>
+    <td>${ozonFboStatusBadge(run.status)}</td>
+    <td class="ozon-fbo-note">${escapeHtml(ozonFboSummaryText(run))}</td>
+    <td class="ozon-fbo-history-actions"><button class="secondary small" type="button" data-ozon-fbo-open="${escapeHtml(String(run.id))}">Открыть</button></td>
+  </tr>`).join('');
+}
+
+function bindOzonFboControls() {
+  const form = $('ozonFboRunForm');
+  if (form && !form.dataset.boundOzonFbo) {
+    form.dataset.boundOzonFbo = '1';
+    form.addEventListener('submit', submitOzonFboRun);
+    form.addEventListener('change', (event) => {
+      if (event.target?.matches?.('input[name="ozonFboMode"], input[name="ozonFboSource"]')) ozonFboApplyModeVisibility();
+      if (event.target?.matches?.('[data-ozon-fbo-order]')) {
+        const number = event.target.dataset.ozonFboOrder;
+        if (event.target.checked) ozonFbo.selectedOrders.add(number); else ozonFbo.selectedOrders.delete(number);
+      }
+    });
+  }
+  bind('ozonFboFile', 'change', handleOzonFboFileChange);
+  bind('ozonFboLoadOrdersBtn', 'click', loadOzonFboOrders);
+  bind('ozonFboSelectAllOrdersBtn', 'click', () => {
+    ozonFbo.selectedOrders = new Set(ozonFbo.orders.map(o => String(o.number)));
+    renderOzonFboOrders();
+  });
+  bind('ozonFboCheckBtn', 'click', checkOzonFboConnection);
+  bind('ozonFboStopBtn', 'click', stopOzonFboRun);
+  bind('ozonFboReleaseBtn', 'click', releaseOzonFboRun);
+  bind('ozonFboOpenQuestionBtn', 'click', () => { if (ozonFbo.run) openOzonFboDecision(ozonFbo.run); });
+  bind('ozonFboHistoryRefreshBtn', 'click', () => loadOzonFboHistory().catch(err => ozonFboSetStatus('ozonFboFormStatus', ozonFboErrorText(err), 'error')));
+  $('ozonFboHistoryRows')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-ozon-fbo-open]');
+    if (!button) return;
+    watchOzonFboRun(button.dataset.ozonFboOpen, { reset: true });
+    $('ozonFboRunTitle')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  });
+  const settingsForm = $('ozonFboSettingsForm');
+  if (settingsForm && !settingsForm.dataset.boundOzonFbo) {
+    settingsForm.dataset.boundOzonFbo = '1';
+    settingsForm.addEventListener('submit', saveOzonFboSettings);
+  }
+  bind('ozonFboDecisionYesBtn', 'click', () => answerOzonFboDecision('yes'));
+  bind('ozonFboDecisionNoBtn', 'click', () => answerOzonFboDecision('no'));
+  bind('ozonFboDecisionCloseBtn', 'click', closeOzonFboDecision);
+  $('ozonFboDecisionModal')?.addEventListener('click', (event) => {
+    if (event.target?.matches?.('[data-ozon-fbo-decision-close]')) closeOzonFboDecision();
+  });
+  ozonFboApplyModeVisibility();
+}
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !$('ozonFboDecisionModal')?.classList.contains('hidden')) closeOzonFboDecision();
 });
