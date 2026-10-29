@@ -937,6 +937,105 @@ def init_db() -> None:
             """
         )
 
+        # Поставки FBO Ozon: настройки, прогоны, журнал, результаты, память созданных заявок,
+        # грузоместа по заявкам и выученные склады кластеров. Таблицы аддитивные; откат к старому коду
+        # оставляет их неиспользуемыми.
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS ozon_fbo_settings (
+                key TEXT PRIMARY KEY,
+                value_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS ozon_fbo_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                started_at TEXT,
+                finished_at TEXT,
+                heartbeat_at TEXT,
+                status TEXT NOT NULL DEFAULT 'queued'
+                    CHECK(status IN ('queued','running','awaiting_answer','finished','failed','stopped','interrupted')),
+                is_active INTEGER CHECK(is_active IS NULL OR is_active = 1),
+                mode TEXT NOT NULL CHECK(mode IN ('trial','live','live_nocargo','cargo')),
+                source_kind TEXT NOT NULL CHECK(source_kind IN ('file','manual','orders')),
+                sheet_name TEXT NOT NULL DEFAULT '',
+                articles_filter TEXT NOT NULL DEFAULT '',
+                options_json TEXT NOT NULL DEFAULT '{}',
+                created_by_user_id INTEGER,
+                created_by_label TEXT NOT NULL DEFAULT '',
+                input_file_name TEXT,
+                input_file BLOB,
+                result_file_name TEXT,
+                result_file BLOB,
+                question_kind TEXT CHECK(question_kind IS NULL OR question_kind IN ('plan','confirm','duplicates')),
+                question_text TEXT,
+                answer TEXT CHECK(answer IS NULL OR answer IN ('yes','no')),
+                stop_requested INTEGER NOT NULL DEFAULT 0,
+                summary_json TEXT NOT NULL DEFAULT '{}',
+                error_text TEXT NOT NULL DEFAULT '',
+                log_dir TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY(created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_ozon_fbo_runs_single_active
+                ON ozon_fbo_runs(is_active) WHERE is_active = 1;
+            CREATE INDEX IF NOT EXISTS idx_ozon_fbo_runs_created
+                ON ozon_fbo_runs(created_at DESC, id DESC);
+
+            CREATE TABLE IF NOT EXISTS ozon_fbo_run_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id INTEGER NOT NULL,
+                seq INTEGER NOT NULL,
+                text TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(run_id) REFERENCES ozon_fbo_runs(id) ON DELETE CASCADE,
+                UNIQUE(run_id, seq)
+            );
+
+            CREATE TABLE IF NOT EXISTS ozon_fbo_run_rows (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id INTEGER NOT NULL,
+                position INTEGER NOT NULL,
+                article TEXT NOT NULL,
+                cluster TEXT NOT NULL,
+                plan INTEGER NOT NULL DEFAULT 0,
+                fact INTEGER,
+                note TEXT NOT NULL DEFAULT '',
+                tone TEXT NOT NULL DEFAULT 'none' CHECK(tone IN ('none','zero','manual','ok')),
+                FOREIGN KEY(run_id) REFERENCES ozon_fbo_runs(id) ON DELETE CASCADE,
+                UNIQUE(run_id, position)
+            );
+
+            CREATE TABLE IF NOT EXISTS ozon_fbo_article_state (
+                sheet_name TEXT NOT NULL,
+                article TEXT NOT NULL,
+                state_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (sheet_name, article)
+            );
+
+            CREATE TABLE IF NOT EXISTS ozon_fbo_order_state (
+                order_number TEXT PRIMARY KEY,
+                state_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS ozon_fbo_warehouse_map (
+                warehouse_id INTEGER PRIMARY KEY,
+                cluster_id INTEGER NOT NULL,
+                cluster_name TEXT,
+                warehouse_name TEXT NOT NULL DEFAULT '',
+                learned_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS ozon_fbo_learned_clusters (
+                cluster_id INTEGER PRIMARY KEY,
+                learned_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+
         # Analytics and large-history indexes.
         # These are safe on existing SQLite databases and make daily/hourly
         # dashboards faster when messages grow to tens of thousands.
