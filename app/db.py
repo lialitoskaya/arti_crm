@@ -7,15 +7,13 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-from dotenv import load_dotenv
+from app.runtime_config import load_runtime_config, resolve_database_path
+
+DATABASE_PATH = str(load_runtime_config())
 
 from app.message_outbox_migration import apply_message_send_operation_migration
 from app.task_chat_status_automation import apply_task_chat_status_automation_migration
-
-load_dotenv()
-
-DATABASE_PATH = os.getenv("DATABASE_PATH", "./crm.sqlite3")
-
+from app.legacy_hosting_upgrade import apply_legacy_hosting_upgrade, remap_legacy_message_reference
 
 _TECHNICAL_MESSAGE_AUTHORS = {
     "seller",
@@ -135,6 +133,7 @@ def _merge_duplicate_message_rows(
 
     # Remove the redundant row before assigning its unique provider identity to
     # the canonical row. All values needed for the merge are already in memory.
+    remap_legacy_message_reference(conn, int(duplicate["id"]), int(canonical["id"]))
     conn.execute("DELETE FROM messages WHERE id=?", (int(duplicate["id"]),))
     conn.execute(
         """
@@ -360,9 +359,7 @@ def _apply_message_identity_migration(conn: sqlite3.Connection) -> None:
 
 
 def _resolve_db_path() -> str:
-    path = Path(DATABASE_PATH)
-    if not path.is_absolute():
-        path = Path.cwd() / path
+    path = resolve_database_path(DATABASE_PATH)
     path.parent.mkdir(parents=True, exist_ok=True)
     return str(path)
 
@@ -388,6 +385,7 @@ def get_connection() -> Iterator[sqlite3.Connection]:
 
 def init_db() -> None:
     with get_connection() as conn:
+        apply_legacy_hosting_upgrade(conn, _apply_message_identity_migration)
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS chats (

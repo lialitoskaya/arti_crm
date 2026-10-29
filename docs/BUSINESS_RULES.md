@@ -157,6 +157,32 @@ unread metadata and the global CRM workflow status are not personal read state.
     `client_operation_id` or `is_crm_sent`; the approved Ozon product-context marker
     is rebuilt by its connector after sanitization.
 
+## Historical hosting send/task migration
+
+1. The recognized old hosting release stored send hashes, not complete command
+   payloads. These records are retained for manual verification, never automatically
+   resent and never converted into fabricated dispatchable commands.
+2. Old pending/sending/accepted/failed/uncertain outcomes are represented as
+   `uncertain`. Even an old `confirmed` row remains uncertain unless its existing
+   canonical outbound message in the same chat has the exact provider ID and legacy
+   text hash. An ACK or absence of an echo is not proof of delivery or rejection.
+3. A repeated historical operation ID cannot change its meaning. A changed payload
+   or a new operation ID with the same unresolved legacy hash returns HTTP 409.
+   No manual override/resend endpoint is introduced here. Historical review rows
+   reuse the existing operation status display; a fixed text explains that the
+   original text was not stored, rather than pretending that text was recovered.
+4. Historical raw errors/responses and untrusted author labels stay in private audit
+   tables only. API responses contain a fixed safe summary and an employee label
+   resolved from the stored server user ID, or an empty label if no such user exists.
+5. Existing chat workflow statuses/manual overrides survive. Old task ownership is
+   archived, not replayed; completing an old task cannot restore its historical
+   baseline. A future explicit create, type change or task reactivation may acquire
+   a modern effect. Active-status mappings of inactive task types stay dormant;
+   inactive/deleted status mappings are audit-only and do not reactivate themselves.
+6. This is a bounded conversion of a code-verified schema, not automatic repair of
+   arbitrary corrupt databases. Unknown schemas fail closed. Old workers must stop
+   before conversion and old code must never run against a converted database.
+
 ## Chat-list filtering by date
 
 1. The calendar filter is shown only in the chat list. The open chat header has

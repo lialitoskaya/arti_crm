@@ -685,6 +685,134 @@ class TaskChatStatusMigrationContractTests(unittest.TestCase):
         )
         return conn
 
+    def _add_unrelated_legacy_orphan(self, conn) -> None:
+        # Reproduce an imported legacy database, then re-enable normal enforcement.
+        # Disabling FK enforcement is confined to synthetic fixture construction.
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.executescript(
+            """
+            CREATE TABLE legacy_parent(id INTEGER PRIMARY KEY);
+            CREATE TABLE legacy_child(id INTEGER PRIMARY KEY, parent_id INTEGER,
+                FOREIGN KEY(parent_id) REFERENCES legacy_parent(id));
+            INSERT INTO legacy_child VALUES (1, 901);
+            """
+        )
+        conn.execute("PRAGMA foreign_keys=ON")
+        self.assertEqual(1, conn.execute("PRAGMA foreign_keys").fetchone()[0])
+
+    def test_unrelated_legacy_orphan_is_preserved_across_repeated_migration(self) -> None:
+        conn = self._base_connection()
+        try:
+            self._add_unrelated_legacy_orphan(conn)
+            before = tuple(conn.execute("SELECT * FROM legacy_child").fetchone())
+            for _ in range(2):
+                apply_task_chat_status_automation_migration(conn)
+                self.assertEqual(before, tuple(conn.execute("SELECT * FROM legacy_child").fetchone()))
+                self.assertEqual(1, len(conn.execute("PRAGMA foreign_key_check(legacy_child)").fetchall()))
+                self.assertEqual(1, conn.execute("PRAGMA foreign_keys").fetchone()[0])
+            self.assertEqual(1, conn.execute(
+                "SELECT COUNT(*) FROM schema_migrations WHERE name=?", (MIGRATION_NAME,)
+            ).fetchone()[0])
+        finally:
+            conn.close()
+
+    def test_unrelated_malformed_foreign_key_definition_is_not_examined(self) -> None:
+        conn = self._base_connection()
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE legacy_parent(code TEXT);
+                CREATE TABLE legacy_child(parent_code TEXT REFERENCES legacy_parent(code));
+                """
+            )
+            with self.assertRaisesRegex(db.sqlite3.OperationalError, "foreign key mismatch"):
+                conn.execute("PRAGMA foreign_key_check(legacy_child)").fetchall()
+            apply_task_chat_status_automation_migration(conn)
+            apply_task_chat_status_automation_migration(conn)
+            self.assertIsNotNone(conn.execute(
+                "SELECT 1 FROM schema_migrations WHERE name=?", (MIGRATION_NAME,)
+            ).fetchone())
+        finally:
+            conn.close()
+
+    def test_all_owned_foreign_keys_fail_before_reconciliation_and_roll_back(self) -> None:
+        owned_keys = (
+            ("task_type_chat_status_links", "task_type_id"),
+            ("task_type_chat_status_links", "chat_status_id"),
+            ("chat_task_status_state", "chat_id"),
+            ("chat_task_status_state", "active_task_id"),
+            ("task_chat_status_effects", "task_id"),
+            ("task_chat_status_effects", "chat_id"),
+            ("task_chat_status_effects", "chat_status_id"),
+        )
+        for table, column in owned_keys:
+            for existing_marker in (False, True):
+                for unrelated_orphan in (False, True):
+                    with self.subTest(table=table, column=column, marker=existing_marker,
+                                      unrelated_orphan=unrelated_orphan):
+                        conn = self._base_connection()
+                        try:
+                            apply_task_chat_status_automation_migration(conn)
+                            conn.executescript(
+                                """
+                                INSERT INTO chats VALUES (1, 'new');
+                                INSERT INTO task_types VALUES (1, 1);
+                                INSERT INTO chat_statuses VALUES (1, 'new', 1, 0);
+                                INSERT INTO tasks VALUES (1, 1, 1, 'new');
+                                INSERT INTO task_type_chat_status_links(task_type_id, chat_status_id)
+                                VALUES (1, 1);
+                                INSERT INTO chat_task_status_state(chat_id, cycle, active_task_id)
+                                VALUES (1, 1, 1);
+                                INSERT INTO task_chat_status_effects(
+                                    task_id, chat_id, cycle, chat_status_id, mapped_status_key
+                                ) VALUES (1, 1, 1, 1, 'new');
+                                """
+                            )
+                            if unrelated_orphan:
+                                self._add_unrelated_legacy_orphan(conn)
+                            # Only the synthetic imported fixture bypasses constraints.
+                            conn.execute("PRAGMA foreign_keys=OFF")
+                            conn.execute(f"UPDATE {table} SET {column}=901")
+                            if not existing_marker:
+                                conn.execute("DELETE FROM schema_migrations WHERE name=?", (MIGRATION_NAME,))
+                            conn.commit()
+                            conn.execute("PRAGMA foreign_keys=ON")
+                            before = tuple(conn.iterdump())
+                            with mock.patch(
+                                "app.task_chat_status_automation.reconcile_automation_state_conn"
+                            ) as reconcile:
+                                with self.assertRaisesRegex(RuntimeError, f"foreign-key data: {table}"):
+                                    with conn:
+                                        conn.execute("BEGIN IMMEDIATE")
+                                        conn.execute("UPDATE chats SET status='closed' WHERE id=1")
+                                        apply_task_chat_status_automation_migration(conn)
+                                reconcile.assert_not_called()
+                            self.assertEqual(before, tuple(conn.iterdump()))
+                            self.assertEqual(existing_marker, conn.execute(
+                                "SELECT 1 FROM schema_migrations WHERE name=?", (MIGRATION_NAME,)
+                            ).fetchone() is not None)
+                            self.assertEqual(1, conn.execute("PRAGMA foreign_keys").fetchone()[0])
+                        finally:
+                            conn.close()
+
+    def test_init_db_preserves_unrelated_legacy_orphan(self) -> None:
+        foundation._remove_test_runtime_files()
+        conn = foundation._REAL_SQLITE_CONNECT(str(foundation._DATABASE_PATH))
+        conn.row_factory = db.sqlite3.Row
+        try:
+            self._add_unrelated_legacy_orphan(conn)
+        finally:
+            conn.close()
+        for _ in range(2):
+            db.init_db()
+            with db.get_connection() as conn:
+                self.assertEqual((1, 901), tuple(conn.execute("SELECT * FROM legacy_child").fetchone()))
+                self.assertEqual(1, len(conn.execute("PRAGMA foreign_key_check(legacy_child)").fetchall()))
+                self.assertIsNotNone(conn.execute(
+                    "SELECT 1 FROM schema_migrations WHERE name=?", (MIGRATION_NAME,)
+                ).fetchone())
+
     def test_compatible_partial_schema_is_completed(self) -> None:
         conn = self._base_connection()
         try:
@@ -808,59 +936,6 @@ class TaskChatStatusMigrationContractTests(unittest.TestCase):
                 apply_task_chat_status_automation_migration(conn)
             self.assertIsNone(
                 conn.execute("SELECT 1 FROM schema_migrations WHERE name=?", (MIGRATION_NAME,)).fetchone()
-            )
-        finally:
-            conn.close()
-
-    def test_unrelated_foreign_key_violation_does_not_block_migration(self) -> None:
-        conn = self._base_connection()
-        try:
-            conn.execute("PRAGMA foreign_keys=OFF")
-            conn.executescript(
-                """
-                CREATE TABLE legacy_messages(
-                    id INTEGER PRIMARY KEY,
-                    chat_id INTEGER NOT NULL,
-                    FOREIGN KEY(chat_id) REFERENCES chats(id)
-                );
-                INSERT INTO legacy_messages(id, chat_id) VALUES (1, 999);
-                """
-            )
-            conn.execute("PRAGMA foreign_keys=ON")
-
-            self.assertTrue(conn.execute("PRAGMA foreign_key_check").fetchall())
-            apply_task_chat_status_automation_migration(conn)
-
-            self.assertIsNotNone(
-                conn.execute("SELECT 1 FROM schema_migrations WHERE name=?", (MIGRATION_NAME,)).fetchone()
-            )
-            self.assertTrue(
-                conn.execute("PRAGMA foreign_key_check(legacy_messages)").fetchall()
-            )
-        finally:
-            conn.close()
-
-    def test_automation_foreign_key_violation_still_fails_closed(self) -> None:
-        conn = self._base_connection()
-        try:
-            apply_task_chat_status_automation_migration(conn)
-            conn.commit()
-            conn.execute("PRAGMA foreign_keys=OFF")
-            conn.execute(
-                """
-                INSERT INTO task_type_chat_status_links(task_type_id, chat_status_id)
-                VALUES (999, 999)
-                """
-            )
-            conn.commit()
-            conn.execute("PRAGMA foreign_keys=ON")
-
-            with self.assertRaisesRegex(RuntimeError, "foreign-key data"):
-                apply_task_chat_status_automation_migration(conn)
-            self.assertTrue(
-                conn.execute(
-                    "PRAGMA foreign_key_check(task_type_chat_status_links)"
-                ).fetchall()
             )
         finally:
             conn.close()
