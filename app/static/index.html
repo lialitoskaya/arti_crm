@@ -536,8 +536,8 @@
             <p id="ozonFboKeysStatus">Проверяю ключи Ozon…</p>
           </div>
           <div class="ozon-fbo-hero-actions">
-            <button id="ozonFboCheckBtn" class="secondary" type="button">Проверить связь с Ozon</button>
-            <a id="ozonFboLkLink" class="button-like secondary" href="https://seller.ozon.ru/app/supply/orders?filter=SupplyPreparation" target="_blank" rel="noopener noreferrer">Заявки в кабинете Ozon</a>
+            <button id="ozonFboCheckBtn" class="secondary small" type="button">Проверить связь с Ozon</button>
+            <a id="ozonFboLkLink" class="button-like secondary small" href="https://seller.ozon.ru/app/supply/orders?filter=SupplyPreparation" target="_blank" rel="noopener noreferrer">Заявки в кабинете Ozon</a>
           </div>
         </section>
 
@@ -545,27 +545,26 @@
           <section class="settings-card panel-card ozon-fbo-form-card" aria-labelledby="ozonFboFormTitle">
             <div class="settings-card-head">
               <div>
-                <h3 id="ozonFboFormTitle">Запуск</h3>
-                <p class="muted">Пробный прогон ничего не создаёт. Заявки появляются только в боевых режимах и только после подтверждения плана.</p>
+                <h3 id="ozonFboFormTitle">Новая поставка</h3>
               </div>
             </div>
             <form id="ozonFboRunForm" class="settings-form ozon-fbo-form" novalidate>
               <fieldset class="ozon-fbo-fieldset">
                 <legend>Режим</legend>
-                <label class="ozon-fbo-choice"><input type="radio" name="ozonFboMode" value="trial" checked /><span>Пробный прогон — заявки не создаются, только расчёт «Факт» и слотов</span></label>
-                <label class="ozon-fbo-choice"><input type="radio" name="ozonFboMode" value="live" /><span>Боевой — создать заявки и сразу передать грузоместа</span></label>
-                <label class="ozon-fbo-choice"><input type="radio" name="ozonFboMode" value="live_nocargo" /><span>Боевой — создать заявки без грузомест</span></label>
-                <label class="ozon-fbo-choice"><input type="radio" name="ozonFboMode" value="cargo" /><span>Дозаполнить грузоместа по уже созданным заявкам</span></label>
+                <label class="ozon-fbo-choice"><input type="radio" name="ozonFboMode" value="trial" checked /><span>Пробная поставка и проверка слотов (заявки не создаются)</span></label>
+                <label class="ozon-fbo-choice"><input type="radio" name="ozonFboMode" value="live" /><span>Создать поставку и заполнить грузоместа</span></label>
+                <label class="ozon-fbo-choice"><input type="radio" name="ozonFboMode" value="live_nocargo" /><span>Создать поставку без грузомест</span></label>
+                <label class="ozon-fbo-choice"><input type="radio" name="ozonFboMode" value="cargo" /><span>Заполнить грузоместа по созданным поставкам</span></label>
               </fieldset>
 
               <div id="ozonFboPlanSource" class="ozon-fbo-source">
                 <fieldset class="ozon-fbo-fieldset ozon-fbo-fieldset-row">
-                  <legend>Откуда брать план</legend>
+                  <legend>План</legend>
                   <label class="ozon-fbo-choice"><input type="radio" name="ozonFboSource" value="file" checked /><span>Таблица .xlsx</span></label>
                   <label class="ozon-fbo-choice"><input type="radio" name="ozonFboSource" value="manual" /><span>Ручной ввод</span></label>
                 </fieldset>
                 <div id="ozonFboFileSource" class="ozon-fbo-source">
-                  <label>Файл .xlsx — лист, скачанный из Google Таблиц
+                  <label>Файл .xlsx
                     <input id="ozonFboFile" type="file" accept=".xlsx" />
                   </label>
                   <label>Лист
@@ -573,21 +572,20 @@
                   </label>
                 </div>
                 <div id="ozonFboManualSource" class="ozon-fbo-source hidden">
-                  <label>Строки «артикул; кластер; количество» — по одной на кластер
+                  <label>Строки «артикул; кластер; количество»
                     <textarea id="ozonFboManualText" rows="7" spellcheck="false" placeholder="AT-L-A3; Пермь; 10&#10;AT-P-P3; все; 20"></textarea>
                   </label>
-                  <p class="muted">Вместо артикула можно указать SKU Ozon, вместо кластера — «все». Можно вставить три столбца прямо из таблицы.</p>
-                  <label>Название списка, чтобы помнить созданные заявки
+                  <label>Название списка
                     <input id="ozonFboListName" value="ручной ввод" maxlength="120" />
                   </label>
                 </div>
-                <label>Артикулы через запятую, пусто — все видимые
+                <label>Артикулы через запятую (пусто — все)
                   <input id="ozonFboArticles" autocomplete="off" placeholder="AT-L-A3, AT-P-P3" />
                 </label>
               </div>
 
               <div id="ozonFboOrdersSource" class="ozon-fbo-source hidden">
-                <p class="muted">Заявки Ozon, которые ждут грузомест, в том числе созданные в личном кабинете. Загрузите список, оставьте выделенными нужные заявки и нажмите «Запустить».</p>
+                <p class="muted">Заявки Ozon, ожидающие грузомест. Загрузите список и оставьте выделенными нужные.</p>
                 <div class="ozon-fbo-orders-toolbar">
                   <button id="ozonFboLoadOrdersBtn" class="secondary" type="button">Загрузить заявки из Ozon</button>
                   <button id="ozonFboSelectAllOrdersBtn" class="secondary" type="button" disabled>Выделить все</button>
@@ -603,8 +601,8 @@
 
               <div class="ozon-fbo-flags">
                 <label class="ozon-fbo-choice"><input id="ozonFboForce" type="checkbox" /><span>Повторить по артикулам, у которых заявка уже есть</span></label>
-                <label class="ozon-fbo-choice"><input id="ozonFboConfirmEach" type="checkbox" /><span>Подтверждать каждый артикул отдельно, иначе один общий план после расчёта</span></label>
-                <label class="ozon-fbo-choice"><input id="ozonFboAutoConfirm" type="checkbox" /><span>Не спрашивать подтверждение вообще</span></label>
+                <label class="ozon-fbo-choice"><input id="ozonFboConfirmEach" type="checkbox" /><span>Подтверждать каждый артикул отдельно</span></label>
+                <label class="ozon-fbo-choice"><input id="ozonFboAutoConfirm" type="checkbox" /><span>Без подтверждения</span></label>
               </div>
 
               <div class="ozon-fbo-form-actions">
@@ -617,24 +615,24 @@
           <section class="panel-card ozon-fbo-run-card" aria-labelledby="ozonFboRunTitle">
             <div class="analytics-panel-head ozon-fbo-run-head">
               <div>
-                <h3 id="ozonFboRunTitle">Прогон</h3>
-                <p id="ozonFboRunMeta" class="muted">Прогонов ещё не было.</p>
+                <h3 id="ozonFboRunTitle">Поставка</h3>
+                <p id="ozonFboRunMeta" class="muted">Поставок ещё не было.</p>
               </div>
               <div class="ozon-fbo-run-actions">
                 <button id="ozonFboStopBtn" class="secondary" type="button" disabled>Остановить</button>
-                <button id="ozonFboReleaseBtn" class="secondary hidden" type="button">Снять зависший прогон</button>
+                <button id="ozonFboReleaseBtn" class="secondary hidden" type="button">Снять зависшую поставку</button>
               </div>
             </div>
             <div id="ozonFboQuestionBar" class="ozon-fbo-question-bar hidden" role="status">
-              <span id="ozonFboQuestionBarText">Прогон ждёт вашего ответа.</span>
+              <span id="ozonFboQuestionBarText">Нужен ваш ответ.</span>
               <button id="ozonFboOpenQuestionBtn" type="button">Открыть вопрос</button>
             </div>
             <div id="ozonFboRunFiles" class="ozon-fbo-run-files hidden">
               <a id="ozonFboResultLink" class="link-btn hidden" href="#">Скачать результат .xlsx</a>
-              <a id="ozonFboReportLink" class="link-btn" href="#">Отчёт прогона</a>
+              <a id="ozonFboReportLink" class="link-btn" href="#">Отчёт</a>
               <a id="ozonFboApiLogLink" class="link-btn" href="#">Логи запросов Ozon</a>
             </div>
-            <pre id="ozonFboLog" class="ozon-fbo-log" tabindex="0" aria-label="Журнал прогона"></pre>
+            <pre id="ozonFboLog" class="ozon-fbo-log" tabindex="0" aria-label="Журнал"></pre>
             <div class="analytics-table ozon-fbo-results">
               <table>
                 <thead><tr><th>Артикул</th><th>Кластер</th><th class="ozon-fbo-num">План</th><th class="ozon-fbo-num">Факт</th><th>Статус</th><th>Примечание</th></tr></thead>
@@ -648,15 +646,14 @@
           <section class="settings-card panel-card" aria-labelledby="ozonFboHistoryTitle">
             <div class="settings-card-head">
               <div>
-                <h3 id="ozonFboHistoryTitle">История прогонов</h3>
-                <p class="muted">Последние прогоны. Журнал, результаты и файлы открываются в панели прогона.</p>
+                <h3 id="ozonFboHistoryTitle">История</h3>
               </div>
               <button id="ozonFboHistoryRefreshBtn" class="secondary small" type="button">Обновить</button>
             </div>
             <div class="analytics-table ozon-fbo-history">
               <table>
                 <thead><tr><th>Дата</th><th>Режим</th><th>Список</th><th>Статус</th><th>Итог</th><th aria-label="Действия"></th></tr></thead>
-                <tbody id="ozonFboHistoryRows"><tr><td colspan="6" class="muted">Прогонов ещё не было.</td></tr></tbody>
+                <tbody id="ozonFboHistoryRows"><tr><td colspan="6" class="muted">Поставок ещё не было.</td></tr></tbody>
               </table>
             </div>
           </section>
@@ -665,22 +662,21 @@
             <div class="settings-card-head">
               <div>
                 <h3 id="ozonFboSettingsTitle">Настройки</h3>
-                <p class="muted">Параметры расчёта и грузомест. Ключи Ozon здесь не хранятся: они берутся из переменных среды сервера.</p>
               </div>
             </div>
             <form id="ozonFboSettingsForm" class="settings-form ozon-fbo-settings" novalidate>
               <div class="ozon-fbo-settings-grid">
                 <label>Вместимость грузоместа по умолчанию, шт.<input id="ozonFboSetting_default_cargo_capacity" type="number" min="1" step="1" /></label>
-                <label>Тип грузоместа для Ozon (BOX — короб)<input id="ozonFboSetting_cargo_type" /></label>
-                <label>Точка сдачи (название как у Ozon)<input id="ozonFboSetting_drop_off_name" /></label>
-                <label>Слот не раньше чем через N дней<input id="ozonFboSetting_min_slot_offset_days" type="number" min="0" step="1" /></label>
-                <label>Сколько окон по 28 дней смотреть вперёд при выборе слота<input id="ozonFboSetting_slot_max_windows" type="number" min="1" step="1" /></label>
+                <label>Тип грузоместа (BOX — короб)<input id="ozonFboSetting_cargo_type" /></label>
+                <label>Точка сдачи<input id="ozonFboSetting_drop_off_name" /></label>
+                <label>Слот не раньше чем через, дней<input id="ozonFboSetting_min_slot_offset_days" type="number" min="0" step="1" /></label>
+                <label>Окон по 28 дней при выборе слота<input id="ozonFboSetting_slot_max_windows" type="number" min="1" step="1" /></label>
                 <label>Минимум штук в кластер<input id="ozonFboSetting_min_qty" type="number" min="1" step="1" /></label>
-                <label>Кратность количества (если не равно плану)<input id="ozonFboSetting_step" type="number" min="1" step="1" /></label>
-                <label>Пауза перед повтором, если Ozon ответил «кластер недоступен», сек<input id="ozonFboSetting_unavailable_retry_sec" type="number" min="1" step="1" /></label>
+                <label>Кратность количества<input id="ozonFboSetting_step" type="number" min="1" step="1" /></label>
+                <label>Пауза при «кластер недоступен», сек<input id="ozonFboSetting_unavailable_retry_sec" type="number" min="1" step="1" /></label>
               </div>
-              <label>Вместимость для отдельных артикулов (артикул = штук, по одному на строку)<textarea id="ozonFboSetting_cargo_capacity" rows="4" spellcheck="false" placeholder="AT-L-AM-S = 5"></textarea></label>
-              <label>Какие кластеры считать «все» (названия как у Ozon, по одному на строку; пусто — все кластеры России)<textarea id="ozonFboSetting_all_clusters" rows="4" spellcheck="false"></textarea></label>
+              <label>Вместимость по артикулам (артикул = штук, по строке)<textarea id="ozonFboSetting_cargo_capacity" rows="4" spellcheck="false" placeholder="AT-L-AM-S = 5"></textarea></label>
+              <label>Кластеры для «все» (по одному на строку)<textarea id="ozonFboSetting_all_clusters" rows="4" spellcheck="false"></textarea></label>
               <div class="ozon-fbo-form-actions">
                 <p id="ozonFboSettingsStatus" class="ozon-fbo-status" role="status" aria-live="polite"></p>
                 <button id="ozonFboSaveSettingsBtn" class="secondary" type="submit">Сохранить настройки</button>

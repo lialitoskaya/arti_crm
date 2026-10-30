@@ -9093,10 +9093,10 @@ document.addEventListener('keydown', (event) => {
 // ---------------------------------------------------------------------------
 const OZON_FBO_POLL_MS = 2000;
 const OZON_FBO_MODE_LABELS = {
-  trial: 'Пробный прогон',
-  live: 'Боевой с грузоместами',
-  live_nocargo: 'Боевой без грузомест',
-  cargo: 'Дозаполнение грузомест',
+  trial: 'Пробная поставка',
+  live: 'Поставка с грузоместами',
+  live_nocargo: 'Поставка без грузомест',
+  cargo: 'Заполнение грузомест',
 };
 const OZON_FBO_STATUS_LABELS = {
   queued: 'В очереди',
@@ -9183,8 +9183,8 @@ function ozonFboApplyModeVisibility() {
   if (force) force.disabled = mode === 'cargo';
   const startBtn = $('ozonFboStartBtn');
   if (startBtn) {
-    startBtn.textContent = mode === 'cargo' ? 'Запустить передачу грузомест'
-      : mode === 'trial' ? 'Запустить пробный прогон' : 'Запустить боевой прогон';
+    startBtn.textContent = mode === 'cargo' ? 'Заполнить грузоместа'
+      : mode === 'trial' ? 'Проверить слоты' : 'Создать поставку';
   }
 }
 
@@ -9204,8 +9204,8 @@ async function loadOzonFboStatus() {
   const keysEl = $('ozonFboKeysStatus');
   if (keysEl) {
     keysEl.textContent = status?.keys_configured
-      ? 'Ключи Ozon заданы на сервере, значения скрыты. Пробный прогон ничего не создаёт в кабинете.'
-      : 'Ключи Ozon не заданы: задайте OZON_CLIENT_ID и OZON_API_KEY в окружении сервера и перезапустите приложение.';
+      ? 'Ключи Ozon заданы на сервере.'
+      : 'Ключи Ozon не заданы: задайте OZON_CLIENT_ID и OZON_API_KEY на сервере и перезапустите приложение.';
     keysEl.dataset.kind = status?.keys_configured ? '' : 'error';
   }
   const lk = $('ozonFboLkLink');
@@ -9413,14 +9413,14 @@ async function submitOzonFboRun(event) {
   ozonFbo.submitInFlight = true;
   const btn = $('ozonFboStartBtn');
   if (btn) btn.disabled = true;
-  ozonFboSetStatus('ozonFboFormStatus', 'Запускаю прогон…', '');
+  ozonFboSetStatus('ozonFboFormStatus', 'Запускаю…', '');
   try {
     const run = await apiForm('/api/ozon-fbo/runs', form);
-    ozonFboSetStatus('ozonFboFormStatus', `Прогон №${run.id} запущен.`, 'success');
+    ozonFboSetStatus('ozonFboFormStatus', `Поставка №${run.id} запущена.`, 'success');
     watchOzonFboRun(run.id, { reset: true });
     loadOzonFboHistory().catch(() => {});
   } catch (err) {
-    ozonFboSetStatus('ozonFboFormStatus', `Прогон не запущен: ${ozonFboErrorText(err)}`, 'error');
+    ozonFboSetStatus('ozonFboFormStatus', `Не запущено: ${ozonFboErrorText(err)}`, 'error');
     if (btn) btn.disabled = false;
   } finally {
     ozonFbo.submitInFlight = false;
@@ -9525,7 +9525,7 @@ function ozonFboHeartbeatAge(run) {
 
 function renderOzonFboRun(run) {
   const title = $('ozonFboRunTitle');
-  if (title) title.textContent = `Прогон №${run.id}`;
+  if (title) title.textContent = `Поставка №${run.id}`;
   const meta = $('ozonFboRunMeta');
   if (meta) {
     const parts = [
@@ -9571,8 +9571,8 @@ function renderOzonFboRun(run) {
     const barText = $('ozonFboQuestionBarText');
     if (barText) {
       barText.textContent = run.question_kind === 'duplicates'
-        ? 'Сегодня уже есть такие заявки — прогон ждёт вашего решения.'
-        : run.question_kind === 'plan' ? 'План готов — прогон ждёт подтверждения.' : 'Прогон ждёт вашего ответа.';
+        ? 'Сегодня уже есть такие заявки — нужно ваше решение.'
+        : run.question_kind === 'plan' ? 'План готов — нужно подтверждение.' : 'Нужен ваш ответ.';
     }
     const key = `${run.id}:${run.question_seq ?? `${run.question_kind}:${String(run.question_text).length}`}`;
     if (key !== ozonFbo.questionKey) {
@@ -9665,7 +9665,7 @@ async function answerOzonFboDecision(answer) {
 async function stopOzonFboRun() {
   const run = ozonFbo.run;
   if (!run || !run.is_active) return;
-  if (!window.confirm('Остановить прогон после текущего артикула? Созданные заявки останутся.')) return;
+  if (!window.confirm('Остановить после текущего артикула? Созданные заявки останутся.')) return;
   try {
     await api(`/api/ozon-fbo/runs/${run.id}/stop`, { method: 'POST', body: '{}' });
     scheduleOzonFboPoll(200);
@@ -9677,13 +9677,13 @@ async function stopOzonFboRun() {
 async function releaseOzonFboRun() {
   const run = ozonFbo.run;
   if (!run || !run.is_active) return;
-  if (!window.confirm('Пометить прогон прерванным? Делайте это только если рабочий процесс действительно перестал отвечать.')) return;
+  if (!window.confirm('Пометить поставку прерванной? Только если процесс действительно перестал отвечать.')) return;
   try {
     await api(`/api/ozon-fbo/runs/${run.id}/release`, { method: 'POST', body: '{}' });
     scheduleOzonFboPoll(200);
     loadOzonFboStatus().catch(() => {});
   } catch (err) {
-    ozonFboSetStatus('ozonFboFormStatus', `Не удалось снять прогон: ${ozonFboErrorText(err)}`, 'error');
+    ozonFboSetStatus('ozonFboFormStatus', `Не удалось снять: ${ozonFboErrorText(err)}`, 'error');
   }
 }
 
@@ -9711,7 +9711,7 @@ function renderOzonFboHistory(runs) {
   const tbody = $('ozonFboHistoryRows');
   if (!tbody) return;
   if (!runs.length) {
-    tbody.innerHTML = '<tr><td colspan="6" class="muted">Прогонов ещё не было.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" class="muted">Поставок ещё не было.</td></tr>';
     return;
   }
   tbody.innerHTML = runs.map(run => `<tr>

@@ -79,7 +79,7 @@ class OzonFboMarkupTests(unittest.TestCase):
     def test_empty_states_are_explicit(self) -> None:
         view = _block(INDEX, '<main id="ozonFboView"', '<main id="reviewsView"')
         self.assertIn("Результатов пока нет.", view)
-        self.assertIn("Прогонов ещё не было.", view)
+        self.assertIn("Поставок ещё не было.", view)
         self.assertIn("Заявки ещё не загружены.", view)
         self.assertIn('content: "Журнал появится после запуска."', STYLES)
 
@@ -154,7 +154,7 @@ const Date_now = Date.now;
 const active = { id: 7, status: 'running', is_active: true, mode: 'live', sheet_name: 'лист <x>', created_by_label: 'admin',
   created_at: '2026-10-29 10:00:00', heartbeat_at: new Date(Date_now() - 5000).toISOString(), stop_requested: false, has_result_file: false, has_api_log: false };
 renderOzonFboRun(active);
-assert.equal(elements.ozonFboRunTitle.textContent, 'Прогон №7');
+assert.equal(elements.ozonFboRunTitle.textContent, 'Поставка №7');
 assert.match(elements.ozonFboRunMeta.markup, /ozon-fbo-state-running/);
 assert.match(elements.ozonFboRunMeta.markup, /лист &lt;x&gt;/);
 assert.equal(elements.ozonFboStopBtn.disabled, false);
