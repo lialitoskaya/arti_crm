@@ -9531,7 +9531,7 @@ function renderOzonFboRun(run) {
         ? 'Сегодня уже есть такие заявки — прогон ждёт вашего решения.'
         : run.question_kind === 'plan' ? 'План готов — прогон ждёт подтверждения.' : 'Прогон ждёт вашего ответа.';
     }
-    const key = `${run.id}:${run.question_kind}:${String(run.question_text).length}`;
+    const key = `${run.id}:${run.question_seq ?? `${run.question_kind}:${String(run.question_text).length}`}`;
     if (key !== ozonFbo.questionKey) {
       ozonFbo.questionKey = key;
       openOzonFboDecision(run);

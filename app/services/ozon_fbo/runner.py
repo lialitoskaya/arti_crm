@@ -141,10 +141,10 @@ class RunContext:
         fbo_repo.set_run_question(self.run_id, kind, text)
         deadline = time.monotonic() + self.answer_timeout
         while True:
+            current = self._ensure_active()
             answered = self._take_answer()
             if answered is not None:
                 return answered
-            current = self._ensure_active()
             if current["stop_requested"]:
                 self.stop_seen = True
             if current["stop_requested"] or time.monotonic() >= deadline:
@@ -153,6 +153,7 @@ class RunContext:
                     answered = self._take_answer()
                     if answered is not None:
                         return answered
+                    self._ensure_active()   # вопрос не снят и ответа нет — значит прогон закрыт извне
                 self.say("  остановлено пользователем во время ожидания ответа — считаю ответ «нет»"
                          if current["stop_requested"] else "  ответ не получен — считаю ответ «нет»")
                 return False

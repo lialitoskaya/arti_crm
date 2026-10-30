@@ -177,6 +177,8 @@ assert.ok(!elements.ozonFboQuestionBar.classes.has('hidden'));
 assert.match(elements.ozonFboQuestionBarText.textContent, /такие заявки/i);
 renderOzonFboRun(asking);
 assert.equal(opened, 1, 'тот же вопрос второй раз не переоткрывается');
+renderOzonFboRun({ ...asking, question_seq: 4 });
+assert.equal(opened, 2, 'следующий вопрос с тем же текстом открывается заново по question_seq');
 const finished = { ...active, status: 'finished', is_active: false, has_result_file: true, finished_at: '2026-10-29 10:20:00', error_text: '' };
 renderOzonFboRun(finished);
 assert.equal(closed, 1, 'после ответа диалог закрывается');

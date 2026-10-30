@@ -293,7 +293,7 @@ def finish_run(run_id: int, status: str, *, summary: dict[str, Any] | None = Non
         raise ValueError(f"Недопустимый итоговый статус: {status}")
     fields: dict[str, Any] = dict(status=status, is_active=None, finished_at=_now(), heartbeat_at=_now(),
                                   summary_json=_dumps(summary or {}), error_text=str(error_text or ""),
-                                  question_kind=None, question_text=None)
+                                  question_kind=None, question_text=None, answer=None)
     if result_file is not None:
         fields["result_file_name"] = result_file_name
         fields["result_file"] = result_file
@@ -405,14 +405,15 @@ def answer_run(run_id: int, answer: str, question_seq: Optional[int] = None) -> 
 
 
 def take_run_answer(run_id: int) -> Optional[str]:
-    """Рабочий поток забирает ответ и снимает вопрос; None — ответа ещё нет."""
+    """Рабочий поток забирает ответ и снимает вопрос; None — ответа ещё нет или прогон уже не активен."""
     with get_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute("SELECT answer, stop_requested FROM ozon_fbo_runs WHERE id=?", (int(run_id),)).fetchone()
+        row = conn.execute("SELECT answer FROM ozon_fbo_runs WHERE id=? AND is_active=1", (int(run_id),)).fetchone()
         if row is None or row["answer"] is None:
             return None
         conn.execute(
-            "UPDATE ozon_fbo_runs SET status='running', question_kind=NULL, question_text=NULL, answer=NULL, heartbeat_at=? WHERE id=?",
+            "UPDATE ozon_fbo_runs SET status='running', question_kind=NULL, question_text=NULL, answer=NULL, heartbeat_at=? "
+            "WHERE id=? AND is_active=1",
             (_now(), int(run_id)),
         )
         return str(row["answer"])
@@ -452,6 +453,7 @@ def mark_stale_runs_interrupted(max_heartbeat_age_seconds: int, *, force_run_id:
             conn.execute(
                 """
                 UPDATE ozon_fbo_runs SET status='interrupted', is_active=NULL, finished_at=?, question_kind=NULL, question_text=NULL,
+                    answer=NULL,
                     error_text=CASE WHEN error_text='' THEN 'Прогон прерван: рабочий процесс перестал отвечать.' ELSE error_text END
                 WHERE id=?
                 """,

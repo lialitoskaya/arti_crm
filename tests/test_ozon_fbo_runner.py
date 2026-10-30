@@ -157,6 +157,38 @@ class OzonFboRunnerTests(unittest.TestCase):
         self.assertIn("прерван", stored["error_text"])
         self.assertEqual(api.supply_calls, [], "после снятия прогона заявки не создаются")
 
+    def test_late_answer_during_stop_is_honoured(self) -> None:
+        """Ответ, пришедший между проверкой и снятием вопроса, учитывается, а не теряется."""
+        run = self._run(mode="live")
+        api = BatchApi({}, DAYS)
+        original_clear = fbo_repo.clear_run_question
+
+        def sleep(seconds: float) -> None:
+            if fbo_repo.get_run(run["id"])["question_kind"]:
+                fbo_repo.request_stop(run["id"])
+
+        def racing_clear(run_id: int) -> bool:
+            fbo_repo.answer_run(run_id, "yes")          # ответ успел прийти прямо перед снятием вопроса
+            return original_clear(run_id)
+
+        with mock.patch.object(fbo_repo, "clear_run_question", racing_clear):
+            result = self._execute(run["id"], api, sleep=sleep)
+        text = fbo_repo.get_run_log_text(run["id"])
+        self.assertIn("ответ пользователя: да", text, "поздний ответ учтён")
+        self.assertNotIn("считаю ответ «нет»", text)
+        self.assertEqual(result["status"], "stopped", "остановка всё равно действует")
+        self.assertEqual(api.supply_calls, [], "после остановки заявка не создаётся")
+
+    def test_leftover_answer_on_closed_run_is_ignored(self) -> None:
+        run = self._run(mode="live")
+        fbo_repo.mark_run_started(run["id"], "")
+        seq = fbo_repo.set_run_question(run["id"], "plan", "ПЛАН…")
+        self.assertTrue(fbo_repo.answer_run(run["id"], "yes", seq))
+        fbo_repo.mark_stale_runs_interrupted(0, force_run_id=run["id"])
+        self.assertIsNone(fbo_repo.take_run_answer(run["id"]), "ответ закрытого прогона не выдаётся")
+        stored = fbo_repo.get_run(run["id"])
+        self.assertEqual((stored["status"], stored["answer"]), ("interrupted", None))
+
     def test_answer_timeout_counts_as_no(self) -> None:
         run = self._run(mode="live")
         api = BatchApi({}, DAYS)
@@ -325,10 +357,6 @@ class OzonFboRunnerTests(unittest.TestCase):
                 fbo_repo.request_stop(run["id"])
             return original(sku, cluster_qty, drop_off, name)
         api.create_draft = create_draft
-        with mock.patch("time.sleep", lambda s: None):
-            from app.services.ozon_fbo import runner as r
-            with mock.patch.object(r, "execute_run", wraps=r.execute_run):
-                pass
         # draft_ttl: состаренный черновик заставляет пересобрать его перед заявкой (refresh), где и приходит стоп
         from app.services.ozon_fbo import pipeline as pipe
         original_batch = pipe.create_orders_batch
