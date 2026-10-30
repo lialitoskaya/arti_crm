@@ -6363,6 +6363,28 @@ html[data-theme] #noteText:focus-visible {
   }
 }
 
+/* =========================================================
+   Arti CRM — section token layer (все разделы, кроме чатов)
+   Назначение: контраст подписей и placeholder (WCAG AA ≥ 4.5:1), видимый фокус,
+   границы полей. Область: main.view:not(#chatsView), .app-nav, #loginScreen.
+   Раздел чатов (#chatsView) намеренно не затронут — см. audit/chat-exclusions.md.
+   Условие удаления слоя: перенос значений в глобальные токены (:root / html[data-theme])
+   отдельным решением владельца; до этого слой — единственное место переопределения.
+   ========================================================= */
+main.view:not(#chatsView),
+.app-nav,
+#loginScreen {
+  --crm-muted: #5f6c80;   /* было #7a879b (3.6:1) → 5.3:1 на панели */
+  --crm-muted-2: #64738a; /* placeholder: было #a0aabb (2.3:1) → 4.8:1 */
+}
+html[data-theme="dark"] :is(main.view:not(#chatsView), .app-nav, #loginScreen) {
+  --crm-muted: #aeb9c9;   /* 5.2:1 на тёмной панели rgb(54 64 92) */
+  --crm-muted-2: #a0acbe; /* placeholder 4.5:1 на панели, 6.9:1 в поле */
+}
+html[data-theme="dark"] :is(main.view:not(#chatsView), #loginScreen) :is(input, textarea)::placeholder {
+  color: var(--crm-muted-2) !important; /* перебивает жёсткий #7f8da3 !important слоя v55 */
+}
+
 /* ---- Поставки FBO Ozon: раздел запуска прогонов. Только существующие токены, без override-слоёв. ---- */
 .ozon-fbo-hero { align-items: flex-start; }
 .ozon-fbo-hero p { margin: 5px 0 0; color: var(--crm-muted); font-size: 13px; }
