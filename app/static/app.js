@@ -9081,6 +9081,7 @@ const ozonFbo = {
   selectedOrders: new Set(),
   questionKey: '',
   staleAfterSeconds: 180,
+  decisionOpener: null,
 };
 
 function ozonFboSetStatus(id, text, kind = '') {
@@ -9515,7 +9516,10 @@ function renderOzonFboRun(run) {
     const report = $('ozonFboReportLink');
     if (report) report.href = `/api/ozon-fbo/runs/${run.id}/report.txt`;
     const apiLog = $('ozonFboApiLogLink');
-    if (apiLog) apiLog.href = `/api/ozon-fbo/runs/${run.id}/api-log.zip`;
+    if (apiLog) {
+      apiLog.href = `/api/ozon-fbo/runs/${run.id}/api-log`;
+      apiLog.classList.toggle('hidden', !run.has_api_log);
+    }
   }
   const awaiting = run.status === 'awaiting_answer' && run.question_text;
   const bar = $('ozonFboQuestionBar');
@@ -9554,6 +9558,9 @@ function ozonFboDecisionLabels(run) {
 function openOzonFboDecision(run) {
   const modal = $('ozonFboDecisionModal');
   if (!modal || !run?.question_text) return;
+  if (modal.classList.contains('hidden')) {
+    ozonFbo.decisionOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  }
   const labels = ozonFboDecisionLabels(run);
   if ($('ozonFboDecisionTitle')) $('ozonFboDecisionTitle').textContent = labels.title;
   if ($('ozonFboDecisionHint')) $('ozonFboDecisionHint').textContent = labels.hint;
@@ -9570,6 +9577,27 @@ function closeOzonFboDecision() {
   if (!modal || modal.classList.contains('hidden')) return;
   modal.classList.add('hidden');
   modal.setAttribute('aria-hidden', 'true');
+  const bar = $('ozonFboQuestionBar');
+  const target = bar && !bar.classList.contains('hidden') ? $('ozonFboOpenQuestionBtn') : ozonFbo.decisionOpener;
+  ozonFbo.decisionOpener = null;
+  if (target && typeof target.focus === 'function' && document.body.contains(target)) target.focus();
+}
+
+function trapOzonFboDecisionFocus(event) {
+  const modal = $('ozonFboDecisionModal');
+  if (!modal || modal.classList.contains('hidden') || event.key !== 'Tab') return;
+  const focusable = [...modal.querySelectorAll('button:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+    .filter(el => !el.closest('.hidden'));
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && (document.activeElement === first || !modal.contains(document.activeElement))) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && (document.activeElement === last || !modal.contains(document.activeElement))) {
+    event.preventDefault();
+    first.focus();
+  }
 }
 
 async function answerOzonFboDecision(answer) {
@@ -9580,7 +9608,7 @@ async function answerOzonFboDecision(answer) {
   if (yes) yes.disabled = true;
   if (no) no.disabled = true;
   try {
-    await api(`/api/ozon-fbo/runs/${run.id}/answer`, { method: 'POST', body: JSON.stringify({ answer }) });
+    await api(`/api/ozon-fbo/runs/${run.id}/answer`, { method: 'POST', body: JSON.stringify({ answer, question_seq: run.question_seq ?? null }) });
     closeOzonFboDecision();
     scheduleOzonFboPoll(200);
   } catch (err) {
@@ -9699,4 +9727,5 @@ function bindOzonFboControls() {
 
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !$('ozonFboDecisionModal')?.classList.contains('hidden')) closeOzonFboDecision();
+  else if (event.key === 'Tab') trapOzonFboDecisionFocus(event);
 });

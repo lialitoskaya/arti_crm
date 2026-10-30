@@ -42,6 +42,10 @@ HEARTBEAT_SECONDS = 10.0
 STALE_HEARTBEAT_SECONDS = 180            # без heartbeat дольше трёх минут прогон считается прерванным
 
 
+class RunAbandonedError(RuntimeError):
+    """Прогон уже завершён извне (помечен прерванным или снят), рабочему потоку продолжать нельзя."""
+
+
 def log_base_dir() -> Path:
     raw = os.environ.get("OZON_FBO_LOG_DIR", "").strip()
     path = Path(raw) if raw else PROJECT_ROOT / "logs" / "ozon_fbo"
@@ -62,7 +66,7 @@ def recover_interrupted_runs() -> list[int]:
 def _tone(res: ArticleResult, line, note: str) -> str:
     if line.fact == 0:
         return "zero"
-    if res.manual or "РУЧНАЯ" in note:
+    if res.manual:
         return "manual"
     return "ok" if line.fact else "none"
 
@@ -106,36 +110,58 @@ class RunContext:
         self.answer_timeout = answer_timeout
         self.results: list[ArticleResult] = []
         self.mode = "trial"
+        self.stop_seen = False      # пользователь нажал «Остановить» во время вопроса или между шагами
 
     def say(self, text: str = "") -> None:
         fbo_repo.append_run_log(self.run_id, text)
 
+    def _ensure_active(self) -> dict[str, Any]:
+        current = fbo_repo.get_run(self.run_id)
+        if current is None or not current["is_active"]:
+            raise RunAbandonedError(f"Прогон {self.run_id} уже завершён извне")
+        return current
+
     def should_stop(self) -> bool:
-        return fbo_repo.is_stop_requested(self.run_id)
+        current = fbo_repo.get_run(self.run_id)
+        if current is None or not current["is_active"]:
+            return True
+        if current["stop_requested"]:
+            self.stop_seen = True
+            return True
+        return False
+
+    def _take_answer(self) -> Optional[bool]:
+        answer = fbo_repo.take_run_answer(self.run_id)
+        if answer is None:
+            return None
+        self.say("  ответ пользователя: " + ("да" if answer == "yes" else "нет"))
+        return answer == "yes"
 
     def wait_answer(self, kind: str, text: str) -> bool:
         fbo_repo.set_run_question(self.run_id, kind, text)
         deadline = time.monotonic() + self.answer_timeout
         while True:
-            answer = fbo_repo.take_run_answer(self.run_id)
-            if answer is not None:
-                self.say("  ответ пользователя: " + ("да" if answer == "yes" else "нет"))
-                return answer == "yes"
-            if fbo_repo.is_stop_requested(self.run_id):
-                fbo_repo.clear_run_question(self.run_id)
-                self.say("  остановлено пользователем во время ожидания ответа — считаю ответ «нет»")
-                return False
-            if time.monotonic() >= deadline:
-                fbo_repo.clear_run_question(self.run_id)
-                self.say("  ответ не получен — считаю ответ «нет»")
+            answered = self._take_answer()
+            if answered is not None:
+                return answered
+            current = self._ensure_active()
+            if current["stop_requested"]:
+                self.stop_seen = True
+            if current["stop_requested"] or time.monotonic() >= deadline:
+                # вопрос снимается только если ответ не успел прийти; иначе честно учитываем ответ
+                if not fbo_repo.clear_run_question(self.run_id):
+                    answered = self._take_answer()
+                    if answered is not None:
+                        return answered
+                self.say("  остановлено пользователем во время ожидания ответа — считаю ответ «нет»"
+                         if current["stop_requested"] else "  ответ не получен — считаю ответ «нет»")
                 return False
             self.sleep(ANSWER_POLL_SECONDS)
 
-    def confirm(self, prompt: str, auto_confirm: bool) -> bool:
+    def confirm(self, prompt: str, auto_confirm: bool, kind: str = "confirm") -> bool:
         if auto_confirm:
             self.say("  (подтверждено автоматически)")
             return True
-        kind = "plan" if prompt.startswith(("ПЛАН ПОСТАВОК", "ГРУЗОМЕСТА")) or prompt.count("\n") > 12 else "confirm"
         return self.wait_answer(kind, prompt)
 
     def ask_duplicates(self, prompt: str) -> bool:
@@ -143,13 +169,13 @@ class RunContext:
         return self.wait_answer("duplicates", prompt)
 
     def on_result(self, res: ArticleResult, stage: str) -> None:
-        if res not in self.results:
+        if not any(existing is res for existing in self.results):
             self.results.append(res)
         fbo_repo.replace_run_rows(self.run_id, rows_for_results(self.results, self.mode))
 
 
-def _heartbeat_loop(run_id: int, stop: threading.Event) -> None:
-    while not stop.wait(HEARTBEAT_SECONDS):
+def _heartbeat_loop(run_id: int, stop: threading.Event, interval: float = HEARTBEAT_SECONDS) -> None:
+    while not stop.wait(interval):
         try:
             fbo_repo.heartbeat_run(run_id)
         except Exception:  # noqa: BLE001 — heartbeat не должен ронять прогон
@@ -166,7 +192,7 @@ def start_run(run_id: int) -> threading.Thread:
 def execute_run(run_id: int, *, api_factory: Optional[Callable[[RunLog], Any]] = None,
                 store: Optional[FboStateStore] = None, sleep: Callable[[float], None] = time.sleep,
                 now: Optional[datetime] = None, heartbeat: bool = True,
-                answer_timeout: float = ANSWER_TIMEOUT_SECONDS) -> dict[str, Any]:
+                answer_timeout: float = ANSWER_TIMEOUT_SECONDS, heartbeat_interval: float = HEARTBEAT_SECONDS) -> dict[str, Any]:
     """Выполняет прогон синхронно (вызывается из потока start_run или напрямую из тестов)."""
     run = fbo_repo.get_run(run_id)
     if run is None:
@@ -183,10 +209,12 @@ def execute_run(run_id: int, *, api_factory: Optional[Callable[[RunLog], Any]] =
     stop_heartbeat = threading.Event()
     hb_thread: Optional[threading.Thread] = None
     if heartbeat:
-        hb_thread = threading.Thread(target=_heartbeat_loop, args=(run_id, stop_heartbeat), name=f"ozon-fbo-hb-{run_id}", daemon=True)
+        hb_thread = threading.Thread(target=_heartbeat_loop, args=(run_id, stop_heartbeat, heartbeat_interval),
+                                     name=f"ozon-fbo-hb-{run_id}", daemon=True)
         hb_thread.start()
     status = "failed"
     error_text = ""
+    abandoned = False
     summary: dict[str, Any] = {"mode": run["mode"]}
     result_name: Optional[str] = None
     result_bytes: Optional[bytes] = None
@@ -194,7 +222,7 @@ def execute_run(run_id: int, *, api_factory: Optional[Callable[[RunLog], Any]] =
     try:
         for err in settings_errors:
             ctx.say(f"Настройки: {err}")
-        log = RunLog(log_dir, on_line=lambda line: None)
+        log = RunLog(log_dir, on_line=ctx.say)   # паузы лимитов и предупреждения клиента Ozon видны в журнале
         if api_factory is not None:
             api = api_factory(log)
         else:
@@ -208,10 +236,14 @@ def execute_run(run_id: int, *, api_factory: Optional[Callable[[RunLog], Any]] =
         fbo_repo.replace_run_rows(run_id, rows_for_results(outcome.results, run["mode"]))
         if outcome.interrupted is not None and not isinstance(outcome.interrupted, KeyboardInterrupt):
             status, error_text = "failed", str(outcome.interrupted)
-        elif outcome.stopped:
+        elif outcome.stopped or ctx.stop_seen:
             status = "stopped"
         else:
             status = "finished"
+    except RunAbandonedError as e:
+        abandoned = True
+        error_text = str(e)
+        logger.warning("ozon_fbo run %s abandoned: %s", run_id, e)
     except AuthError as e:
         error_text = f"Ozon не принял ключи API или у ключа нет прав ({e.path}): {short(e.data, 300)}"
         ctx.say("ОШИБКА: " + error_text)
@@ -225,16 +257,19 @@ def execute_run(run_id: int, *, api_factory: Optional[Callable[[RunLog], Any]] =
     finally:
         stop_heartbeat.set()
         if hb_thread is not None:
-            hb_thread.join(timeout=HEARTBEAT_SECONDS + 1)
+            hb_thread.join(timeout=heartbeat_interval + 1)
         if api is not None and hasattr(api, "close"):
             try:
                 api.close()
             except Exception:  # noqa: BLE001
                 pass
-        if fbo_repo.is_stop_requested(run_id) and status == "finished":
-            status = "stopped"
-        fbo_repo.finish_run(run_id, status, summary=summary, error_text=error_text,
-                            result_file_name=result_name, result_file=result_bytes)
+        current = fbo_repo.get_run(run_id)
+        if abandoned or current is None or not current["is_active"]:
+            # прогон уже закрыт извне (прерван или снят): итог другого процесса не перезаписываем
+            status = str(current["status"]) if current else "interrupted"
+        else:
+            fbo_repo.finish_run(run_id, status, summary=summary, error_text=error_text,
+                                result_file_name=result_name, result_file=result_bytes)
     return {"status": status, "summary": summary, "error_text": error_text}
 
 
@@ -250,14 +285,18 @@ def _execute_inner(run: dict[str, Any], ctx: RunContext, api: Any, store: FboSta
     ctx.say(f"Запустил: {run.get('created_by_label') or '?'}")
 
     def confirm(prompt: str) -> bool:
-        return ctx.confirm(prompt, auto_confirm)
+        return ctx.confirm(prompt, auto_confirm, kind="confirm")
+
+    def confirm_plan(prompt: str) -> bool:
+        return ctx.confirm(prompt, auto_confirm, kind="plan")
 
     if mode == "cargo":
         keys = [str(k).strip() for k in options_raw.get("order_keys") or [] if str(k).strip()]
         ctx.say(f"Сейчас по Москве: {moment:%d.%m.%Y %H:%M}. Заявки: " + (", ".join("№" + k for k in keys) if keys else "все ожидающие"))
         outcome = run_cargo_orders_pipeline(api, store, keys or None, ctx.say, confirm, log, ctx.should_stop,
-                                            confirm_each=confirm_each, auto_confirm=auto_confirm, on_result=ctx.on_result)
-        ctx.say(f"Логи запросов: {log.base_dir}")
+                                            confirm_each=confirm_each, auto_confirm=auto_confirm, on_result=ctx.on_result,
+                                            confirm_plan=confirm_plan)
+        ctx.say("Логи запросов Ozon доступны по ссылке «Логи запросов Ozon» в панели прогона.")
         return outcome, None, None
 
     source_kind = run["source_kind"]
@@ -281,7 +320,7 @@ def _execute_inner(run: dict[str, Any], ctx: RunContext, api: Any, store: FboSta
     filt = {norm(a) for a in str(run.get("articles_filter") or "").split(",") if a.strip()}
     options = RunOptions(mode="live" if mode.startswith("live") else "trial", with_cargo=(mode == "live"), force=force,
                          articles=filt or None, auto_confirm=auto_confirm, confirm_each=confirm_each,
-                         on_result=ctx.on_result, ask_duplicates=ctx.ask_duplicates)
+                         on_result=ctx.on_result, ask_duplicates=ctx.ask_duplicates, confirm_plan=confirm_plan)
     if options.mode == "live":
         outcome = run_live_batch(api, store, rows, sheet, options, moment, ctx.say, confirm, log, ctx.should_stop)
     else:
@@ -294,5 +333,5 @@ def _execute_inner(run: dict[str, Any], ctx: RunContext, api: Any, store: FboSta
         result_name = f"{safe_name(stem)}_результат.xlsx"
         result_bytes = write_results(wb, ws, layout, outcome.facts, outcome.notes)
         ctx.say(f"Результат: {result_name} (скачайте из раздела)")
-    ctx.say(f"Логи запросов: {log.base_dir}")
+    ctx.say("Логи запросов Ozon доступны по ссылке «Логи запросов Ozon» в панели прогона.")
     return outcome, result_name, result_bytes

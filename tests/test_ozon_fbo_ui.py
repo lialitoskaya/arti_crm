@@ -4,10 +4,18 @@
 from __future__ import annotations
 
 import re
+import sys
 import unittest
 from collections import Counter
 from pathlib import Path
 
+_TESTS_DIR = str(Path(__file__).resolve().parent)
+if _TESTS_DIR not in sys.path:
+    sys.path.insert(0, _TESTS_DIR)
+
+from test_chat_read_state_ui import _extract_function, _run_node  # noqa: E402
+
+from app.services.ozon_fbo.config import SETTING_LABELS  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 APP_JS = (ROOT / "app" / "static" / "app.js").read_text(encoding="utf-8")
@@ -111,6 +119,87 @@ class OzonFboScriptTests(unittest.TestCase):
         self.assertIn("form.dataset.boundOzonFbo", binding, "обработчики не дублируются при повторном bind")
         self.assertIn("[data-ozon-fbo-order]", binding)
 
+    def test_settings_labels_match_server_labels(self) -> None:
+        view = _block(INDEX, '<main id="ozonFboView"', '<main id="reviewsView"')
+        for key, label in SETTING_LABELS.items():
+            self.assertIn(f"<label>{label}<", view, key)
+
+    def test_render_run_behaviour_in_node(self) -> None:
+        names = ("renderOzonFboRun", "renderOzonFboRows", "ozonFboToneBadge", "ozonFboStatusBadge", "ozonFboDecisionLabels",
+                 "ozonFboHeartbeatAge", "ozonFboParseServerTime", "ozonFboFormatTime", "escapeHtml")
+        consts = _block(APP_JS, "const OZON_FBO_POLL_MS", "function ozonFboSetStatus")
+        tone_labels = _block(APP_JS, "const OZON_FBO_TONE_LABELS", "function ozonFboToneBadge")
+        source = consts + tone_labels + "\n".join(_extract_function(APP_JS, name) for name in names)
+        _run_node(source + r"""
+const assert = require('node:assert/strict');
+function element(id) {
+  return { id, dataset: {}, markup: '', textContent: '', disabled: false, href: '', classes: new Set(),
+    set innerHTML(v) { this.markup = v; }, get innerHTML() { return this.markup; },
+    classList: { toggle(name, force) { if (force) this.el.classes.add(name); else this.el.classes.delete(name); return force; },
+                 remove(name) { this.el.classes.delete(name); }, add(name) { this.el.classes.add(name); }, contains(name) { return this.el.classes.has(name); } },
+    setAttribute() {}, querySelectorAll() { return []; } };
+}
+const elements = {};
+for (const id of ['ozonFboRunTitle', 'ozonFboRunMeta', 'ozonFboReleaseBtn', 'ozonFboStopBtn', 'ozonFboRunFiles', 'ozonFboResultLink',
+                  'ozonFboReportLink', 'ozonFboApiLogLink', 'ozonFboQuestionBar', 'ozonFboQuestionBarText', 'ozonFboRows', 'ozonFboDecisionModal']) {
+  elements[id] = element(id); elements[id].classList.el = elements[id];
+}
+elements.ozonFboDecisionModal.classes.add('hidden');
+function $(id) { return elements[id] || null; }
+let opened = 0; let closed = 0;
+function openOzonFboDecision() { opened += 1; }
+function closeOzonFboDecision() { closed += 1; }
+const Date_now = Date.now;
+
+const active = { id: 7, status: 'running', is_active: true, mode: 'live', sheet_name: 'лист <x>', created_by_label: 'admin',
+  created_at: '2026-10-29 10:00:00', heartbeat_at: new Date(Date_now() - 5000).toISOString(), stop_requested: false, has_result_file: false, has_api_log: false };
+renderOzonFboRun(active);
+assert.equal(elements.ozonFboRunTitle.textContent, 'Прогон №7');
+assert.match(elements.ozonFboRunMeta.markup, /ozon-fbo-state-running/);
+assert.match(elements.ozonFboRunMeta.markup, /лист &lt;x&gt;/);
+assert.equal(elements.ozonFboStopBtn.disabled, false);
+assert.ok(elements.ozonFboReleaseBtn.classes.has('hidden'), 'живой прогон снять нельзя');
+assert.ok(elements.ozonFboApiLogLink.classes.has('hidden'), 'нет дампов — нет ссылки');
+assert.ok(elements.ozonFboQuestionBar.classes.has('hidden'));
+
+const stale = { ...active, heartbeat_at: new Date(Date_now() - 400000).toISOString(), stop_requested: true, has_api_log: true };
+renderOzonFboRun(stale);
+assert.ok(!elements.ozonFboReleaseBtn.classes.has('hidden'), 'без heartbeat появляется «Снять»');
+assert.match(elements.ozonFboRunMeta.markup, /не отвечает/);
+assert.equal(elements.ozonFboStopBtn.disabled, true, 'после запроса остановки кнопка заблокирована');
+assert.equal(elements.ozonFboStopBtn.textContent, 'Останавливаю…');
+assert.ok(!elements.ozonFboApiLogLink.classes.has('hidden'));
+
+const asking = { ...active, status: 'awaiting_answer', question_kind: 'duplicates', question_text: 'СЕГОДНЯ УЖЕ ЕСТЬ ЗАЯВКИ', question_seq: 3 };
+renderOzonFboRun(asking);
+assert.equal(opened, 1, 'новый вопрос открывает диалог');
+assert.ok(!elements.ozonFboQuestionBar.classes.has('hidden'));
+assert.match(elements.ozonFboQuestionBarText.textContent, /такие заявки/i);
+renderOzonFboRun(asking);
+assert.equal(opened, 1, 'тот же вопрос второй раз не переоткрывается');
+const finished = { ...active, status: 'finished', is_active: false, has_result_file: true, finished_at: '2026-10-29 10:20:00', error_text: '' };
+renderOzonFboRun(finished);
+assert.equal(closed, 1, 'после ответа диалог закрывается');
+assert.equal(elements.ozonFboStopBtn.disabled, true);
+assert.ok(!elements.ozonFboResultLink.classes.has('hidden'));
+assert.match(elements.ozonFboRunMeta.markup, /ozon-fbo-state-finished/);
+
+assert.deepEqual(ozonFboDecisionLabels({ question_kind: 'plan', question_text: 'ГРУЗОМЕСТА: заявок 2' }).yes, 'Передать грузоместа');
+assert.deepEqual(ozonFboDecisionLabels({ question_kind: 'plan', question_text: 'ПЛАН ПОСТАВОК' }).yes, 'Создать заявки');
+assert.deepEqual(ozonFboDecisionLabels({ question_kind: 'duplicates', question_text: 'x' }).no, 'Пропустить дубли');
+
+renderOzonFboRows([{ article: 'AT-<b>', cluster: 'Тверь', plan: 40, fact: 0, note: 'исключён: <script>', tone: 'zero' },
+                   { article: 'AT-2', cluster: 'Казань', plan: 20, fact: 20, note: '', tone: 'ok' },
+                   { article: 'AT-3', cluster: 'Уфа', plan: 10, fact: null, note: 'x', tone: 'manual' }]);
+assert.match(elements.ozonFboRows.markup, /AT-&lt;b&gt;/);
+assert.doesNotMatch(elements.ozonFboRows.markup, /<script>/);
+assert.match(elements.ozonFboRows.markup, /ozon-fbo-tone-zero">исключён/);
+assert.match(elements.ozonFboRows.markup, /ozon-fbo-tone-manual">ручная проверка/);
+assert.equal((elements.ozonFboRows.markup.match(/<tr>/g) || []).length, 3);
+renderOzonFboRows([]);
+assert.match(elements.ozonFboRows.markup, /Результатов пока нет/);
+""")
+
     def test_decision_dialog_lifecycle(self) -> None:
         self.assertIn("function openOzonFboDecision(run)", APP_JS)
         self.assertIn("function closeOzonFboDecision()", APP_JS)
@@ -121,7 +210,9 @@ class OzonFboScriptTests(unittest.TestCase):
         self.assertIn("Создать заявки", labels)
         self.assertIn("Передать грузоместа", labels)
         answer = _block(APP_JS, "async function answerOzonFboDecision(answer)", "async function stopOzonFboRun")
-        self.assertIn("JSON.stringify({ answer })", answer)
+        self.assertIn("JSON.stringify({ answer, question_seq: run.question_seq ?? null })", answer, "ответ привязан к вопросу")
+        self.assertIn("function trapOzonFboDecisionFocus(event)", APP_JS, "диалог удерживает фокус")
+        self.assertIn("ozonFbo.decisionOpener", APP_JS, "фокус возвращается открывшему элементу")
         submit = _block(APP_JS, "async function submitOzonFboRun(event)", "function stopOzonFboPolling")
         self.assertIn("if (ozonFbo.submitInFlight) return;", submit, "защита от двойной отправки")
         self.assertIn("window.confirm(", submit, "боевой режим требует подтверждения до запуска")
@@ -165,6 +256,8 @@ class OzonFboStyleTests(unittest.TestCase):
         self.assertIn(".ozon-fbo-grid,", mobile)
         self.assertIn("grid-template-columns: 1fr;", mobile)
         self.assertIn(".ozon-fbo-form-actions button { width: 100%; }", mobile)
+        self.assertIn("font-size: 16px;", mobile, "поля ввода не вызывают zoom на iOS")
+        self.assertEqual(self.block.count("min-height: auto"), 1, "сброс чекбоксов и радио объявлен один раз")
 
 
 if __name__ == "__main__":

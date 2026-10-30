@@ -671,16 +671,16 @@
             <form id="ozonFboSettingsForm" class="settings-form ozon-fbo-settings" novalidate>
               <div class="ozon-fbo-settings-grid">
                 <label>Вместимость грузоместа по умолчанию, шт.<input id="ozonFboSetting_default_cargo_capacity" type="number" min="1" step="1" /></label>
-                <label>Тип грузоместа для Ozon, BOX — короб<input id="ozonFboSetting_cargo_type" /></label>
-                <label>Точка сдачи, название как у Ozon<input id="ozonFboSetting_drop_off_name" /></label>
+                <label>Тип грузоместа для Ozon (BOX — короб)<input id="ozonFboSetting_cargo_type" /></label>
+                <label>Точка сдачи (название как у Ozon)<input id="ozonFboSetting_drop_off_name" /></label>
                 <label>Слот не раньше чем через N дней<input id="ozonFboSetting_min_slot_offset_days" type="number" min="0" step="1" /></label>
-                <label>Сколько окон по 28 дней смотреть вперёд<input id="ozonFboSetting_slot_max_windows" type="number" min="1" step="1" /></label>
+                <label>Сколько окон по 28 дней смотреть вперёд при выборе слота<input id="ozonFboSetting_slot_max_windows" type="number" min="1" step="1" /></label>
                 <label>Минимум штук в кластер<input id="ozonFboSetting_min_qty" type="number" min="1" step="1" /></label>
-                <label>Кратность количества, если не равно плану<input id="ozonFboSetting_step" type="number" min="1" step="1" /></label>
-                <label>Пауза перед повтором при «кластер недоступен», сек<input id="ozonFboSetting_unavailable_retry_sec" type="number" min="1" step="1" /></label>
+                <label>Кратность количества (если не равно плану)<input id="ozonFboSetting_step" type="number" min="1" step="1" /></label>
+                <label>Пауза перед повтором, если Ozon ответил «кластер недоступен», сек<input id="ozonFboSetting_unavailable_retry_sec" type="number" min="1" step="1" /></label>
               </div>
-              <label>Вместимость для отдельных артикулов: артикул = штук, по одному на строку<textarea id="ozonFboSetting_cargo_capacity" rows="4" spellcheck="false" placeholder="AT-L-AM-S = 5"></textarea></label>
-              <label>Какие кластеры считать «все»: названия как у Ozon, по одному на строку; пусто — все кластеры России<textarea id="ozonFboSetting_all_clusters" rows="4" spellcheck="false"></textarea></label>
+              <label>Вместимость для отдельных артикулов (артикул = штук, по одному на строку)<textarea id="ozonFboSetting_cargo_capacity" rows="4" spellcheck="false" placeholder="AT-L-AM-S = 5"></textarea></label>
+              <label>Какие кластеры считать «все» (названия как у Ozon, по одному на строку; пусто — все кластеры России)<textarea id="ozonFboSetting_all_clusters" rows="4" spellcheck="false"></textarea></label>
               <div class="ozon-fbo-form-actions">
                 <p id="ozonFboSettingsStatus" class="ozon-fbo-status" role="status" aria-live="polite"></p>
                 <button id="ozonFboSaveSettingsBtn" class="secondary" type="submit">Сохранить настройки</button>

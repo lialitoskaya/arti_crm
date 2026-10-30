@@ -461,9 +461,16 @@ lines to `ozon_fbo_run_log` (monotonic `seq` under `BEGIN IMMEDIATE`), rewrites
 every interaction goes through SQLite, the browser can poll, answer and stop from any
 hosting process. A run whose heartbeat is older than 180 s is marked `interrupted` by
 `GET /api/ozon-fbo/status` or the explicit `release` route (forward recovery after a
-process restart); orders already created were saved per article, so nothing is lost
-or replayed. Draft TTL (30 min) is handled by the pipeline itself through
-`refresh_draft`; an unanswered question times out as «no» after two hours.
+process restart). The order number is persisted to `ozon_fbo_article_state`
+immediately after `create_order` returns, before cargo is sent, and once more after
+cargo; a run interrupted by network or process failure therefore keeps every created
+order number (only cargo details of the interrupted article may be missing, which the
+cargo-filling mode recovers from Ozon itself). A worker whose run was closed externally
+detects it on the next question or stop check and creates nothing further. Each
+question carries a `question_seq`; an answer is accepted only for the current question,
+so a late answer can never confirm a different one. Draft TTL (30 min) is handled by
+the pipeline itself through `refresh_draft`; an unanswered question times out as «no»
+after two hours.
 
 Schema: `ozon_fbo_settings`, `ozon_fbo_runs`, `ozon_fbo_run_log`, `ozon_fbo_run_rows`,
 `ozon_fbo_article_state`, `ozon_fbo_order_state`, `ozon_fbo_warehouse_map`,

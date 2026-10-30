@@ -6387,7 +6387,9 @@ html[data-theme] #noteText:focus-visible {
   font-size: 13px;
   cursor: pointer;
 }
-.ozon-fbo-form .ozon-fbo-choice input { width: auto; min-height: auto; margin-top: 2px; flex: none; }
+.ozon-fbo-page input[type="checkbox"],
+.ozon-fbo-page input[type="radio"] { width: auto; min-height: auto; flex: none; }
+.ozon-fbo-form .ozon-fbo-choice input { margin-top: 2px; }
 .ozon-fbo-fieldset { margin: 0; padding: 0; border: 0; min-width: 0; display: grid; gap: 6px; }
 .ozon-fbo-fieldset legend { padding: 0; margin-bottom: 4px; color: var(--crm-muted); font-size: 12px; }
 .ozon-fbo-fieldset-row { grid-auto-flow: column; justify-content: start; gap: 16px; }
@@ -6403,7 +6405,6 @@ html[data-theme] #noteText:focus-visible {
 .ozon-fbo-status[data-kind="warning"] { color: var(--crm-orange-text); }
 .ozon-fbo-orders-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
 .ozon-fbo-col-check { width: 28px; }
-.ozon-fbo-orders input[type="checkbox"] { width: auto; min-height: auto; }
 .ozon-fbo-orders td,
 .ozon-fbo-results td,
 .ozon-fbo-history td { vertical-align: top; }
@@ -6474,6 +6475,9 @@ html[data-theme] #noteText:focus-visible {
   .ozon-fbo-run-actions { width: 100%; justify-content: stretch; }
   .ozon-fbo-run-actions button { flex: 1 1 auto; }
   .ozon-fbo-log { max-height: 260px; }
+  .ozon-fbo-page input:not([type="checkbox"]):not([type="radio"]),
+  .ozon-fbo-page select,
+  .ozon-fbo-page textarea { font-size: 16px; }
   .ozon-fbo-results .ozon-fbo-note,
   .ozon-fbo-orders .ozon-fbo-note,
   .ozon-fbo-history .ozon-fbo-note { max-width: none; }

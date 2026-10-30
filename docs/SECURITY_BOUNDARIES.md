@@ -207,7 +207,7 @@ Uploaded plans must be `.xlsx`, are capped at 20 MiB, are parsed with `openpyxl`
 before a run is registered and are stored as a BLOB on the run row; the result
 workbook is served only to administrators with an attachment header. Raw Ozon dumps
 are written under `OZON_FBO_LOG_DIR` (default `logs/ozon_fbo/`, git-ignored) and
-downloaded through an admin-only route as a zip; a non-writable directory disables
+downloaded through the admin-only `api-log` route as a zip (the path itself carries no archive extension, which the global sensitive-extension filter would reject); a non-writable directory disables
 dumps without stopping the run.
 
 Live order and cargo creation have exactly one code path each (`orders.create_order`

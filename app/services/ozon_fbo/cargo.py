@@ -305,10 +305,34 @@ def order_result(order: dict, cargoes: dict, error: str = "") -> ArticleResult:
     return res
 
 
+def order_view(order: dict) -> dict:
+    """Заявка Ozon, ожидающая грузомест, в виде для интерфейса: склад, состав, раскладка по коробам, пометки."""
+    supplies = []
+    for s in order.get("supplies") or []:
+        supplies.append({
+            "supply_id": s.get("supply_id"),
+            "where": supply_where(s),
+            "skipped": supply_skipped(s),
+            "items": [{"offer_id": it["offer_id"], "quantity": it["quantity"],
+                       "layout": layout_text(it["offer_id"], it["quantity"])} for it in s.get("items") or []],
+        })
+    return {
+        "order_id": order.get("order_id"),
+        "number": order.get("number"),
+        "state": order.get("state"),
+        "created": utc_to_msk_text(order["created_utc"])[:10] if order.get("created_utc") else "",
+        "slot": utc_to_msk_text(order["slot_from_utc"]) if order.get("slot_from_utc") else "",
+        "deadline": utc_to_msk_text(order["deadline_utc"]) if order.get("deadline_utc") else "",
+        "drop_off": order.get("drop_off") or "",
+        "supplies": supplies,
+    }
+
+
 def run_cargo_orders_pipeline(api: OzonFboApi, store: FboStateStore, keys: Optional[list[str]], say: Callable[[str], None],
                               confirm: Callable[[str], bool], log: RunLog,
                               should_stop: Optional[Callable[[], bool]] = None, confirm_each: bool = False,
-                              auto_confirm: bool = False, on_result: Optional[Callable] = None) -> RunOutcome:
+                              auto_confirm: bool = False, on_result: Optional[Callable] = None,
+                              confirm_plan: Optional[Callable[[str], bool]] = None) -> RunOutcome:
     """Дозаполнение грузомест по заявкам Ozon, которые ждут данных (DATA_FILLING), по их составу —
     независимо от того, где заявка создана (приложение или личный кабинет). keys — номера или
     идентификаторы заявок (пусто — все ожидающие). Одно общее подтверждение (или по каждой заявке).
@@ -324,7 +348,7 @@ def run_cargo_orders_pipeline(api: OzonFboApi, store: FboStateStore, keys: Optio
     say(text)
     say("")
     if not confirm_each and not auto_confirm:
-        if not confirm(text + "\n\nПередать грузоместа по всем заявкам выше?"):
+        if not (confirm_plan or confirm)(text + "\n\nПередать грузоместа по всем заявкам выше?"):
             say("Отменено пользователем — грузоместа не переданы.")
             return out
     for o in orders:

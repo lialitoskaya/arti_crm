@@ -14,15 +14,15 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
+from starlette.concurrency import run_in_threadpool
 
 from app.integrations.ozon_fbo import client as fbo_client
-from app.schemas import OzonFboRunAnswer
+from app.schemas import OzonFboRunAnswer, OzonFboSettingsUpdate
 from app.services.ozon_fbo import runner as fbo_runner
-from app.services.ozon_fbo.cargo import load_orders_awaiting_cargo, supply_skipped, supply_where
-from app.services.ozon_fbo.config import LK_ORDERS_URL, SETTING_LABELS, parse_settings, settings_to_dict, use_settings
-from app.services.ozon_fbo.rules import layout_text
+from app.services.ozon_fbo.cargo import load_orders_awaiting_cargo, order_view
+from app.services.ozon_fbo.config import LK_ORDERS_URL, parse_settings, settings_to_dict, use_settings
 from app.services.ozon_fbo.sheet import load_sheet, parse_manual_rows, workbook_sheet_names
-from app.services.ozon_fbo.util import utc_to_msk_text
+from app.services.ozon_fbo.util import norm
 
 RequireAdminDependency = Callable[[Request], dict[str, Any]]
 
@@ -30,9 +30,17 @@ MAX_WORKBOOK_BYTES = 20 * 1024 * 1024
 XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
-def _attachment_headers(filename: str) -> dict[str, str]:
-    ascii_name = "".join(ch if ch.isascii() and (ch.isalnum() or ch in "._-") else "_" for ch in filename) or "file"
-    return {"Content-Disposition": f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"}
+def _attachment_headers(filename: str, ascii_name: str) -> dict[str, str]:
+    """Имя файла: ASCII-вариант для старых клиентов и полное имя в filename* (RFC 5987)."""
+    safe_ascii = "".join(ch if ch.isascii() and (ch.isalnum() or ch in "._-") else "_" for ch in ascii_name) or "file"
+    return {"Content-Disposition": f"attachment; filename=\"{safe_ascii}\"; filename*=UTF-8''{quote(filename, safe='')}"}
+
+
+def _has_api_log(log_dir: str) -> bool:
+    if not log_dir:
+        return False
+    path = Path(log_dir)
+    return path.is_dir() and next(path.rglob("*.json"), None) is not None
 
 
 def _parse_flag(value: Any) -> bool:
@@ -57,29 +65,6 @@ async def _read_workbook(upload: UploadFile) -> tuple[str, bytes]:
     if not payload:
         raise HTTPException(status_code=400, detail="Файл пустой")
     return name, payload
-
-
-def _order_view(order: dict[str, Any]) -> dict[str, Any]:
-    supplies = []
-    for s in order.get("supplies") or []:
-        skipped = supply_skipped(s)
-        supplies.append({
-            "supply_id": s.get("supply_id"),
-            "where": supply_where(s),
-            "skipped": skipped,
-            "items": [{"offer_id": it["offer_id"], "quantity": it["quantity"],
-                       "layout": layout_text(it["offer_id"], it["quantity"])} for it in s.get("items") or []],
-        })
-    return {
-        "order_id": order.get("order_id"),
-        "number": order.get("number"),
-        "state": order.get("state"),
-        "created": utc_to_msk_text(order["created_utc"])[:10] if order.get("created_utc") else "",
-        "slot": utc_to_msk_text(order["slot_from_utc"]) if order.get("slot_from_utc") else "",
-        "deadline": utc_to_msk_text(order["deadline_utc"]) if order.get("deadline_utc") else "",
-        "drop_off": order.get("drop_off") or "",
-        "supplies": supplies,
-    }
 
 
 def create_ozon_fbo_router(fbo_repo: Any, require_admin_dependency: RequireAdminDependency, *,
@@ -118,17 +103,17 @@ def create_ozon_fbo_router(fbo_repo: Any, require_admin_dependency: RequireAdmin
     def api_get_settings(request: Request) -> dict[str, Any]:
         require_admin_dependency(request)
         settings, errors = _settings()
-        return {"settings": settings, "labels": SETTING_LABELS, "errors": errors}
+        return {"settings": settings, "errors": errors}
 
     @router.put("/api/ozon-fbo/settings")
-    def api_put_settings(payload: dict[str, Any], request: Request) -> dict[str, Any]:
+    def api_put_settings(payload: OzonFboSettingsUpdate, request: Request) -> dict[str, Any]:
         require_admin_dependency(request)
         current, _ = fbo_runner.load_active_settings()
-        settings, errors = parse_settings(payload or {}, current)
+        settings, errors = parse_settings(payload.model_dump(exclude_none=True), current)
         if errors:
             raise HTTPException(status_code=400, detail={"message": "Настройки не сохранены", "errors": errors})
         fbo_repo.save_settings_raw(settings_to_dict(settings))
-        return {"settings": settings_to_dict(settings), "labels": SETTING_LABELS, "errors": []}
+        return {"settings": settings_to_dict(settings), "errors": []}
 
     @router.post("/api/ozon-fbo/check-connection")
     def api_check_connection(request: Request) -> dict[str, Any]:
@@ -151,7 +136,7 @@ def create_ozon_fbo_router(fbo_repo: Any, require_admin_dependency: RequireAdmin
         require_admin_dependency(request)
         name, payload = await _read_workbook(file)
         try:
-            sheets = workbook_sheet_names(payload)
+            sheets = await run_in_threadpool(workbook_sheet_names, payload)
         except Exception:  # noqa: BLE001 — любой сбой разбора книги это ошибка входных данных
             raise HTTPException(status_code=400, detail="Не удалось открыть файл как книгу .xlsx")
         return {"file_name": name, "sheets": sheets}
@@ -165,7 +150,7 @@ def create_ozon_fbo_router(fbo_repo: Any, require_admin_dependency: RequireAdmin
         try:
             with use_settings(settings):
                 orders = load_orders_awaiting_cargo(api, log.say)
-                views = [_order_view(o) for o in orders]
+                views = [order_view(o) for o in orders]
         except fbo_client.AuthError as exc:
             raise HTTPException(status_code=502, detail=f"Ozon не принял ключи API ({exc.path}): {fbo_client.short(exc.data, 200)}")
         except (fbo_client.ApiError, fbo_client.NetworkError) as exc:
@@ -217,7 +202,7 @@ def create_ozon_fbo_router(fbo_repo: Any, require_admin_dependency: RequireAdmin
                     raise HTTPException(status_code=400, detail="Выберите лист")
                 input_name, input_bytes = await _read_workbook(file)
                 try:
-                    _, _, _, rows = load_sheet(input_bytes, sheet)
+                    _, _, _, rows = await run_in_threadpool(load_sheet, input_bytes, sheet)
                 except ValueError as exc:
                     raise HTTPException(status_code=400, detail=f"Не удалось прочитать таблицу: {exc}")
                 except Exception:  # noqa: BLE001
@@ -232,15 +217,16 @@ def create_ozon_fbo_router(fbo_repo: Any, require_admin_dependency: RequireAdmin
             else:
                 raise HTTPException(status_code=400, detail="Неизвестный источник плана")
             visible = [r for r in rows if not r.hidden]
-            filt = {a.lower() for a in articles_filter.split(",") if a}
-            if not [r for r in visible if not filt or r.article.lower() in filt]:
+            filt = {norm(a) for a in articles_filter.split(",") if a}
+            if not [r for r in visible if not filt or norm(r.article) in filt]:
                 raise HTTPException(status_code=400, detail="Нет ни одной видимой строки с количеством больше нуля"
                                     + (" по указанным артикулам" if filt else ""))
         try:
-            run = fbo_repo.create_run(mode=mode, source_kind=source_kind, sheet_name=sheet, articles_filter=articles_filter,
-                                      options=options, created_by_user_id=user.get("id") if isinstance(user, dict) else None,
-                                      created_by_label=str((user or {}).get("display_name") or (user or {}).get("username") or ""),
-                                      input_file_name=input_name, input_file=input_bytes)
+            run = await run_in_threadpool(
+                fbo_repo.create_run, mode=mode, source_kind=source_kind, sheet_name=sheet, articles_filter=articles_filter,
+                options=options, created_by_user_id=user.get("id") if isinstance(user, dict) else None,
+                created_by_label=str((user or {}).get("display_name") or (user or {}).get("username") or ""),
+                input_file_name=input_name, input_file=input_bytes)
         except fbo_repo.RunConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
         (start_run or fbo_runner.start_run)(int(run["id"]))
@@ -257,6 +243,7 @@ def create_ozon_fbo_router(fbo_repo: Any, require_admin_dependency: RequireAdmin
         run = fbo_repo.get_run(run_id)
         if run is None:
             raise HTTPException(status_code=404, detail="Прогон не найден")
+        run["has_api_log"] = _has_api_log(fbo_repo.get_run_log_dir(run_id))
         return {"run": run, "log": fbo_repo.get_run_log(run_id, after_seq=after), "rows": fbo_repo.get_run_rows(run_id)}
 
     @router.post("/api/ozon-fbo/runs/{run_id}/answer")
@@ -265,8 +252,8 @@ def create_ozon_fbo_router(fbo_repo: Any, require_admin_dependency: RequireAdmin
         run = fbo_repo.get_run(run_id)
         if run is None:
             raise HTTPException(status_code=404, detail="Прогон не найден")
-        if not fbo_repo.answer_run(run_id, payload.answer):
-            raise HTTPException(status_code=409, detail="Прогон сейчас не ждёт ответа")
+        if not fbo_repo.answer_run(run_id, payload.answer, payload.question_seq):
+            raise HTTPException(status_code=409, detail="Прогон сейчас не ждёт ответа или вопрос уже изменился")
         return {"ok": True, "run": fbo_repo.get_run(run_id)}
 
     @router.post("/api/ozon-fbo/runs/{run_id}/stop")
@@ -300,7 +287,8 @@ def create_ozon_fbo_router(fbo_repo: Any, require_admin_dependency: RequireAdmin
         if stored is None:
             raise HTTPException(status_code=404, detail="Файл результата отсутствует")
         name, payload = stored
-        return Response(content=payload, media_type=XLSX_MEDIA_TYPE, headers=_attachment_headers(name or "результат.xlsx"))
+        return Response(content=payload, media_type=XLSX_MEDIA_TYPE,
+                        headers=_attachment_headers(name or "результат.xlsx", f"ozon_fbo_run_{run_id}_result.xlsx"))
 
     @router.get("/api/ozon-fbo/runs/{run_id}/report.txt")
     def api_run_report(run_id: int, request: Request) -> Response:
@@ -310,22 +298,23 @@ def create_ozon_fbo_router(fbo_repo: Any, require_admin_dependency: RequireAdmin
             raise HTTPException(status_code=404, detail="Прогон не найден")
         text = fbo_repo.get_run_log_text(run_id)
         return Response(content=text.encode("utf-8"), media_type="text/plain; charset=utf-8",
-                        headers=_attachment_headers(f"ozon_fbo_run_{run_id}.txt"))
+                        headers=_attachment_headers(f"ozon_fbo_run_{run_id}.txt", f"ozon_fbo_run_{run_id}.txt"))
 
-    @router.get("/api/ozon-fbo/runs/{run_id}/api-log.zip")
+    @router.get("/api/ozon-fbo/runs/{run_id}/api-log")
     def api_run_api_log(run_id: int, request: Request) -> Response:
         require_admin_dependency(request)
         run = fbo_repo.get_run(run_id)
         if run is None:
             raise HTTPException(status_code=404, detail="Прогон не найден")
-        log_dir = Path(str(run.get("log_dir") or ""))
-        if not run.get("log_dir") or not log_dir.is_dir():
+        stored_dir = fbo_repo.get_run_log_dir(run_id)
+        log_dir = Path(stored_dir)
+        if not _has_api_log(stored_dir):
             raise HTTPException(status_code=404, detail="Логи запросов для этого прогона отсутствуют")
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
             for path in sorted(p for p in log_dir.rglob("*.json") if p.is_file()):
                 archive.write(path, arcname=str(path.relative_to(log_dir)))
         return Response(content=buffer.getvalue(), media_type="application/zip",
-                        headers=_attachment_headers(f"ozon_fbo_run_{run_id}_api_log.zip"))
+                        headers=_attachment_headers(f"ozon_fbo_run_{run_id}_api_log.zip", f"ozon_fbo_run_{run_id}_api_log.zip"))
 
     return router

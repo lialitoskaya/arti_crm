@@ -397,6 +397,7 @@ class RunOptions:
     ask_duplicates: Optional[Callable[[str], bool]] = None   # вопрос пользователю, когда дубли найдены, а allow_duplicates
     # не задан: ask_duplicates(текст со списком) → True = всё равно сделать, False = пропустить. None — пропустить без вопроса.
     # auto_confirm этот вопрос не подтверждает: разрешение на дубли всегда явное.
+    confirm_plan: Optional[Callable[[str], bool]] = None     # подтверждение общего плана (вид вопроса «план»); None — обычный confirm
 
 
 @dataclass

@@ -970,6 +970,7 @@ def init_db() -> None:
                 result_file BLOB,
                 question_kind TEXT CHECK(question_kind IS NULL OR question_kind IN ('plan','confirm','duplicates')),
                 question_text TEXT,
+                question_seq INTEGER NOT NULL DEFAULT 0,
                 answer TEXT CHECK(answer IS NULL OR answer IN ('yes','no')),
                 stop_requested INTEGER NOT NULL DEFAULT 0,
                 summary_json TEXT NOT NULL DEFAULT '{}',
@@ -1035,6 +1036,8 @@ def init_db() -> None:
             );
             """
         )
+        if "question_seq" not in _columns("ozon_fbo_runs"):
+            conn.execute("ALTER TABLE ozon_fbo_runs ADD COLUMN question_seq INTEGER NOT NULL DEFAULT 0")
 
         # Analytics and large-history indexes.
         # These are safe on existing SQLite databases and make daily/hourly

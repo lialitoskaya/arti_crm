@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 from typing import Callable
 
-from app.integrations.ozon_fbo.client import ApiError, OzonFboApi, parse_order_ids, parse_orders
+from app.integrations.ozon_fbo.client import ApiError, NetworkError, OzonFboApi, parse_order_ids, parse_orders
 
 from .drafts import ArticleResult
 from .rules import layout_text
@@ -75,7 +75,8 @@ def create_order(api: OzonFboApi, res: ArticleResult, say: Callable[[str], None]
     try:
         data = api.supply_orders(order_ids, "live_supply_orders")
         res.order_details = parse_orders(data)
-    except ApiError as e:
+    except (ApiError, NetworkError) as e:
+        # заявка уже создана: сбой чтения сведений не должен прервать прогон до сохранения её номера
         say(f"  ! заявка создана, но сведения о ней получить не удалось: {e}")
     numbers = [o["number"] for o in res.order_details if o.get("number")]
     if numbers:

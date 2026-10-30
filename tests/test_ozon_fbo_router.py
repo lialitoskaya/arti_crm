@@ -43,7 +43,7 @@ EXPECTED_ROUTES = {
     ("/api/ozon-fbo/runs/{run_id}/release", "POST"),
     ("/api/ozon-fbo/runs/{run_id}/result.xlsx", "GET"),
     ("/api/ozon-fbo/runs/{run_id}/report.txt", "GET"),
-    ("/api/ozon-fbo/runs/{run_id}/api-log.zip", "GET"),
+    ("/api/ozon-fbo/runs/{run_id}/api-log", "GET"),
 }
 
 
@@ -138,7 +138,10 @@ class OzonFboRouterHttpTests(unittest.TestCase):
                 self.assertIn("seller.ozon.ru", body["lk_url"])
 
                 got = await admin.get("/api/ozon-fbo/settings")
-                self.assertEqual(got.json()["labels"]["min_qty"], "Минимум штук в кластер")
+                self.assertEqual(got.json()["settings"]["min_qty"], 10)
+                self.assertNotIn("labels", got.json(), "подписи полей живут в разметке, а не дублируются API")
+                unknown = await admin.put("/api/ozon-fbo/settings", json={"min_qty": 10, "surprise": 1})
+                self.assertEqual(unknown.status_code, 422, "неизвестный ключ настроек отклоняется")
 
                 bad = await admin.put("/api/ozon-fbo/settings", json={"min_qty": 0, "default_cargo_capacity": "abc"})
                 self.assertEqual(bad.status_code, 400, bad.text)
@@ -218,8 +221,12 @@ class OzonFboRouterHttpTests(unittest.TestCase):
                 self.assertEqual(not_waiting.status_code, 409)
                 invalid = await admin.post(f"/api/ozon-fbo/runs/{run['id']}/answer", json={"answer": "maybe"})
                 self.assertEqual(invalid.status_code, 422)
-                fbo_repo.set_run_question(run["id"], "plan", "ПЛАН ПОСТАВОК…")
-                answered = await admin.post(f"/api/ozon-fbo/runs/{run['id']}/answer", json={"answer": "no"})
+                seq = fbo_repo.set_run_question(run["id"], "plan", "ПЛАН ПОСТАВОК…")
+                stale = await admin.post(f"/api/ozon-fbo/runs/{run['id']}/answer", json={"answer": "yes", "question_seq": seq - 1})
+                self.assertEqual(stale.status_code, 409, "ответ на другой вопрос не принимается")
+                polled = await admin.get(f"/api/ozon-fbo/runs/{run['id']}")
+                self.assertEqual(polled.json()["run"]["question_seq"], seq)
+                answered = await admin.post(f"/api/ozon-fbo/runs/{run['id']}/answer", json={"answer": "no", "question_seq": seq})
                 self.assertEqual(answered.status_code, 200, answered.text)
                 self.assertEqual(fbo_repo.take_run_answer(run["id"]), "no")
 
@@ -234,8 +241,23 @@ class OzonFboRouterHttpTests(unittest.TestCase):
                 self.assertIn("первая строка", report.text)
                 self.assertIn("attachment", report.headers["content-disposition"])
                 self.assertEqual((await admin.get(f"/api/ozon-fbo/runs/{run['id']}/result.xlsx")).status_code, 404)
-                self.assertEqual((await admin.get(f"/api/ozon-fbo/runs/{run['id']}/api-log.zip")).status_code, 404)
+                self.assertEqual((await admin.get(f"/api/ozon-fbo/runs/{run['id']}/api-log")).status_code, 404)
+                self.assertFalse((await admin.get(f"/api/ozon-fbo/runs/{run['id']}")).json()["run"]["has_api_log"])
                 self.assertEqual((await admin.get("/api/ozon-fbo/runs/999")).status_code, 404)
+                import os
+                import tempfile
+                import zipfile
+                log_dir = Path(tempfile.mkdtemp(prefix="fbo-log-", dir=os.environ["OZON_FBO_LOG_DIR"] if Path(os.environ["OZON_FBO_LOG_DIR"]).is_dir() else None))
+                (log_dir / "AT-P-P3").mkdir()
+                (log_dir / "AT-P-P3" / "001_clusters.json").write_text('{"method": "/v2/cluster/list"}', encoding="utf-8")
+                (log_dir / "readme.txt").write_text("не json — в архив не попадает", encoding="utf-8")
+                fbo_repo.update_run(run["id"], log_dir=str(log_dir))
+                self.assertTrue((await admin.get(f"/api/ozon-fbo/runs/{run['id']}")).json()["run"]["has_api_log"])
+                archive = await admin.get(f"/api/ozon-fbo/runs/{run['id']}/api-log")
+                self.assertEqual(archive.status_code, 200)
+                self.assertEqual(zipfile.ZipFile(io.BytesIO(archive.content)).namelist(), ["AT-P-P3/001_clusters.json"])
+                self.assertIn("ozon_fbo_run_", archive.headers["content-disposition"])
+                self.assertNotIn("log_dir", polled.json()["run"])
 
                 fbo_repo.finish_run(run["id"], "stopped", result_file_name="план_результат.xlsx", result_file=b"XLSX")
                 after = await admin.post(f"/api/ozon-fbo/runs/{run['id']}/stop")
@@ -243,6 +265,9 @@ class OzonFboRouterHttpTests(unittest.TestCase):
                 result = await admin.get(f"/api/ozon-fbo/runs/{run['id']}/result.xlsx")
                 self.assertEqual((result.status_code, result.content), (200, b"XLSX"))
                 self.assertIn("spreadsheetml", result.headers["content-type"])
+                disposition = result.headers["content-disposition"]
+                self.assertIn(f'filename="ozon_fbo_run_{run["id"]}_result.xlsx"', disposition, "ASCII-имя читаемое")
+                self.assertIn("filename*=UTF-8''%D0%BF%D0%BB%D0%B0%D0%BD_", disposition, "полное имя закодировано")
                 listing = await admin.get("/api/ozon-fbo/runs")
                 self.assertEqual([r["id"] for r in listing.json()], [run["id"]])
                 self.assertNotIn("input_file", listing.json()[0])
@@ -258,6 +283,9 @@ class OzonFboRouterHttpTests(unittest.TestCase):
                 self.assertEqual(sheets.json(), {"file_name": "Поставки.xlsx", "sheets": ["Поставка 11.09"]})
                 not_xlsx = await admin.post("/api/ozon-fbo/workbook-sheets", files={"file": ("план.csv", b"a;b", "text/csv")})
                 self.assertEqual(not_xlsx.status_code, 400)
+                with mock.patch("app.ozon_fbo_router.MAX_WORKBOOK_BYTES", 1024):
+                    too_big = await admin.post("/api/ozon-fbo/workbook-sheets", files={"file": ("план.xlsx", payload, "application/octet-stream")})
+                self.assertEqual(too_big.status_code, 413)
                 broken = await admin.post("/api/ozon-fbo/workbook-sheets", files={"file": ("план.xlsx", b"not a workbook", "application/octet-stream")})
                 self.assertEqual(broken.status_code, 400)
                 with mock.patch.dict("os.environ", {"OZON_CLIENT_ID": "id", "OZON_API_KEY": "key"}):
@@ -286,12 +314,19 @@ class OzonFboRouterHttpTests(unittest.TestCase):
                                      ("cargo", "orders", ["2000070409945", "2000070409946", "999"]))
                 fbo_repo.mark_run_started(run["id"], "")
                 fbo_repo.update_run(run["id"], heartbeat_at="2020-01-01 00:00:00")
-                status = await admin.get("/api/ozon-fbo/status")
-                self.assertEqual(status.json()["recovered_runs"], [run["id"]], "статус сам снимает прогон без heartbeat")
-                self.assertIsNone(status.json()["active_run"])
-                self.assertEqual(fbo_repo.get_run(run["id"])["status"], "interrupted")
+                released = await admin.post(f"/api/ozon-fbo/runs/{run['id']}/release")
+                self.assertEqual(released.status_code, 200, released.text)
+                self.assertEqual(released.json()["run"]["status"], "interrupted")
                 released_again = await admin.post(f"/api/ozon-fbo/runs/{run['id']}/release")
                 self.assertEqual(released_again.status_code, 409)
+                with mock.patch.dict("os.environ", {"OZON_CLIENT_ID": "id", "OZON_API_KEY": "key"}):
+                    second = (await admin.post("/api/ozon-fbo/runs", data={"mode": "cargo", "order_keys": "1"})).json()
+                fbo_repo.mark_run_started(second["id"], "")
+                fbo_repo.update_run(second["id"], heartbeat_at="2020-01-01 00:00:00")
+                status = await admin.get("/api/ozon-fbo/status")
+                self.assertEqual(status.json()["recovered_runs"], [second["id"]], "статус сам снимает прогон без heartbeat")
+                self.assertIsNone(status.json()["active_run"])
+                self.assertEqual(fbo_repo.get_run(second["id"])["status"], "interrupted")
         _run(scenario())
 
     def test_check_connection_and_awaiting_orders_with_injected_api(self) -> None:

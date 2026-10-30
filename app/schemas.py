@@ -228,3 +228,21 @@ class OzonFboRunAnswer(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     answer: Literal["yes", "no"]
+    question_seq: int | None = Field(default=None, ge=0)
+
+
+class OzonFboSettingsUpdate(BaseModel):
+    """Настройки раздела «Поставки FBO»: значения приходят строками из формы или числами, проверяет parse_settings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    default_cargo_capacity: Any | None = None
+    cargo_capacity: Any | None = None
+    cargo_type: Any | None = None
+    drop_off_name: Any | None = None
+    min_slot_offset_days: Any | None = None
+    slot_max_windows: Any | None = None
+    min_qty: Any | None = None
+    step: Any | None = None
+    unavailable_retry_sec: Any | None = None
+    all_clusters: Any | None = None

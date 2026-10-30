@@ -64,14 +64,15 @@ def create_orders_batch(api: OzonFboApi, store: FboStateStore, results: list, sh
             say("Остановлено пользователем — остальные заявки не создаю.")
             break
         say(f"[{res.article}]")
-        _create_one(api, store, res, sheet, now, say, with_cargo, force, confirm_each, draft_ttl_min)
+        _create_one(api, store, res, sheet, now, say, with_cargo, force, confirm_each, draft_ttl_min, should_stop)
         say("")
         if on_result:
             on_result(res, "order")
 
 
 def _create_one(api: OzonFboApi, store: FboStateStore, res, sheet: str, now: datetime, say: Callable[[str], None],
-                with_cargo: bool, force: bool, confirm_each: Optional[Callable[[str], bool]], draft_ttl_min: int) -> None:
+                with_cargo: bool, force: bool, confirm_each: Optional[Callable[[str], bool]], draft_ttl_min: int,
+                should_stop: Optional[Callable[[], bool]] = None) -> None:
     prev = load_state(store, sheet, res.article)
     prev_active = bool(prev.get("orders")) and not force and previous_order_active(api, prev, say)
     if prev_active:
@@ -104,6 +105,12 @@ def _create_one(api: OzonFboApi, store: FboStateStore, res, sheet: str, now: dat
             say("  " + res.note)
             save_state(store, sheet, res, "live", keep_prev_orders=keep_prev)
             return
+    if should_stop and should_stop():
+        # остановка (или снятие прогона) успела прийти во время пересборки черновика или вопроса — заявку не создаём
+        res.note = "создание заявки отменено: прогон остановлен"
+        say("  " + res.note)
+        save_state(store, sheet, res, "live", keep_prev_orders=keep_prev)
+        return
     try:
         create_order(api, res, say)
     except DraftError as e:
@@ -118,6 +125,9 @@ def _create_one(api: OzonFboApi, store: FboStateStore, res, sheet: str, now: dat
     except (LiveError, ApiError) as e:
         res.manual.append(f"создание заявки: {e}")
         say(f"  ! {e}")
+    if res.created:
+        # номер заявки фиксируется сразу: сбой сети или процесса во время грузомест не должен потерять запись
+        save_state(store, sheet, res, "live", keep_prev_orders=keep_prev)
     if res.created and with_cargo:
         try:
             create_cargoes_for_order(api, res, {ln.cluster_id: ln.fact for ln in res.lines if ln.fact}, say)
@@ -415,7 +425,7 @@ def run_live_batch(api: OzonFboApi, store: FboStateStore, rows: list, sheet: str
         say("Создавать нечего: ни один артикул не готов к заявке.")
     elif out.stopped or out.interrupted:
         say("Расчёт не завершён — заявки не создаю.")
-    elif options.auto_confirm or options.confirm_each or confirm(text + "\n\nСоздать заявки на Ozon?"):
+    elif options.auto_confirm or options.confirm_each or (options.confirm_plan or confirm)(text + "\n\nСоздать заявки на Ozon?"):
         say("Создаю заявки без подтверждения." if options.auto_confirm else
             "Подтверждение по каждому артикулу отдельно." if options.confirm_each else "Подтверждено — создаю заявки.")
         say("")
@@ -428,6 +438,9 @@ def run_live_batch(api: OzonFboApi, store: FboStateStore, rows: list, sheet: str
         except (NetworkError, AuthError, KeyboardInterrupt) as e:
             out.interrupted = e
             say(f"\nПРЕРВАНО при создании заявок: {e if not isinstance(e, KeyboardInterrupt) else 'остановлено пользователем'}.")
+            for r in out.results:
+                if r.created:      # созданные заявки фиксируем ещё раз: прерывание не должно потерять их номера
+                    save_state(store, sheet, r, "live")
     else:
         say("Создание заявок отменено пользователем.")
         for r in ready:

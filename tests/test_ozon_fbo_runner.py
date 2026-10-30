@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -40,8 +41,11 @@ class OzonFboRunnerTests(unittest.TestCase):
         return fbo_repo.create_run(**params)
 
     def _execute(self, run_id: int, api, sleep=None, **kw):
+        def factory(log):
+            api.log = log      # журнал прогона: строки клиента Ozon должны попадать в БД
+            return api
         with mock.patch("time.sleep", lambda s: None):
-            return runner.execute_run(run_id, api_factory=lambda log: api, sleep=sleep or _NoSleep(), now=NOW,
+            return runner.execute_run(run_id, api_factory=factory, sleep=sleep or _NoSleep(), now=NOW,
                                       heartbeat=False, **kw)
 
     def test_trial_manual_run_finishes_with_log_rows_and_summary(self) -> None:
@@ -52,7 +56,8 @@ class OzonFboRunnerTests(unittest.TestCase):
         stored = fbo_repo.get_run(run["id"])
         self.assertEqual((stored["status"], stored["is_active"], stored["summary"]["articles"], stored["summary"]["created"]),
                          ("finished", False, 1, 0))
-        self.assertTrue(stored["log_dir"].endswith(f"run_{run['id']}"))
+        self.assertNotIn("log_dir", stored, "серверный путь наружу не отдаётся")
+        self.assertTrue(fbo_repo.get_run_log_dir(run["id"]).endswith(f"run_{run['id']}"))
         text = fbo_repo.get_run_log_text(run["id"])
         self.assertIn("Режим: Пробный прогон", text)
         self.assertIn("ИТОГ ПРОБНОГО ПРОГОНА", text)
@@ -136,6 +141,21 @@ class OzonFboRunnerTests(unittest.TestCase):
         self.assertEqual((stored["status"], stored["question_kind"], stored["is_active"]), ("stopped", None, False))
         self.assertEqual(api.supply_calls, [])
         self.assertIn("считаю ответ «нет»", fbo_repo.get_run_log_text(run["id"]))
+
+    def test_run_interrupted_externally_stops_waiting_without_overwriting_status(self) -> None:
+        run = self._run(mode="live")
+        api = BatchApi({}, DAYS)
+
+        def sleep(seconds: float) -> None:
+            if fbo_repo.get_run(run["id"])["question_kind"]:
+                fbo_repo.mark_stale_runs_interrupted(0, force_run_id=run["id"])
+
+        result = self._execute(run["id"], api, sleep=sleep)
+        self.assertEqual(result["status"], "interrupted")
+        stored = fbo_repo.get_run(run["id"])
+        self.assertEqual((stored["status"], stored["is_active"]), ("interrupted", False))
+        self.assertIn("прерван", stored["error_text"])
+        self.assertEqual(api.supply_calls, [], "после снятия прогона заявки не создаются")
 
     def test_answer_timeout_counts_as_no(self) -> None:
         run = self._run(mode="live")
@@ -248,6 +268,95 @@ class OzonFboRunnerTests(unittest.TestCase):
         self._execute(run["id"], api)
         self.assertEqual(api.drop_off_asked, "ТЕСТ_ТОЧКА")
         self.assertEqual(len(api.cargo_calls[0][1]), 4, "коробы по 10 штук из настроек")
+
+    def test_client_log_lines_reach_the_journal(self) -> None:
+        run = self._run()
+
+        class Talkative(PipelineApi):
+            def cluster_list(self):
+                self.log.say("      лимит Ozon на создание черновиков (2 в минуту): жду 40 с...")
+                return super().cluster_list()
+
+        self._execute(run["id"], Talkative({}, DAYS))
+        self.assertIn("лимит Ozon на создание черновиков", fbo_repo.get_run_log_text(run["id"]))
+
+    def test_created_order_is_persisted_before_cargo_failure(self) -> None:
+        """Сбой сети при грузоместах не должен потерять номер уже созданной заявки."""
+        from app.integrations.ozon_fbo.client import NetworkError
+
+        run = self._run(mode="live", options={"manual_text": "AT-P-P3; Тверь; 40", "auto_confirm": True})
+
+        class CargoDown(BatchApi):
+            def create_cargoes(self, supply_id, cargoes, name):
+                raise NetworkError("сеть пропала на грузоместах")
+
+        result = self._execute(run["id"], CargoDown({}, DAYS))
+        self.assertEqual(result["status"], "failed")
+        state = fbo_repo.get_article_state("тест", "AT-P-P3")
+        self.assertEqual(state["orders"], ["N901"], "номер заявки записан до передачи грузомест")
+        self.assertEqual(state["cargoes"], {})
+        self.assertIn("сеть пропала", fbo_repo.get_run(run["id"])["error_text"])
+
+    def test_order_details_network_failure_keeps_created_order(self) -> None:
+        from app.integrations.ozon_fbo.client import NetworkError
+
+        run = self._run(mode="live_nocargo", options={"manual_text": "AT-P-P3; Тверь; 40", "auto_confirm": True})
+
+        class DetailsDown(BatchApi):
+            def supply_orders(self, order_ids, name):
+                if name == "live_supply_orders":
+                    raise NetworkError("сведения о заявке недоступны")
+                return super().supply_orders(order_ids, name)
+
+        result = self._execute(run["id"], DetailsDown({}, DAYS))
+        self.assertEqual(result["status"], "finished")
+        state = fbo_repo.get_article_state("тест", "AT-P-P3")
+        self.assertEqual(state["orders"], ["901"], "без сведений остаётся order_id, но заявка не потеряна")
+        self.assertIn("сведения о ней получить не удалось", fbo_repo.get_run_log_text(run["id"]))
+
+    def test_stop_during_draft_refresh_cancels_order_creation(self) -> None:
+        """Остановка между подтверждением плана и созданием заявки отменяет заявку."""
+        run = self._run(mode="live", options={"manual_text": "AT-P-P3; Тверь; 40", "auto_confirm": True})
+        api = BatchApi({}, DAYS)
+        original = api.create_draft
+
+        def create_draft(sku, cluster_qty, drop_off, name):
+            if name.startswith("refresh"):
+                fbo_repo.request_stop(run["id"])
+            return original(sku, cluster_qty, drop_off, name)
+        api.create_draft = create_draft
+        with mock.patch("time.sleep", lambda s: None):
+            from app.services.ozon_fbo import runner as r
+            with mock.patch.object(r, "execute_run", wraps=r.execute_run):
+                pass
+        # draft_ttl: состаренный черновик заставляет пересобрать его перед заявкой (refresh), где и приходит стоп
+        from app.services.ozon_fbo import pipeline as pipe
+        original_batch = pipe.create_orders_batch
+
+        def aged_batch(*args, **kwargs):
+            kwargs["draft_ttl_min"] = 5
+            return original_batch(*args, **kwargs)
+        with mock.patch.object(pipe, "create_orders_batch", aged_batch):
+            result = self._execute(run["id"], api)
+        self.assertEqual(result["status"], "stopped")
+        self.assertEqual(api.supply_calls, [], "заявка не создана после остановки")
+        self.assertIn("создание заявки отменено: прогон остановлен", fbo_repo.get_run_log_text(run["id"]))
+
+    def test_heartbeat_loop_updates_timestamp(self) -> None:
+        import threading
+        run = self._run()
+        fbo_repo.mark_run_started(run["id"], "")
+        fbo_repo.update_run(run["id"], heartbeat_at="2020-01-01 00:00:00")
+        stop = threading.Event()
+        thread = threading.Thread(target=runner._heartbeat_loop, args=(run["id"], stop, 0.05), daemon=True)
+        thread.start()
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and fbo_repo.get_run(run["id"])["heartbeat_at"] == "2020-01-01 00:00:00":
+            time.sleep(0.05)
+        stop.set()
+        thread.join(timeout=2)
+        self.assertNotEqual(fbo_repo.get_run(run["id"])["heartbeat_at"], "2020-01-01 00:00:00")
+        self.assertEqual(fbo_repo.mark_stale_runs_interrupted(120), [], "heartbeat свежий — прогон живой")
 
     def test_start_run_executes_in_background_thread(self) -> None:
         run = self._run()

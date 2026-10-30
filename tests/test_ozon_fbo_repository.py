@@ -128,11 +128,14 @@ class OzonFboRunsTests(unittest.TestCase):
         self.assertEqual(fbo_repo.get_run(run["id"])["status"], "running")
         self.assertIsNone(fbo_repo.take_run_answer(run["id"]), "без вопроса ответа нет")
         self.assertFalse(fbo_repo.answer_run(run["id"], "yes"), "ответ без вопроса отклоняется")
-        fbo_repo.set_run_question(run["id"], "plan", "ПЛАН ПОСТАВОК…")
+        seq = fbo_repo.set_run_question(run["id"], "plan", "ПЛАН ПОСТАВОК…")
+        self.assertEqual(seq, 1)
         waiting = fbo_repo.get_run(run["id"])
-        self.assertEqual((waiting["status"], waiting["question_kind"], waiting["question_text"]), ("awaiting_answer", "plan", "ПЛАН ПОСТАВОК…"))
+        self.assertEqual((waiting["status"], waiting["question_kind"], waiting["question_text"], waiting["question_seq"]),
+                         ("awaiting_answer", "plan", "ПЛАН ПОСТАВОК…", 1))
         self.assertIsNone(fbo_repo.take_run_answer(run["id"]))
-        self.assertTrue(fbo_repo.answer_run(run["id"], "yes"))
+        self.assertFalse(fbo_repo.answer_run(run["id"], "yes", question_seq=0), "ответ на уже сменившийся вопрос отклоняется")
+        self.assertTrue(fbo_repo.answer_run(run["id"], "yes", question_seq=1))
         self.assertFalse(fbo_repo.answer_run(run["id"], "no"), "повторный ответ на тот же вопрос не принимается")
         self.assertEqual(fbo_repo.take_run_answer(run["id"]), "yes")
         after = fbo_repo.get_run(run["id"])
@@ -144,6 +147,41 @@ class OzonFboRunsTests(unittest.TestCase):
         self.assertTrue(fbo_repo.is_stop_requested(run["id"]))
         fbo_repo.finish_run(run["id"], "stopped")
         self.assertFalse(fbo_repo.request_stop(run["id"]), "завершённый прогон остановить нельзя")
+
+    def test_late_answer_is_not_discarded_by_clear(self) -> None:
+        run = self._create()
+        fbo_repo.mark_run_started(run["id"], "")
+        fbo_repo.set_run_question(run["id"], "duplicates", "СЕГОДНЯ УЖЕ ЕСТЬ…")
+        self.assertTrue(fbo_repo.clear_run_question(run["id"]), "без ответа вопрос снимается")
+        self.assertEqual(fbo_repo.get_run(run["id"])["status"], "running")
+        seq = fbo_repo.set_run_question(run["id"], "plan", "ПЛАН…")
+        self.assertEqual(seq, 2, "номер вопроса растёт")
+        self.assertTrue(fbo_repo.answer_run(run["id"], "no", question_seq=2))
+        self.assertFalse(fbo_repo.clear_run_question(run["id"]), "ответ уже пришёл — вопрос не снимается")
+        self.assertEqual(fbo_repo.take_run_answer(run["id"]), "no")
+
+    def test_concurrent_create_run_allows_exactly_one(self) -> None:
+        import threading
+        results: list[object] = []
+        barrier = threading.Barrier(4)
+
+        def worker(index: int) -> None:
+            barrier.wait()
+            try:
+                results.append(self._create(sheet_name=f"поток {index}")["id"])
+            except fbo_repo.RunConflictError:
+                results.append("conflict")
+            except Exception as exc:  # noqa: BLE001 — любая другая ошибка это провал теста
+                results.append(exc)
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+        created = [r for r in results if isinstance(r, int)]
+        self.assertEqual(len(created), 1, results)
+        self.assertEqual(results.count("conflict"), 3, results)
+        self.assertEqual(fbo_repo.get_active_run()["id"], created[0])
 
     def test_stale_runs_are_interrupted(self) -> None:
         run = self._create()

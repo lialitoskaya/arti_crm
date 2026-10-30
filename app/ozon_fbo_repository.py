@@ -187,6 +187,7 @@ def _run_row(row: sqlite3.Row | None, *, with_files: bool = False) -> Optional[d
     data["stop_requested"] = bool(data.get("stop_requested"))
     data["has_input_file"] = bool(data.pop("has_input_file", 0))
     data["has_result_file"] = bool(data.pop("has_result_file", 0))
+    data.pop("log_dir", None)   # серверный путь наружу не отдаётся; каталог читает get_run_log_dir
     if not with_files:
         data.pop("input_file", None)
         data.pop("result_file", None)
@@ -196,7 +197,7 @@ def _run_row(row: sqlite3.Row | None, *, with_files: bool = False) -> Optional[d
 _RUN_COLUMNS = """
     id, created_at, started_at, finished_at, heartbeat_at, status, is_active, mode, source_kind, sheet_name,
     articles_filter, options_json, created_by_user_id, created_by_label, input_file_name, result_file_name,
-    question_kind, question_text, answer, stop_requested, summary_json, error_text, log_dir,
+    question_kind, question_text, question_seq, answer, stop_requested, summary_json, error_text, log_dir,
     (input_file IS NOT NULL) AS has_input_file, (result_file IS NOT NULL) AS has_result_file
 """
 
@@ -233,6 +234,12 @@ def get_run(run_id: int) -> Optional[dict[str, Any]]:
     with get_connection() as conn:
         row = conn.execute(f"SELECT {_RUN_COLUMNS} FROM ozon_fbo_runs WHERE id=?", (int(run_id),)).fetchone()
     return _run_row(row)
+
+
+def get_run_log_dir(run_id: int) -> str:
+    with get_connection() as conn:
+        row = conn.execute("SELECT log_dir FROM ozon_fbo_runs WHERE id=?", (int(run_id),)).fetchone()
+    return str(row["log_dir"] or "") if row else ""
 
 
 def get_run_file(run_id: int, kind: str) -> tuple[str, bytes] | None:
@@ -322,31 +329,36 @@ def get_run_log_text(run_id: int) -> str:
     return "\n".join(str(row["text"]) for row in rows)
 
 
+def _insert_run_rows(conn: sqlite3.Connection, run_id: int, rows: list[dict[str, Any]]) -> None:
+    row = conn.execute("SELECT COALESCE(MAX(position), 0) AS pos FROM ozon_fbo_run_rows WHERE run_id=?", (int(run_id),)).fetchone()
+    position = int(row["pos"])
+    for item in rows:
+        position += 1
+        conn.execute(
+            """
+            INSERT INTO ozon_fbo_run_rows (run_id, position, article, cluster, plan, fact, note, tone)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (int(run_id), position, str(item.get("article") or ""), str(item.get("cluster") or ""),
+             int(item.get("plan") or 0), item.get("fact"), str(item.get("note") or ""), str(item.get("tone") or "none")),
+        )
+
+
 def add_run_rows(run_id: int, rows: list[dict[str, Any]]) -> None:
     """Добавляет строки таблицы результатов (по артикулу, в порядке расчёта)."""
     if not rows:
         return
     with get_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute("SELECT COALESCE(MAX(position), 0) AS pos FROM ozon_fbo_run_rows WHERE run_id=?", (int(run_id),)).fetchone()
-        position = int(row["pos"])
-        for item in rows:
-            position += 1
-            conn.execute(
-                """
-                INSERT INTO ozon_fbo_run_rows (run_id, position, article, cluster, plan, fact, note, tone)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (int(run_id), position, str(item.get("article") or ""), str(item.get("cluster") or ""),
-                 int(item.get("plan") or 0), item.get("fact"), str(item.get("note") or ""), str(item.get("tone") or "none")),
-            )
+        _insert_run_rows(conn, run_id, rows)
 
 
 def replace_run_rows(run_id: int, rows: list[dict[str, Any]]) -> None:
+    """Заменяет строки таблицы результатов одной транзакцией: читатели не видят пустую таблицу между шагами."""
     with get_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         conn.execute("DELETE FROM ozon_fbo_run_rows WHERE run_id=?", (int(run_id),))
-    add_run_rows(run_id, rows)
+        _insert_run_rows(conn, run_id, rows)
 
 
 def get_run_rows(run_id: int) -> list[dict[str, Any]]:
@@ -358,29 +370,37 @@ def get_run_rows(run_id: int) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def set_run_question(run_id: int, kind: str, text: str) -> None:
+def set_run_question(run_id: int, kind: str, text: str) -> int:
+    """Ставит вопрос прогону и возвращает его порядковый номер (question_seq): ответ принимается только на него."""
     if kind not in QUESTION_KINDS:
         raise ValueError(f"Недопустимый вид вопроса: {kind}")
     with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         conn.execute(
             """
-            UPDATE ozon_fbo_runs SET status='awaiting_answer', question_kind=?, question_text=?, answer=NULL, heartbeat_at=?
+            UPDATE ozon_fbo_runs SET status='awaiting_answer', question_kind=?, question_text=?, answer=NULL,
+                question_seq=question_seq + 1, heartbeat_at=?
             WHERE id=? AND is_active=1
             """,
             (kind, str(text), _now(), int(run_id)),
         )
+        row = conn.execute("SELECT question_seq FROM ozon_fbo_runs WHERE id=?", (int(run_id),)).fetchone()
+        return int(row["question_seq"]) if row else 0
 
 
-def answer_run(run_id: int, answer: str) -> bool:
-    """Ответ пользователя на вопрос прогона. False — вопроса нет или прогон не активен."""
+def answer_run(run_id: int, answer: str, question_seq: Optional[int] = None) -> bool:
+    """Ответ пользователя на вопрос прогона. False — вопроса нет, прогон не активен или вопрос уже сменился
+    (question_seq не совпал): устаревший ответ не может подтвердить другой вопрос."""
     if answer not in ANSWERS:
         raise ValueError("Ответ должен быть yes или no")
     with get_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        cur = conn.execute(
-            "UPDATE ozon_fbo_runs SET answer=? WHERE id=? AND is_active=1 AND question_kind IS NOT NULL AND answer IS NULL",
-            (answer, int(run_id)),
-        )
+        sql = "UPDATE ozon_fbo_runs SET answer=? WHERE id=? AND is_active=1 AND question_kind IS NOT NULL AND answer IS NULL"
+        params: list[Any] = [answer, int(run_id)]
+        if question_seq is not None:
+            sql += " AND question_seq=?"
+            params.append(int(question_seq))
+        cur = conn.execute(sql, params)
         return cur.rowcount > 0
 
 
@@ -440,10 +460,14 @@ def mark_stale_runs_interrupted(max_heartbeat_age_seconds: int, *, force_run_id:
         return ids
 
 
-def clear_run_question(run_id: int) -> None:
-    """Снимает вопрос без ответа (остановка или истечение ожидания); прогон продолжает работать."""
+def clear_run_question(run_id: int) -> bool:
+    """Снимает вопрос без ответа (остановка или истечение ожидания); прогон продолжает работать.
+    False — ответ уже успел прийти: вопрос не снят, его заберёт take_run_answer."""
     with get_connection() as conn:
-        conn.execute(
-            "UPDATE ozon_fbo_runs SET status='running', question_kind=NULL, question_text=NULL, answer=NULL, heartbeat_at=? WHERE id=? AND is_active=1",
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.execute(
+            "UPDATE ozon_fbo_runs SET status='running', question_kind=NULL, question_text=NULL, heartbeat_at=? "
+            "WHERE id=? AND is_active=1 AND answer IS NULL",
             (_now(), int(run_id)),
         )
+        return cur.rowcount > 0

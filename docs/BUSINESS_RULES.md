@@ -355,8 +355,10 @@ unread metadata and the global CRM workflow status are not personal read state.
     rebuilt and retried once. A status without an order id is a manual check, never a
     retry (the order may exist).
 12. At most one run is active at a time (database unique index). A pending question
-    unanswered for two hours is treated as «no»; stopping a run answers «no» and ends
-    after the current article. Runs without heartbeat for 180 s are interrupted; created
-    orders stay recorded.
+    unanswered for two hours is treated as «no»; stopping a run answers «no», cancels an
+    order not yet created and ends after the current article. An answer is bound to the
+    question it was shown for (`question_seq`); a stale answer is rejected. Runs without
+    heartbeat for 180 s are interrupted; the number of every created order is recorded
+    right after creation, before cargo, so interruption never forgets an order.
 13. Settings are validated as a whole: any invalid value rejects the save and leaves the
     stored settings unchanged.
