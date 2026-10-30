@@ -6395,6 +6395,19 @@ main.view:not(#chatsView),
   border-radius: var(--crm-radius-xs) !important;
 }
 
+:is(main.view:not(#chatsView), #loginScreen) :is(input, select, textarea) {
+  --crm-line: #7f8da2; /* граница поля: было rgba(130,145,170,.22) ≈1.2:1 → 3.4:1 */
+}
+:is(main.view:not(#chatsView), #loginScreen) :is(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]), select) {
+  min-height: 36px;
+}
+html[data-theme="dark"] :is(main.view:not(#chatsView), #loginScreen) :is(input, select, textarea) {
+  --crm-line: #7a8aa3; /* 4.6:1 на фоне поля #182234 */
+}
+@media (max-width: 560px) {
+  :is(main.view:not(#chatsView), #loginScreen) :is(input, select, textarea) { font-size: 16px; } /* iOS Safari не зумит поля ≥16px */
+}
+
 /* ---- Поставки FBO Ozon: раздел запуска прогонов. Только существующие токены, без override-слоёв. ---- */
 .ozon-fbo-hero { align-items: flex-start; }
 .ozon-fbo-hero p { margin: 5px 0 0; color: var(--crm-muted); font-size: 13px; }
