@@ -6434,6 +6434,45 @@ html[data-theme="dark"] :is(main.view:not(#chatsView), #knowledgeModal) :is(.tas
   color: #ffffff !important;
 }
 
+/* Сообщения об ошибках и результатах (notify): неблокирующие тосты вместо window.alert */
+.ui-toast-stack {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 10001;
+  width: min(360px, calc(100vw - 32px));
+  display: grid;
+  gap: 8px;
+}
+.ui-toast {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  padding: 10px 36px 10px 12px;
+  border: 1px solid var(--crm-line);
+  border-radius: var(--crm-radius-md);
+  background: var(--crm-panel-solid, #fff);
+  color: var(--crm-text);
+  box-shadow: var(--crm-shadow-sm);
+  font-size: 13px;
+}
+.ui-toast strong { font-weight: 600; }
+.ui-toast-text { color: var(--crm-text-soft); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow: auto; }
+.ui-toast-error { border-color: var(--crm-red-text); }
+.ui-toast-error strong { color: var(--crm-red-text); }
+.ui-toast-close.link-btn {
+  position: absolute;
+  right: 6px;
+  top: 6px;
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--crm-muted);
+}
+.ui-toast-close.link-btn:hover { color: var(--crm-text); text-decoration: none; }
+
 /* ---- Поставки FBO Ozon: раздел запуска прогонов. Только существующие токены, без override-слоёв. ---- */
 .ozon-fbo-hero { align-items: flex-start; }
 .ozon-fbo-hero p { margin: 5px 0 0; color: var(--crm-muted); font-size: 13px; }

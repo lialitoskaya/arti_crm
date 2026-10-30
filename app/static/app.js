@@ -751,9 +751,40 @@ function setStatus(text) {
 }
 
 function notify(title, data) {
-  const text = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
-  console.log(title, data);
-  alert(`${title}\n\n${text}`);
+  const text = typeof data === 'string' ? data : (data === undefined || data === null ? '' : JSON.stringify(data, null, 2));
+  const isError = /ошибк|не удалось|не получилось|fail|error/i.test(`${title} ${text}`);
+  if (isError) console.warn(title, text);
+  let stack = $('uiToasts');
+  if (!stack) {
+    stack = document.createElement('div');
+    stack.id = 'uiToasts';
+    stack.className = 'ui-toast-stack';
+    stack.setAttribute('aria-live', 'polite');
+    document.body.appendChild(stack);
+  }
+  const toast = document.createElement('div');
+  toast.className = `ui-toast${isError ? ' ui-toast-error' : ''}`;
+  toast.setAttribute('role', 'status');
+  const heading = document.createElement('strong');
+  heading.textContent = String(title || '');
+  toast.appendChild(heading);
+  if (text) {
+    const details = document.createElement('div');
+    details.className = 'ui-toast-text';
+    details.textContent = text.length > 400 ? `${text.slice(0, 400)}…` : text;
+    toast.appendChild(details);
+  }
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'ui-toast-close link-btn';
+  close.setAttribute('aria-label', 'Закрыть');
+  close.textContent = '×';
+  const remove = () => toast.remove();
+  close.addEventListener('click', remove);
+  toast.appendChild(close);
+  stack.appendChild(toast);
+  while (stack.children.length > 4) stack.firstElementChild.remove();
+  setTimeout(remove, isError ? 10000 : 5000);
 }
 
 function setSoundNotificationsEnabled(enabled) {
