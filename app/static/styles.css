@@ -6473,6 +6473,24 @@ html[data-theme="dark"] :is(main.view:not(#chatsView), #knowledgeModal) :is(.tas
 }
 .ui-toast-close.link-btn:hover { color: var(--crm-text); text-decoration: none; }
 
+/* Уведомления о сообщениях: без рамок у иконки и крестика, шрифт и размеры как у остального интерфейса */
+.notification-toast,
+.notification-toast * { font-family: inherit; }
+.notification-toast { padding: 10px 34px 10px 12px; gap: 5px; }
+.notification-toast-icon { border: 0; background: transparent; width: 18px; height: 18px; min-height: 18px; font-size: 14px; }
+.notification-toast-title { font-size: 13px; font-weight: 600; }
+.notification-toast .notification-close-btn,
+html[data-theme="dark"] .notification-toast .notification-close-btn {
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--crm-muted) !important;
+  font-size: 18px;
+  line-height: 1;
+}
+.notification-toast .notification-close-btn:hover,
+html[data-theme="dark"] .notification-toast .notification-close-btn:hover { color: var(--crm-text) !important; transform: none; }
+
 /* ---- Поставки FBO Ozon: раздел запуска прогонов. Только существующие токены, без override-слоёв. ---- */
 .ozon-fbo-hero { align-items: flex-start; }
 .ozon-fbo-hero p { margin: 5px 0 0; color: var(--crm-muted); font-size: 13px; }

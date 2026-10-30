@@ -1173,6 +1173,14 @@ function enqueueNotificationToasts(items, { replace = false } = {}) {
   }
 }
 
+function notificationDisplayTitle(item) {
+  if (String(item?.type || '') !== 'new_message') return item?.title || 'Уведомление';
+  const metadata = typeof item.metadata === 'object' && item.metadata ? item.metadata : (safeJsonParse(item.metadata_json) || {});
+  if (String(metadata.marketplace || '').toLowerCase() === 'ozon') return 'Новое сообщение';
+  const customer = String(item.title || '').split(':').slice(1).join(':').trim();
+  return customer ? `Новое сообщение: ${customer}` : 'Новое сообщение';
+}
+
 function renderNotifications() {
   const stack = $('notificationToasts');
   if (!stack) return;
@@ -1191,7 +1199,7 @@ function renderNotifications() {
   stack.innerHTML = visibleIds.map((id) => {
     const item = unreadMap.get(Number(id));
     if (!item) return '';
-    const title = escapeHtml(item.title || 'Уведомление');
+    const title = escapeHtml(notificationDisplayTitle(item));
     const body = escapeHtml(item.body || '');
     const time = escapeHtml(formatDateTime(item.created_at) || '');
     const icon = item.task_id ? '✓' : '✉';
