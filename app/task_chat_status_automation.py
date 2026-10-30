@@ -6,6 +6,23 @@ from typing import Any
 
 
 MIGRATION_NAME = "20260824_task_type_chat_status_automation"
+TASK_CHAT_STATUS_EFFECTS_SQL = """
+        CREATE TABLE IF NOT EXISTS task_chat_status_effects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER NOT NULL,
+            chat_id INTEGER NOT NULL,
+            cycle INTEGER NOT NULL CHECK(cycle > 0),
+            chat_status_id INTEGER,
+            mapped_status_key TEXT NOT NULL,
+            applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            released_at TEXT,
+            release_reason TEXT,
+            UNIQUE(task_id, cycle),
+            FOREIGN KEY(task_id) REFERENCES tasks(id) ON UPDATE NO ACTION ON DELETE CASCADE,
+            FOREIGN KEY(chat_id) REFERENCES chats(id) ON UPDATE NO ACTION ON DELETE CASCADE,
+            FOREIGN KEY(chat_status_id) REFERENCES chat_statuses(id) ON UPDATE NO ACTION ON DELETE SET NULL
+        )
+        """
 TERMINAL_TASK_STATUSES = frozenset({"done", "archived", "cancelled"})
 OVERRIDE_KINDS = frozenset({"manual", "provider", "rollback_release"})
 
@@ -213,25 +230,7 @@ def _create_automation_tables(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS task_chat_status_effects (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            task_id INTEGER NOT NULL,
-            chat_id INTEGER NOT NULL,
-            cycle INTEGER NOT NULL CHECK(cycle > 0),
-            chat_status_id INTEGER,
-            mapped_status_key TEXT NOT NULL,
-            applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            released_at TEXT,
-            release_reason TEXT,
-            UNIQUE(task_id, cycle),
-            FOREIGN KEY(task_id) REFERENCES tasks(id) ON UPDATE NO ACTION ON DELETE CASCADE,
-            FOREIGN KEY(chat_id) REFERENCES chats(id) ON UPDATE NO ACTION ON DELETE CASCADE,
-            FOREIGN KEY(chat_status_id) REFERENCES chat_statuses(id) ON UPDATE NO ACTION ON DELETE SET NULL
-        )
-        """
-    )
+    conn.execute(TASK_CHAT_STATUS_EFFECTS_SQL)
 
 
 def _index_contract(conn: sqlite3.Connection, table: str, name: str) -> tuple[bool, tuple[str, ...], bool, str]:

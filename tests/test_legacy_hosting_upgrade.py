@@ -17,6 +17,7 @@ import pytest
 import test_regression_foundation as foundation
 from app import db
 from app import legacy_hosting_upgrade as upgrade
+from app import task_chat_status_automation as automation
 from app import repository as repo
 from app.schemas import TaskCreate, TaskUpdate, TaskTypeUpdate
 from app.message_send_operations import (
@@ -410,8 +411,135 @@ class LegacyHostingUpgradeTests(unittest.TestCase):
             db.init_db()
         self.assertEqual(before, self.snapshot())
 
+    def quote_all_table_identifiers(self):
+        # A hosting database rebuilt through .recover/.dump or ALTER TABLE RENAME
+        # stores CREATE TABLE "name" (...) and quoted references, same schema.
+        with db.get_connection() as conn:
+            names = [str(row[0]) for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            )]
+            for name in names:
+                conn.execute(f'ALTER TABLE "{name}" RENAME TO "{name}__rebuilt"')
+                conn.execute(f'ALTER TABLE "{name}__rebuilt" RENAME TO "{name}"')
+            quoted = [str(row[0]) for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND sql LIKE 'CREATE TABLE \"%'"
+            )]
+            outbox_sql = str(conn.execute(
+                "SELECT sql FROM sqlite_master WHERE name='message_send_operations'"
+            ).fetchone()[0])
+        self.assertEqual(sorted(names), sorted(quoted))
+        self.assertIn('REFERENCES "chats"', outbox_sql)
+
+    def test_rebuilt_database_with_quoted_identifiers_converts(self):
+        self.old_operation()
+        self.quote_all_table_identifiers()
+        db.init_db()
+        with db.get_connection() as conn:
+            self.assertIsNotNone(conn.execute(
+                "SELECT 1 FROM schema_migrations WHERE name=?", (upgrade.MIGRATION,)
+            ).fetchone())
+            self.assertEqual(1, conn.execute("SELECT COUNT(*) FROM legacy_message_send_audit").fetchone()[0])
+            self.assertEqual(0, conn.execute("SELECT COUNT(*) FROM message_send_operations").fetchone()[0])
+        self.assertEqual("uncertain", get_operation(41)["status"])
+        self.assertIsNone(claim_next_operation(operation_id=41))
+        db.init_db()
+        self.assertEqual("uncertain", get_operation(41)["status"])
+
+    def test_only_renamed_object_names_are_normalized(self):
+        self.assertEqual(
+            upgrade._sql('CREATE TABLE "message_send_operations" (id INTEGER, FOREIGN KEY(chat_id) REFERENCES "chats"(id))'),
+            upgrade._sql("CREATE TABLE IF NOT EXISTS message_send_operations (id INTEGER, FOREIGN KEY(chat_id) REFERENCES chats(id))"),
+        )
+        self.assertEqual(
+            upgrade._sql('CREATE INDEX idx_x ON "tasks"(chat_id) WHERE chat_status_effect_key IS NOT NULL'),
+            upgrade._sql("CREATE INDEX IF NOT EXISTS idx_x ON tasks(chat_id) WHERE chat_status_effect_key IS NOT NULL"),
+        )
+        self.assertNotEqual(upgrade._sql('CHECK(message_type IN ("text"))'), upgrade._sql("CHECK(message_type IN ('text'))"))
+        self.assertNotEqual(upgrade._sql('DEFAULT "current_timestamp"'), upgrade._sql("DEFAULT CURRENT_TIMESTAMP"))
+        self.assertNotEqual(upgrade._sql('CREATE TABLE " messages "(id)'), upgrade._sql("CREATE TABLE messages(id)"))
+        self.assertNotEqual(upgrade._sql('CREATE TABLE "my table"(id)'), upgrade._sql("CREATE TABLE mytable(id)"))
+        self.assertNotEqual(upgrade._sql('CREATE TABLE "a""b"(id)'), upgrade._sql("CREATE TABLE ab(id)"))
+        self.assertNotEqual(upgrade._sql("DEFAULT 'text'"), upgrade._sql('DEFAULT "text"'))
+
+    def stray_effects_table(self, ddl=None):
+        # What an interrupted newer startup leaves behind: table and indexes
+        # committed by SQLite before the automation validators raised.
+        with db.get_connection() as conn:
+            conn.execute(ddl or automation.TASK_CHAT_STATUS_EFFECTS_SQL)
+            conn.execute("""CREATE INDEX IF NOT EXISTS idx_task_chat_effects_chat_cycle_active
+                ON task_chat_status_effects(chat_id, cycle, released_at, applied_at DESC, id DESC)""")
+            conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_task_chat_effects_one_active_task
+                ON task_chat_status_effects(task_id) WHERE released_at IS NULL""")
+
+    def test_empty_effects_table_left_by_interrupted_startup_is_rebuilt(self):
+        self.old_operation()
+        self.stray_effects_table()
+        self.quote_all_table_identifiers()
+        db.init_db()
+        with db.get_connection() as conn:
+            markers = {str(row[0]) for row in conn.execute("SELECT name FROM schema_migrations")}
+            self.assertLessEqual({upgrade.MIGRATION, automation.MIGRATION_NAME}, markers)
+            self.assertEqual(1, conn.execute("SELECT COUNT(*) FROM legacy_message_send_audit").fetchone()[0])
+            self.assertEqual(0, conn.execute("SELECT COUNT(*) FROM task_chat_status_effects").fetchone()[0])
+            indexes = {str(r["name"]) for r in conn.execute("PRAGMA index_list(task_chat_status_effects)") if r["origin"] == "c"}
+            self.assertEqual({"idx_task_chat_effects_chat_cycle_active", "idx_task_chat_effects_one_active_task"}, indexes)
+        self.assertEqual("uncertain", get_operation(41)["status"])
+        db.init_db()
+
+    def test_used_or_different_effects_table_fails_closed(self):
+        self.old_operation()
+
+        def used():
+            self.stray_effects_table()
+            with db.get_connection() as conn:
+                conn.execute("PRAGMA foreign_keys=OFF")
+                conn.execute("INSERT INTO task_chat_status_effects(task_id,chat_id,cycle,mapped_status_key) VALUES(1,9001,1,'new')")
+
+        def emptied_after_use():
+            used()
+            with db.get_connection() as conn:
+                conn.execute("DELETE FROM task_chat_status_effects")
+
+        def different_ddl():
+            self.stray_effects_table(automation.TASK_CHAT_STATUS_EFFECTS_SQL.replace(
+                "release_reason TEXT,", "release_reason TEXT, surprise TEXT,"))
+
+        def referenced_by_another_table():
+            self.stray_effects_table()
+            with db.get_connection() as conn:
+                conn.execute("CREATE TABLE effect_notes(id INTEGER PRIMARY KEY, effect_id INTEGER REFERENCES task_chat_status_effects(id))")
+
+        def used_by_a_view():
+            self.stray_effects_table()
+            with db.get_connection() as conn:
+                conn.execute("CREATE VIEW effects_view AS SELECT id FROM task_chat_status_effects")
+
+        def used_by_a_trigger_on_another_table():
+            self.stray_effects_table()
+            with db.get_connection() as conn:
+                conn.execute("""CREATE TRIGGER tasks_touch_effects AFTER DELETE ON tasks
+                    BEGIN DELETE FROM task_chat_status_effects WHERE task_id=OLD.id; END""")
+
+        cases = (used, emptied_after_use, different_ddl, referenced_by_another_table,
+                 used_by_a_view, used_by_a_trigger_on_another_table)
+        for case in cases:
+            with self.subTest(case=case.__name__):
+                try:
+                    case()
+                    before = self.snapshot()
+                    with self.assertRaisesRegex(RuntimeError, "Unsupported legacy hosting schema"):
+                        db.init_db()
+                    self.assertEqual(before, self.snapshot())
+                finally:
+                    with db.get_connection() as conn:
+                        conn.execute("DROP TRIGGER IF EXISTS tasks_touch_effects")
+                        conn.execute("DROP VIEW IF EXISTS effects_view")
+                        conn.execute("DROP TABLE IF EXISTS effect_notes")
+                        conn.execute("DROP TABLE IF EXISTS task_chat_status_effects")
+
     def test_failed_marker_insert_rolls_back_identity_and_archive(self):
         self.old_operation()
+        self.stray_effects_table()  # dropped by the bridge; must come back on rollback
         with db.get_connection() as conn:
             conn.execute(f"""CREATE TRIGGER fail_upgrade_marker BEFORE INSERT ON schema_migrations
                 WHEN NEW.name='{upgrade.MIGRATION}' BEGIN SELECT RAISE(ABORT,'synthetic marker fault'); END""")

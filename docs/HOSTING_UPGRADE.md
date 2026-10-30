@@ -13,6 +13,21 @@ database inspection. The startup bridge supports that exact schema, a normal new
 database, and the already-current schema. A different or partially mixed historical
 schema must stop with a safe error; do not disable its validators to force startup.
 
+DDL comparison ignores case, whitespace, `IF NOT EXISTS` and plain double-quoted
+object names directly after `TABLE`, `INDEX`, `TRIGGER`, `REFERENCES` and `ON`, such
+as `CREATE TABLE "message_send_operations"` or `REFERENCES "chats"(id)`: SQLite
+stores names that way after `ALTER TABLE ... RENAME` or a `.dump`/`.recover` rebuild,
+and a hosting database restored that way is the same schema. Any other quoted token
+(double-quoted literals included), names with spaces or other characters and every
+structural difference still stop startup.
+
+A newer release that stopped inside its validators leaves an empty
+`task_chat_status_effects` table behind, because SQLite commits `CREATE TABLE` before
+the validators run. The bridge rebuilds that table only when it has the exact code
+DDL, never held a row (no `sqlite_sequence` entry), is not mentioned by any trigger
+or view, is not referenced by a foreign key and no automation marker exists; otherwise
+the mixed schema stops startup as before.
+
 ## Data policy
 
 - All old send rows are copied into immutable private audit with a count/hash

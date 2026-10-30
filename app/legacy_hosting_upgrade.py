@@ -15,7 +15,9 @@ from typing import Any, Callable
 from app.message_outbox_migration import (
     apply_message_send_operation_migration, assert_message_send_operation_schema,
 )
-from app.task_chat_status_automation import apply_task_chat_status_automation_migration
+from app.task_chat_status_automation import (
+    TASK_CHAT_STATUS_EFFECTS_SQL, apply_task_chat_status_automation_migration,
+)
 
 MIGRATION = "20261019_legacy_hosting_review_upgrade"
 OLD_OUTBOX_MARKER = "20260806_message_send_outbox"
@@ -151,11 +153,21 @@ def legacy_text_hash(text: Any) -> str:
 def _exists(conn: sqlite3.Connection, name: str) -> bool:
     return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
 
+# SQLite stores object names as "name" after ALTER TABLE ... RENAME and after a
+# .dump/.recover rebuild: CREATE TABLE "t", REFERENCES "t"(...), ON "t"(...).
+_RENAMED_OBJECT_NAME = re.compile(
+    r'\b(table|index|trigger|references|on)\s+((?:if\s+not\s+exists\s+)?)"([a-z_][a-z0-9_]*)"'
+)
+
 def _sql(value: str) -> str:
     # Normalize only SQL outside string literals; CHECK/default values are data.
+    # A plainly quoted object name right after these keywords is the same schema;
+    # any other quoted token (double-quoted literals included) stays different.
     parts = re.split(r"('(?:''|[^'])*')", value)
     return "".join(
-        part if i % 2 else "".join(part.lower().split()).replace("ifnotexists", "")
+        part if i % 2 else "".join(
+            _RENAMED_OBJECT_NAME.sub(r"\1 \2\3", part.lower()).split()
+        ).replace("ifnotexists", "")
         for i, part in enumerate(parts)
     ).rstrip(";")
 
@@ -181,8 +193,10 @@ def _preflight(conn: sqlite3.Connection) -> None:
     for table, expected in _legacy_tables().items():
         if _sql(_table_sql(conn, table)) != _sql(expected):
             _fail()
-    if _exists(conn, "task_chat_status_effects") or any(_exists(conn, name) for name in AUDIT_TABLES.values()):
+    if any(_exists(conn, name) for name in AUDIT_TABLES.values()):
         _fail()
+    if _exists(conn, "task_chat_status_effects"):
+        _require_unused_effects_table(conn)
     if _sql(_table_sql(conn, "schema_migrations")) != _sql(
         "CREATE TABLE schema_migrations(name TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
     ):
@@ -232,7 +246,8 @@ def _preflight(conn: sqlite3.Connection) -> None:
     for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'"):
         name = str(row[0])
         escaped = name.replace('"', '""')
-        if any(str(fk["table"]) in AUDIT_TABLES for fk in conn.execute(f'PRAGMA foreign_key_list("{escaped}")')):
+        referenced = (*AUDIT_TABLES, "task_chat_status_effects")
+        if any(str(fk["table"]).lower() in referenced for fk in conn.execute(f'PRAGMA foreign_key_list("{escaped}")')):
             _fail()
     if conn.execute("SELECT 1 FROM sqlite_master WHERE type='trigger' AND tbl_name IN ('message_send_operations','chat_task_status_state','task_type_chat_status_links')").fetchone():
         _fail()
@@ -245,6 +260,25 @@ def _preflight(conn: sqlite3.Connection) -> None:
            OR o.payload_hash GLOB '*[^0-9a-f]*'
         LIMIT 1
     """).fetchone():
+        _fail()
+
+def _require_unused_effects_table(conn: sqlite3.Connection) -> None:
+    # A newer release that stopped in its validators leaves this table behind:
+    # SQLite commits CREATE TABLE at once. Only a never-used copy of the exact
+    # code DDL is rebuilt by the bridge; any trace of use is a mixed schema.
+    if _sql(_table_sql(conn, "task_chat_status_effects")) != _sql(TASK_CHAT_STATUS_EFFECTS_SQL):
+        _fail()
+    if conn.execute("SELECT 1 FROM task_chat_status_effects LIMIT 1").fetchone():
+        _fail()
+    if conn.execute("SELECT 1 FROM sqlite_sequence WHERE name='task_chat_status_effects'").fetchone():
+        _fail()
+    indexes = {str(r["name"]) for r in conn.execute("PRAGMA index_list(task_chat_status_effects)") if r["origin"] == "c"}
+    if not indexes <= {"idx_task_chat_effects_chat_cycle_active", "idx_task_chat_effects_one_active_task"}:
+        _fail()
+    # tbl_name of a view is the view itself; dependents are found by their SQL text.
+    if conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type IN ('trigger','view') AND sql LIKE '%task_chat_status_effects%'"
+    ).fetchone():
         _fail()
 
 def _trigger_sql(table: str, action: str) -> str:
@@ -381,6 +415,9 @@ def apply_legacy_hosting_upgrade(
             conn.rollback()
             return False
         _preflight(conn)
+        if _exists(conn, "task_chat_status_effects"):
+            # Verified empty leftover; the automation migration recreates it below.
+            conn.execute("DROP TABLE task_chat_status_effects")
         _archive(conn)
         for table in AUDIT_TABLES:
             conn.execute(f"DROP TABLE {table}")
