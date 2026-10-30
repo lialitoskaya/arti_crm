@@ -6491,6 +6491,27 @@ html[data-theme="dark"] .notification-toast .notification-close-btn {
 .notification-toast .notification-close-btn:hover,
 html[data-theme="dark"] .notification-toast .notification-close-btn:hover { color: var(--crm-text) !important; transform: none; }
 
+/* Чаты в тёмной теме (по запросу владельца): кнопки «закрепить» и «прочитано» в списке чатов получали
+   primary-заливку и голубую рамку от общего правила v56 (:is(… #refreshBtn …)); возвращаем их базовый вид. */
+html[data-theme="dark"] #chatsView :is(.chat-pin-control, .chat-read-state-control) {
+  background: transparent !important;
+  border-color: transparent !important;
+  color: #aeb8c6 !important;
+}
+html[data-theme="dark"] #chatsView .chat-item.is-pinned .chat-pin-control { color: #ff8a1f !important; }
+html[data-theme="dark"] #chatsView .chat-item:not(.is-unread) .chat-read-state-control { color: var(--crm-blue-text) !important; }
+html[data-theme="dark"] #chatsView :is(.chat-pin-control, .chat-read-state-control):is(:hover, :focus-visible) {
+  background: rgba(255, 255, 255, .08) !important;
+  border-color: rgba(174, 184, 198, .45) !important;
+}
+
+/* Верхняя полоса окна на ≥1200px: внешний margin .app-shell схлопывался с body и открывал фон html над страницей.
+   Переносим отступ в padding body — цвет страницы заполняет окно целиком. */
+@media (min-width: 1200px) {
+  html[data-theme] body { padding: 16px 0; }
+  html[data-theme] .app-shell { margin: 0 auto; }
+}
+
 /* ---- Поставки FBO Ozon: раздел запуска прогонов. Только существующие токены, без override-слоёв. ---- */
 .ozon-fbo-hero { align-items: flex-start; }
 .ozon-fbo-hero p { margin: 5px 0 0; color: var(--crm-muted); font-size: 13px; }
