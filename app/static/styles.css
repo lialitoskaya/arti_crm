@@ -6385,6 +6385,16 @@ html[data-theme="dark"] :is(main.view:not(#chatsView), #loginScreen) :is(input, 
   color: var(--crm-muted-2) !important; /* перебивает жёсткий #7f8da3 !important слоя v55 */
 }
 
+main.view:not(#chatsView),
+.app-nav,
+#loginScreen {
+  --crm-focus: 0 0 0 2px var(--crm-panel-solid, #ffffff), 0 0 0 4px var(--crm-primary); /* было кольцо rgba(.16) ≈1.2:1 */
+}
+#analyticsHourlyChart button.analytics-hour-button:focus-visible {
+  box-shadow: var(--crm-focus) !important; /* слой v59 гасит box-shadow !important на 24 кнопках часов */
+  border-radius: var(--crm-radius-xs) !important;
+}
+
 /* ---- Поставки FBO Ozon: раздел запуска прогонов. Только существующие токены, без override-слоёв. ---- */
 .ozon-fbo-hero { align-items: flex-start; }
 .ozon-fbo-hero p { margin: 5px 0 0; color: var(--crm-muted); font-size: 13px; }
