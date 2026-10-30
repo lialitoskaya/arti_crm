@@ -35,8 +35,8 @@
       <div class="login-mark">A</div>
       <h1>Arti Crm</h1>
       <p>Войдите, чтобы открыть CRM</p>
-      <input id="loginUsername" autocomplete="username" placeholder="Логин" required />
-      <input id="loginPassword" autocomplete="current-password" type="password" placeholder="Пароль" required />
+      <label>Логин<input id="loginUsername" autocomplete="username" required /></label>
+      <label>Пароль<input id="loginPassword" autocomplete="current-password" type="password" required /></label>
       <button id="loginSubmitBtn" type="submit">Войти</button>
       <button id="yandexLoginBtn" class="hidden" type="button">Войти через Яндекс</button>
       <div id="loginError" class="login-error"></div>
@@ -748,7 +748,7 @@
               <h3>Ответ на отзыв</h3>
               <div id="reviewExistingReply" class="existing-reply hidden"></div>
               <form id="reviewReplyForm" class="review-reply-form">
-                <textarea id="reviewReplyText" placeholder="Напишите ответ на отзыв..."></textarea>
+                <label>Текст ответа<textarea id="reviewReplyText" placeholder="Напишите ответ на отзыв..." required></textarea></label>
                 <div class="review-actions">
                   <label class="check-filter"><input id="reviewMarkProcessed" type="checkbox" checked /> отметить как обработанный</label>
                   <button type="submit">Ответить</button>
@@ -801,7 +801,7 @@
               <h3>Ответ на вопрос</h3>
               <div id="questionExistingAnswer" class="existing-reply hidden"></div>
               <form id="questionAnswerForm" class="review-reply-form">
-                <textarea id="questionAnswerText" placeholder="Напишите ответ на вопрос покупателя..."></textarea>
+                <label>Текст ответа<textarea id="questionAnswerText" placeholder="Напишите ответ на вопрос покупателя..." required></textarea></label>
                 <div class="review-actions">
                   <label class="check-filter"><input id="questionMarkProcessed" type="checkbox" checked /> отметить как обработанный</label>
                   <button type="submit">Ответить</button>
@@ -901,7 +901,7 @@
               <p>Инструкции, шаблоны ответов, правила возвратов и информация по товарам.</p>
             </div>
             <div class="knowledge-search-row">
-              <input id="knowledgeSearch" placeholder="Поиск по названию, тегам и содержанию" />
+              <input id="knowledgeSearch" placeholder="Поиск по названию, тегам и содержанию" aria-label="Поиск по базе знаний" />
               <button id="knowledgeNewArticleBtn" class="admin-only hidden" type="button">Добавить статью</button>
             </div>
           </div>
@@ -916,7 +916,7 @@
               <div id="knowledgeCategories" class="knowledge-category-list knowledge-tree"></div>
               <form id="knowledgeCategoryForm" class="knowledge-category-form admin-only hidden">
                 <div class="knowledge-form-caption">Быстрое добавление раздела</div>
-                <input id="knowledgeCategoryTitle" placeholder="Новый раздел" />
+                <input id="knowledgeCategoryTitle" placeholder="Новый раздел" aria-label="Название нового раздела" />
                 <button class="small secondary" type="submit">Добавить раздел</button>
               </form>
               <div id="knowledgeArticlesList" class="knowledge-articles-list hidden"></div>
@@ -951,16 +951,16 @@
                     <button id="knowledgeCancelEditBtn" class="secondary small" type="button">Отмена</button>
                   </div>
                 </div>
-                <input id="knowledgeArticleTitle" placeholder="Название статьи" />
-                <select id="knowledgeArticleCategory"><option value="">Без раздела</option></select>
-                <input id="knowledgeArticleTags" placeholder="Теги: возврат, доставка, гарантия" />
+                <label>Название<input id="knowledgeArticleTitle" placeholder="Название статьи" required /></label>
+                <label>Раздел<select id="knowledgeArticleCategory"><option value="">Без раздела</option></select></label>
+                <label>Теги<input id="knowledgeArticleTags" placeholder="Теги: возврат, доставка, гарантия" /></label>
                 <label class="knowledge-image-field">
                   <span>Изображение к статье</span>
                   <input id="knowledgeArticleImageFile" type="file" accept="image/*" />
                 </label>
                 <div id="knowledgeImagePreview" class="knowledge-image-preview hidden"></div>
                 <label class="knowledge-clear-image hidden" id="knowledgeClearImageLabel"><input id="knowledgeClearImage" type="checkbox" /> Удалить изображение из статьи</label>
-                <textarea id="knowledgeArticleContent" placeholder="Текст инструкции, шаблон ответа, важные нюансы..."></textarea>
+                <label>Текст статьи<textarea id="knowledgeArticleContent" placeholder="Текст инструкции, шаблон ответа, важные нюансы..."></textarea></label>
                 <button type="submit">Сохранить статью</button>
                 <p class="muted">Рекомендуемые разделы: возвраты, доставка, гарантия, размеры, карточки товаров, конфликтные ситуации, шаблоны ответов.</p>
               </form>
@@ -1002,14 +1002,16 @@
               <button id="userCreateModalCloseBtn" class="user-create-modal-close" type="button" aria-label="Закрыть">×</button>
             </div>
             <form id="userCreateForm" class="settings-form user-create-form">
-              <input id="newUserUsername" autocomplete="off" placeholder="Логин" minlength="2" required />
-              <input id="newUserDisplayName" autocomplete="off" placeholder="Имя сотрудника" />
-              <input id="newUserPassword" autocomplete="new-password" type="password" placeholder="Пароль, минимум 6 символов" minlength="6" required />
-              <select id="newUserRole">
-                <option value="manager">Менеджер</option>
-                <option value="viewer">Наблюдатель</option>
-                <option value="admin">Администратор</option>
-              </select>
+              <label>Логин<input id="newUserUsername" autocomplete="off" placeholder="Логин" minlength="2" required /></label>
+              <label>Имя сотрудника<input id="newUserDisplayName" autocomplete="off" placeholder="Имя сотрудника" /></label>
+              <label>Пароль<input id="newUserPassword" autocomplete="new-password" type="password" placeholder="Минимум 6 символов" minlength="6" required /></label>
+              <label>Роль
+                <select id="newUserRole">
+                  <option value="manager">Менеджер</option>
+                  <option value="viewer">Наблюдатель</option>
+                  <option value="admin">Администратор</option>
+                </select>
+              </label>
               <div class="user-create-form-actions">
                 <button id="cancelUserCreateBtn" class="user-light-btn" type="button">Отмена</button>
                 <button class="user-light-btn user-light-btn-primary" type="submit">Создать сотрудника</button>
@@ -1071,16 +1073,18 @@
             </div>
 
             <form id="chatStatusForm" class="chat-status-create-form">
-              <input id="chatStatusTitle" placeholder="Новый статус, например: Ожидает видео" required />
-              <select id="chatStatusColor" aria-label="Цвет статуса">
-                <option value="orange">🟠</option>
-                <option value="blue">🔵</option>
-                <option value="purple">🟣</option>
-                <option value="green">🟢</option>
-                <option value="red">🔴</option>
-                <option value="gray">⚪</option>
-              </select>
-              <input id="chatStatusSort" type="number" placeholder="Порядок" value="0" />
+              <label>Название<input id="chatStatusTitle" placeholder="Например: Ожидает видео" required /></label>
+              <label>Цвет
+                <select id="chatStatusColor" aria-label="Цвет статуса">
+                  <option value="orange">🟠</option>
+                  <option value="blue">🔵</option>
+                  <option value="purple">🟣</option>
+                  <option value="green">🟢</option>
+                  <option value="red">🔴</option>
+                  <option value="gray">⚪</option>
+                </select>
+              </label>
+              <label>Порядок<input id="chatStatusSort" type="number" value="0" /></label>
               <button class="crm-light-btn" type="submit">Добавить статус</button>
             </form>
 
@@ -1107,12 +1111,14 @@
             </div>
 
             <form id="taskTypeForm" class="task-type-create-form">
-              <input id="taskTypeTitle" placeholder="Тип задачи, например: Доставки" required />
-              <input id="taskTypeCommentLabel" placeholder="Название поля, например: Адрес" value="Комментарий" />
-              <select id="taskTypeChatStatus" aria-label="Статус чата для нового типа задачи">
-                <option value="">Не менять статус чата</option>
-              </select>
-              <input id="taskTypeSort" type="number" placeholder="Порядок" value="0" />
+              <label>Тип задачи<input id="taskTypeTitle" placeholder="Например: Доставки" required /></label>
+              <label>Поле в карточке<input id="taskTypeCommentLabel" placeholder="Например: Адрес" value="Комментарий" /></label>
+              <label>Статус чата
+                <select id="taskTypeChatStatus" aria-label="Статус чата для нового типа задачи">
+                  <option value="">Не менять статус чата</option>
+                </select>
+              </label>
+              <label>Порядок<input id="taskTypeSort" type="number" value="0" /></label>
               <button id="taskTypeCreateBtn" class="crm-light-btn" type="submit">Добавить тип</button>
             </form>
 

@@ -6408,6 +6408,8 @@ html[data-theme="dark"] :is(main.view:not(#chatsView), #loginScreen) :is(input, 
   :is(main.view:not(#chatsView), #loginScreen) :is(input, select, textarea) { font-size: 16px; } /* iOS Safari не зумит поля ≥16px */
 }
 
+.tech-settings-page .chat-status-create-form { align-items: end; } /* поля теперь с подписями: кнопка выравнивается по низу */
+
 /* ---- Поставки FBO Ozon: раздел запуска прогонов. Только существующие токены, без override-слоёв. ---- */
 .ozon-fbo-hero { align-items: flex-start; }
 .ozon-fbo-hero p { margin: 5px 0 0; color: var(--crm-muted); font-size: 13px; }
