@@ -6420,6 +6420,20 @@ main.view:not(#chatsView) :is(.tasks-ref-icon-btn, .tasks-ref-chat-btn, .status-
   main.view:not(#chatsView) :is(.tasks-ref-icon-btn, .tasks-ref-chat-btn, .status-icon-btn) { width: 40px; height: 40px; }
 }
 
+/* Тёмная тема: общее правило v56 `:is(… #refreshBtn …)` получает специфичность id и красит любую кнопку без
+   .secondary/.ghost/.icon-btn/.nav-btn/.link-btn как primary. Для разделов вне чатов возвращаем нейтральную
+   поверхность иконкам действий и опциям меню; первопричина в общем слое остаётся на отдельное решение. */
+html[data-theme="dark"] :is(main.view:not(#chatsView), #knowledgeModal) :is(.tasks-ref-icon-btn, .tasks-ref-chat-btn, .tasks-ref-status-option, .status-icon-btn, .knowledge-modal-close, .knowledge-modal-nav) {
+  background: var(--crm-button-bg) !important;
+  border-color: var(--crm-line) !important;
+  color: var(--crm-text-soft) !important;
+}
+html[data-theme="dark"] :is(main.view:not(#chatsView), #knowledgeModal) :is(.tasks-ref-icon-btn, .tasks-ref-chat-btn, .tasks-ref-status-option, .status-icon-btn, .knowledge-modal-close, .knowledge-modal-nav):hover {
+  background: var(--crm-button-bg-hover) !important;
+  border-color: var(--crm-line-strong) !important;
+  color: #ffffff !important;
+}
+
 /* ---- Поставки FBO Ozon: раздел запуска прогонов. Только существующие токены, без override-слоёв. ---- */
 .ozon-fbo-hero { align-items: flex-start; }
 .ozon-fbo-hero p { margin: 5px 0 0; color: var(--crm-muted); font-size: 13px; }
