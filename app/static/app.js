@@ -4904,6 +4904,10 @@ function reviewRatingStars(rating) {
   return '★'.repeat(Math.max(1, Math.min(5, n)));
 }
 
+function reviewModelName(review) {
+  return review.product_name || (review.sku ? `SKU ${review.sku}` : 'Товар не указан');
+}
+
 async function loadReviews() {
   const params = new URLSearchParams();
   const status = $('reviewStatusFilter')?.value || '';
