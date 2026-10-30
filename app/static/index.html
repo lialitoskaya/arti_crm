@@ -319,10 +319,9 @@
         <section class="tasks-toolbar panel-card analytics-toolbar">
           <div>
             <h2>Аналитика</h2>
-            <p>Первые обращения клиентов по дням, скорость ответа, закрытия и пиковые часы.</p>
           </div>
           <div class="analytics-toolbar-actions">
-            <button id="analyticsRefreshBtn" class="analytics-refresh-btn" type="button" aria-label="Обновить аналитику">
+            <button id="analyticsRefreshBtn" class="secondary small analytics-refresh-btn" type="button" aria-label="Обновить аналитику">
               <span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M18.5 9.2A7 7 0 1 0 19 13"/><path d="M18.5 4.5v4.7h-4.7"/></svg></span>
               <span class="btn-label">Обновить</span>
             </button>
@@ -396,7 +395,6 @@
           <article class="panel-card analytics-panel">
             <div class="analytics-panel-head">
               <h3>Пиковые часы обращений</h3>
-              <p>Распределение первых обращений клиента за день по часам.</p>
             </div>
             <div id="analyticsHourlyChart" class="analytics-hourly-chart"></div>
           </article>
@@ -404,7 +402,6 @@
           <article class="panel-card analytics-panel">
             <div class="analytics-panel-head">
               <h3>Обращения по дням</h3>
-              <p>Сколько входящих сообщений и закрытых чатов было в день.</p>
             </div>
             <div id="analyticsDailyTable" class="analytics-table"></div>
           </article>
@@ -413,7 +410,6 @@
         <section class="panel-card analytics-panel">
           <div class="analytics-panel-head">
             <h3>Разбивка по маркетплейсам</h3>
-            <p>Помогает понять, откуда идёт основная нагрузка.</p>
           </div>
           <div id="analyticsMarketplaceBreakdown" class="analytics-marketplace-breakdown"></div>
         </section>
@@ -422,7 +418,6 @@
           <div class="analytics-panel-head">
             <div>
               <h3>Проверка расчёта по часам</h3>
-              <p>Здесь видны конкретные чаты и сообщения, которые попали в отчёт как первые обращения клиента за день.</p>
             </div>
             <div class="analytics-drilldown-actions">
               <button id="analyticsDrilldownRefreshBtn" class="secondary small" type="button">Обновить строки</button>
@@ -441,9 +436,7 @@
       <main id="supplyPlanningView" class="tasks-page supply-planning-page view hidden">
         <section class="tasks-toolbar panel-card supply-planning-hero">
           <div>
-            <span class="eyebrow">Планирование поставок</span>
             <h2>Расчёт потребности по товарам и складам</h2>
-            <p>Склады, остатки и продажи загружаются из API. Вручную редактируются только параметры расчёта: доставка до склада, товар в пути и общий неснижаемый остаток.</p>
           </div>
           <div class="supply-planning-actions">
             <button id="supplyPlanningApiSyncBtn" type="button">Обновить из API</button>
@@ -453,9 +446,7 @@
 
         <section class="panel-card supply-planning-formula-card">
           <div>
-            <span class="eyebrow">Формула</span>
             <strong>К поставке = MAX(0; неснижаемый остаток × продажи/день − текущий остаток + доставка × продажи/день − товар в пути)</strong>
-            <p>Неснижаемый остаток задаётся один раз на высоком уровне и применяется ко всем строкам текущего расчёта.</p>
           </div>
           <label class="supply-planning-default-target">
             <span>Неснижаемый остаток, дней</span>
@@ -522,7 +513,6 @@
           <div class="analytics-panel-head supply-planning-panel-head">
             <div>
               <h3>Строки расчёта</h3>
-              <p>Список строится из API по выбранной площадке. Без фильтра показываются все склады и кластеры, которые вернул маркетплейс.</p>
             </div>
           </div>
           <div id="supplyPlanningRows" class="supply-planning-rows" aria-live="polite"></div>
@@ -709,7 +699,6 @@
           <div class="section-title-row">
             <div>
               <h2>Отзывы Ozon</h2>
-              <p>Список отзывов и ответы продавца</p>
             </div>
             <button id="syncReviewsBtn" class="secondary small" type="button">Обновить</button>
           </div>
@@ -725,7 +714,7 @@
         </section>
 
         <section class="review-detail-panel panel-card">
-          <div id="reviewEmptyState" class="empty-state">Выберите отзыв слева. Ozon-отзывы обновляются фоново, если включены в .env.</div>
+          <div id="reviewEmptyState" class="empty-state">Выберите отзыв слева.</div>
           <div id="reviewPanel" class="review-panel hidden">
             <div class="review-header">
               <div>
@@ -762,7 +751,6 @@
           <div class="section-title-row">
             <div>
               <h2>Вопросы Ozon</h2>
-              <p>Вопросы покупателей по товарам и ответы продавца</p>
             </div>
             <button id="syncQuestionsBtn" class="secondary small" type="button">Обновить</button>
           </div>
@@ -778,7 +766,7 @@
         </section>
 
         <section class="review-detail-panel panel-card">
-          <div id="questionEmptyState" class="empty-state">Выберите вопрос слева. Ozon-вопросы обновляются фоново, если включены в .env.</div>
+          <div id="questionEmptyState" class="empty-state">Выберите вопрос слева.</div>
           <div id="questionPanel" class="review-panel hidden">
             <div class="review-header">
               <div>
@@ -803,7 +791,6 @@
                   <button type="submit">Ответить</button>
                 </div>
               </form>
-              <p class="muted">Ответ отправляется в Ozon Seller через API. После отправки CRM сохранит текст ответа локально.</p>
             </section>
           </div>
         </section>
@@ -857,7 +844,6 @@
             <div class="tasks-standalone-form-head">
               <div>
                 <h3>Новая задача</h3>
-                <p>Создаётся без привязки к чату. В списке у неё не будет кнопки «в чат».</p>
               </div>
               <button id="taskStandaloneCancelBtn" class="icon-btn" type="button" aria-label="Закрыть форму">×</button>
             </div>
@@ -894,7 +880,6 @@
           <div class="tasks-toolbar knowledge-toolbar">
             <div>
               <h2>База знаний</h2>
-              <p>Инструкции, шаблоны ответов, правила возвратов и информация по товарам.</p>
             </div>
             <div class="knowledge-search-row">
               <input id="knowledgeSearch" placeholder="Поиск по названию, тегам и содержанию" aria-label="Поиск по базе знаний" />
@@ -906,7 +891,6 @@
               <div class="knowledge-left-head">
                 <div>
                   <div class="knowledge-mini-head">Разделы и статьи</div>
-                  <p class="knowledge-hint">Выберите раздел, затем откройте статью.</p>
                 </div>
               </div>
               <div id="knowledgeCategories" class="knowledge-category-list knowledge-tree"></div>
@@ -920,7 +904,7 @@
             <section class="knowledge-editor knowledge-reader-panel">
               <div id="knowledgeEmpty" class="knowledge-empty-state">
                 <h3>Выберите статью</h3>
-                <p class="muted">Слева откройте раздел и выберите инструкцию для чтения. Новую статью можно создать кнопкой сверху.</p>
+                <p class="muted">Выберите статью слева.</p>
               </div>
 
               <article id="knowledgeReader" class="knowledge-reader hidden">
@@ -958,7 +942,6 @@
                 <label class="knowledge-clear-image hidden" id="knowledgeClearImageLabel"><input id="knowledgeClearImage" type="checkbox" /> Удалить изображение из статьи</label>
                 <label>Текст статьи<textarea id="knowledgeArticleContent" placeholder="Текст инструкции, шаблон ответа, важные нюансы..."></textarea></label>
                 <button type="submit">Сохранить статью</button>
-                <p class="muted">Рекомендуемые разделы: возвраты, доставка, гарантия, размеры, карточки товаров, конфликтные ситуации, шаблоны ответов.</p>
               </form>
             </section>
           </div>
@@ -969,7 +952,6 @@
         <section class="tasks-toolbar panel-card">
           <div>
             <h2>Сотрудники</h2>
-            <p>Создание сотрудников и управление доступом.</p>
           </div>
         </section>
         <section class="settings-grid one-col users-settings-grid">
@@ -977,7 +959,6 @@
             <div class="users-manage-head">
               <div>
                 <h3>Список сотрудников</h3>
-                <p class="muted">Управляйте ролями, доступом и паролями сотрудников.</p>
               </div>
             </div>
             <div id="usersList" class="users-list"></div>
@@ -993,7 +974,6 @@
             <div class="user-create-modal-topbar">
               <div>
                 <strong id="userCreateModalTitle">Новый сотрудник</strong>
-                <p>Заполните данные для создания нового пользователя CRM.</p>
               </div>
               <button id="userCreateModalCloseBtn" class="icon-btn" type="button" aria-label="Закрыть">×</button>
             </div>
@@ -1055,7 +1035,6 @@
         <section class="tasks-toolbar panel-card tech-settings-hero">
           <div>
             <h2>Технические настройки</h2>
-            <p>Статусы чатов для фильтрации и работы менеджеров.</p>
           </div>
         </section>
 
@@ -1064,7 +1043,6 @@
             <div class="settings-card-head">
               <div>
                 <h3>Статусы чатов</h3>
-                <p class="muted">Добавляйте свои статусы, меняйте порядок, цвет и активность. Воронки временно скрыты.</p>
               </div>
             </div>
 
@@ -1094,7 +1072,6 @@
 
             <div class="settings-actions-bottom settings-actions-bottom-compact">
               <button id="saveChatSettingsBottomBtn" class="secondary hidden" type="button">Сохранить</button>
-              <p class="muted">Редактирование и удаление доступны по иконкам рядом со статусом.</p>
             </div>
           </div>
 
@@ -1102,7 +1079,6 @@
             <div class="settings-card-head">
               <div>
                 <h3>Типы задач</h3>
-                <p class="muted">Для типа задачи можно задать поле комментария и активный статус, который применяется к связанному чату.</p>
               </div>
             </div>
 
@@ -1133,7 +1109,6 @@
             <div class="settings-card-head">
               <div>
                 <h3>Авторизация через Яндекс</h3>
-                <p class="muted">Свяжите логин или email Яндекса с существующим сотрудником CRM. Настройки OAuth и пароли здесь не хранятся.</p>
                 <p class="muted">Отключение запрещает только новые входы через Яндекс. Открытая CRM-сессия действует до выхода или истечения срока; для немедленного полного отключения деактивируйте сотрудника.</p>
               </div>
             </div>
@@ -1161,7 +1136,6 @@
         <section class="tasks-toolbar panel-card">
           <div>
             <h2>Профиль</h2>
-            <p>Изменение вашего логина, имени и пароля.</p>
           </div>
         </section>
         <section class="settings-grid one-col">

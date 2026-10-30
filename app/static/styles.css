@@ -6512,6 +6512,11 @@ html[data-theme="dark"] #chatsView :is(.chat-pin-control, .chat-read-state-contr
   html[data-theme] .app-shell { margin: 0 auto; }
 }
 
+/* Компактные действия и ширина блоков вне чатов */
+.analytics-filters > button { align-self: end; justify-self: start; min-height: 36px; }
+.settings-card-head { align-items: flex-start; }
+#profileView .settings-form { max-width: 420px; }
+
 /* ---- Поставки FBO Ozon: раздел запуска прогонов. Только существующие токены, без override-слоёв. ---- */
 .ozon-fbo-hero { align-items: flex-start; }
 .ozon-fbo-hero p { margin: 5px 0 0; color: var(--crm-muted); font-size: 13px; }
