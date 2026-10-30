@@ -2082,7 +2082,7 @@ function renderChatSettingsLists() {
             <span>активен</span>
           </label>
           <div class="status-edit-actions">
-            <button type="button" class="crm-light-btn" data-status-action="cancel">Отмена</button>
+            <button type="button" class="secondary" data-status-action="cancel">Отмена</button>
             <button type="button" data-status-action="save">Сохранить</button>
           </div>
         </div>
@@ -2305,8 +2305,8 @@ function renderTaskTypeSettingsList() {
         <span>${escapeHtml(taskTypeStatusLabel(type))}</span>
       </label>
       <div class="task-type-settings-actions">
-        <button class="crm-light-btn task-type-save-btn" type="button" data-task-type-action="save">Сохранить</button>
-        <button class="crm-light-btn task-type-delete-btn" type="button" data-task-type-action="delete">Удалить</button>
+        <button class="secondary task-type-save-btn" type="button" data-task-type-action="save">Сохранить</button>
+        <button class="secondary task-type-delete-btn" type="button" data-task-type-action="delete">Удалить</button>
       </div>
     </article>
   `).join('') : '<p class="muted">Типов задач пока нет. Добавьте первый тип выше.</p>';
@@ -7902,7 +7902,7 @@ async function loadUsers() {
           <span class="user-status-chip ${u.is_active ? 'is-active' : 'is-disabled'}">${u.is_active ? 'Активен' : 'Отключён'}</span>
         </div>
       </div>
-      <button class="user-light-btn user-edit-btn" type="button" data-user-edit="${u.id}" aria-label="Редактировать сотрудника">
+      <button class="secondary user-edit-btn" type="button" data-user-edit="${u.id}" aria-label="Редактировать сотрудника">
         <span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 20h4l11-11a2.8 2.8 0 0 0-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></svg></span>
         <span>Редактировать</span>
       </button>
@@ -7956,10 +7956,10 @@ function renderYandexOAuthManagedLinks() {
           </div>
         </div>
         <div class="user-create-form-actions">
-          <button class="user-light-btn" type="button" data-yandex-oauth-toggle="${Number(link.id)}" data-active="${link.is_active ? '1' : '0'}">
+          <button class="secondary" type="button" data-yandex-oauth-toggle="${Number(link.id)}" data-active="${link.is_active ? '1' : '0'}">
             ${link.is_active ? 'Отключить' : 'Включить'}
           </button>
-          <button class="user-light-btn" type="button" data-yandex-oauth-delete="${Number(link.id)}">Запретить вход</button>
+          <button class="secondary" type="button" data-yandex-oauth-delete="${Number(link.id)}">Запретить вход</button>
         </div>
       </article>
     `;

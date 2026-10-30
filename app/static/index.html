@@ -697,12 +697,12 @@
                 <strong id="ozonFboDecisionTitle">Подтверждение</strong>
                 <p id="ozonFboDecisionHint" class="muted">Данные уйдут в Ozon только после подтверждения.</p>
               </div>
-              <button id="ozonFboDecisionCloseBtn" class="user-create-modal-close" type="button" aria-label="Закрыть">×</button>
+              <button id="ozonFboDecisionCloseBtn" class="icon-btn" type="button" aria-label="Закрыть">×</button>
             </div>
             <pre id="ozonFboDecisionText" class="ozon-fbo-log ozon-fbo-decision-text" tabindex="0"></pre>
             <div class="user-create-form-actions">
-              <button id="ozonFboDecisionNoBtn" class="user-light-btn" type="button">Нет</button>
-              <button id="ozonFboDecisionYesBtn" class="user-light-btn user-light-btn-primary" type="button">Да</button>
+              <button id="ozonFboDecisionNoBtn" class="secondary" type="button">Нет</button>
+              <button id="ozonFboDecisionYesBtn" type="button">Да</button>
             </div>
           </div>
         </div>
@@ -986,7 +986,7 @@
             </div>
             <div id="usersList" class="users-list"></div>
             <div class="users-manage-footer">
-              <button id="openUserCreateModalBtn" class="user-light-btn user-create-open-btn" type="button">Добавить сотрудника</button>
+              <button id="openUserCreateModalBtn" type="button">Добавить сотрудника</button>
             </div>
           </div>
         </section>
@@ -999,7 +999,7 @@
                 <strong id="userCreateModalTitle">Новый сотрудник</strong>
                 <p>Заполните данные для создания нового пользователя CRM.</p>
               </div>
-              <button id="userCreateModalCloseBtn" class="user-create-modal-close" type="button" aria-label="Закрыть">×</button>
+              <button id="userCreateModalCloseBtn" class="icon-btn" type="button" aria-label="Закрыть">×</button>
             </div>
             <form id="userCreateForm" class="settings-form user-create-form">
               <label>Логин<input id="newUserUsername" autocomplete="off" placeholder="Логин" minlength="2" required /></label>
@@ -1013,8 +1013,8 @@
                 </select>
               </label>
               <div class="user-create-form-actions">
-                <button id="cancelUserCreateBtn" class="user-light-btn" type="button">Отмена</button>
-                <button class="user-light-btn user-light-btn-primary" type="submit">Создать сотрудника</button>
+                <button id="cancelUserCreateBtn" class="secondary" type="button">Отмена</button>
+                <button type="submit">Создать сотрудника</button>
               </div>
             </form>
           </div>
@@ -1028,7 +1028,7 @@
                 <strong id="userEditModalTitle">Редактировать сотрудника</strong>
                 <p id="userEditModalSubtitle">Измените роль, активность или пароль сотрудника.</p>
               </div>
-              <button id="userEditModalCloseBtn" class="user-create-modal-close" type="button" aria-label="Закрыть">×</button>
+              <button id="userEditModalCloseBtn" class="icon-btn" type="button" aria-label="Закрыть">×</button>
             </div>
             <form id="userEditForm" class="settings-form user-create-form">
               <label>Логин<input id="editUserUsername" autocomplete="off" readonly /></label>
@@ -1046,8 +1046,8 @@
                 <span>Сотрудник активен</span>
               </label>
               <div class="user-create-form-actions">
-                <button id="cancelUserEditBtn" class="user-light-btn" type="button">Отмена</button>
-                <button class="user-light-btn user-light-btn-primary" type="submit">Сохранить</button>
+                <button id="cancelUserEditBtn" class="secondary" type="button">Отмена</button>
+                <button type="submit">Сохранить</button>
               </div>
             </form>
           </div>
@@ -1085,7 +1085,7 @@
                 </select>
               </label>
               <label>Порядок<input id="chatStatusSort" type="number" value="0" /></label>
-              <button class="crm-light-btn" type="submit">Добавить статус</button>
+              <button class="secondary" type="submit">Добавить статус</button>
             </form>
 
             <div class="status-settings-header status-settings-header-compact" aria-hidden="true">
@@ -1097,7 +1097,7 @@
             <div id="chatStatusesList" class="status-settings-list"></div>
 
             <div class="settings-actions-bottom settings-actions-bottom-compact">
-              <button id="saveChatSettingsBottomBtn" class="crm-light-btn hidden" type="button">Сохранить</button>
+              <button id="saveChatSettingsBottomBtn" class="secondary hidden" type="button">Сохранить</button>
               <p class="muted">Редактирование и удаление доступны по иконкам рядом со статусом.</p>
             </div>
           </div>
@@ -1119,7 +1119,7 @@
                 </select>
               </label>
               <label>Порядок<input id="taskTypeSort" type="number" value="0" /></label>
-              <button id="taskTypeCreateBtn" class="crm-light-btn" type="submit">Добавить тип</button>
+              <button id="taskTypeCreateBtn" class="secondary" type="submit">Добавить тип</button>
             </form>
 
             <div class="task-type-settings-header" aria-hidden="true">
@@ -1154,7 +1154,7 @@
               <label>Сотрудник CRM
                 <select id="yandexOAuthCrmUser" required></select>
               </label>
-              <button class="crm-light-btn" type="submit">Добавить связь</button>
+              <button class="secondary" type="submit">Добавить связь</button>
             </form>
             <div id="yandexOAuthLinksList" class="users-list"></div>
           </section>

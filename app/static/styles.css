@@ -6410,6 +6410,16 @@ html[data-theme="dark"] :is(main.view:not(#chatsView), #loginScreen) :is(input, 
 
 .tech-settings-page .chat-status-create-form { align-items: end; } /* поля теперь с подписями: кнопка выравнивается по низу */
 
+/* Кнопки вне чатов: одна иерархия (primary = button, secondary, icon-btn), disabled без полупрозрачности, hit-area ≥ 32/40 px */
+#ozonFboView .button-like.secondary { background: var(--crm-panel); border: 1px solid var(--crm-line); color: var(--crm-text); } /* в светлой теме .secondary задан только для button */
+main.view:not(#chatsView) button:disabled { opacity: 1; background: var(--crm-panel-muted); border-color: var(--crm-line); color: var(--crm-muted); }
+main.view:not(#chatsView) button.small { min-height: 32px; }
+main.view:not(#chatsView) :is(.tasks-ref-icon-btn, .tasks-ref-chat-btn, .status-icon-btn) { width: 32px; height: 32px; min-width: 32px; min-height: 32px; }
+@media (max-width: 900px) {
+  main.view:not(#chatsView) :is(button.small, button.icon-btn, .tasks-ref-icon-btn, .tasks-ref-chat-btn, .status-icon-btn) { min-width: 40px; min-height: 40px; }
+  main.view:not(#chatsView) :is(.tasks-ref-icon-btn, .tasks-ref-chat-btn, .status-icon-btn) { width: 40px; height: 40px; }
+}
+
 /* ---- Поставки FBO Ozon: раздел запуска прогонов. Только существующие токены, без override-слоёв. ---- */
 .ozon-fbo-hero { align-items: flex-start; }
 .ozon-fbo-hero p { margin: 5px 0 0; color: var(--crm-muted); font-size: 13px; }
