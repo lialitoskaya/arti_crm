@@ -6400,16 +6400,25 @@ function setAnalyticsText(id, value) {
   if (el) el.textContent = value;
 }
 
+let analyticsLoadInFlight = null;
 async function loadAnalytics() {
+  if (analyticsLoadInFlight) return analyticsLoadInFlight; // не копить параллельные тяжёлые запросы
   setupAnalyticsDefaults();
   const query = analyticsQueryString();
-  const [data, drilldown] = await Promise.all([
-    api(`/api/analytics/chats?${query}`),
-    api(`/api/analytics/chats/drilldown?${query}&limit=1000&include_excluded=1`),
-  ]);
-  renderAnalytics(data);
-  renderAnalyticsDrilldown(drilldown);
-  analyticsLoadedOnce = true;
+  analyticsLoadInFlight = (async () => {
+    const [data, drilldown] = await Promise.all([
+      api(`/api/analytics/chats?${query}`),
+      api(`/api/analytics/chats/drilldown?${query}&limit=1000&include_excluded=1`),
+    ]);
+    renderAnalytics(data);
+    renderAnalyticsDrilldown(drilldown);
+    analyticsLoadedOnce = true;
+  })();
+  try {
+    return await analyticsLoadInFlight;
+  } finally {
+    analyticsLoadInFlight = null;
+  }
 }
 
 const ANALYTICS_WEEKDAY_NAMES = [
