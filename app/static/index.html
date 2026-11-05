@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <script src="/static/theme-init.js?v=v79-strict-csp-secure-cookie-20260708"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=v96-ozon-fbo-supplies-20261029" />
+  <link rel="stylesheet" href="/static/styles.css?v=analytics-lazy-details-20261105" />
 
 </head>
 <body class="auth-pending">
@@ -319,6 +319,7 @@
         <section class="tasks-toolbar panel-card analytics-toolbar">
           <div>
             <h2>Аналитика</h2>
+            <p id="analyticsLoadStatus" class="muted" role="status" aria-live="polite"></p>
           </div>
           <div class="analytics-toolbar-actions">
             <button id="analyticsRefreshBtn" class="secondary small analytics-refresh-btn" type="button" aria-label="Обновить аналитику">
@@ -414,22 +415,20 @@
           <div id="analyticsMarketplaceBreakdown" class="analytics-marketplace-breakdown"></div>
         </section>
 
-        <section class="panel-card analytics-panel analytics-drilldown-panel">
+        <details id="analyticsDrilldownDetails" class="panel-card analytics-panel analytics-drilldown-panel">
+          <summary>Проверка расчёта по часам — сообщения</summary>
           <div class="analytics-panel-head">
-            <div>
-              <h3>Проверка расчёта по часам</h3>
-            </div>
             <div class="analytics-drilldown-actions">
               <button id="analyticsDrilldownRefreshBtn" class="secondary small" type="button">Обновить строки</button>
             </div>
           </div>
-          <div id="analyticsDrilldownSummary" class="analytics-drilldown-summary">—</div>
+          <div id="analyticsDrilldownSummary" class="analytics-drilldown-summary" role="status" aria-live="polite">Раскройте раздел, чтобы загрузить сообщения по выбранным фильтрам.</div>
           <div id="analyticsDrilldownTable" class="analytics-table analytics-drilldown-table"></div>
           <details class="analytics-excluded-details">
             <summary>Служебные сообщения, исключённые из аналитики</summary>
             <div id="analyticsExcludedTable" class="analytics-table"></div>
           </details>
-        </section>
+        </details>
       </main>
 
 
@@ -1182,6 +1181,6 @@
 
   <div id="notificationToasts" class="notification-toast-stack" aria-live="polite"></div>
 
-  <script src="/static/app.js?v=v96-ozon-fbo-supplies-20261029"></script>
+  <script src="/static/app.js?v=analytics-lazy-details-20261105"></script>
 </body>
 </html>

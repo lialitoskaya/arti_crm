@@ -5,6 +5,7 @@ import sqlite3
 import sys
 import types
 import unittest
+from contextlib import nullcontext
 from unittest.mock import patch
 
 
@@ -80,6 +81,68 @@ class AnalyticsQueryBoundsTests(unittest.TestCase):
         after, after_ticks = measured(sql, params)
         self.assertEqual(after, before)
         self.assertLess(after_ticks, before_ticks / 5)
+
+    def prepare_drilldown(self):
+        self.conn.row_factory = sqlite3.Row
+        for column in ('customer_name', 'order_id', 'assigned_to', 'assigned_user_id'):
+            self.conn.execute(f'ALTER TABLE chats ADD COLUMN {column} TEXT')
+        self.conn.execute("ALTER TABLE messages ADD COLUMN text TEXT DEFAULT 'Synthetic message'")
+        self.conn.execute("INSERT INTO chats VALUES (4, 'yandex', 'other', 'open', '', '', '', '', '')")
+        self.conn.executemany("INSERT INTO messages(id, chat_id, direction, created_at, author, raw_json) VALUES (?, ?, 'inbound', ?, ?, '{}')", [
+            (20, 1, '2026-11-04T22:10:00Z', 'bot'),
+            (21, 1, '2026-11-05T22:00:00Z', 'bot'),
+            (22, 4, '2026-11-05T00:15:00+03:00', 'buyer'),
+            (23, 4, '2026-11-05T10:00:00+03:00', 'support'),
+        ])
+
+    def test_drilldown_and_excluded_count_preserve_filters(self):
+        self.prepare_drilldown()
+        with patch.object(analytics, 'get_connection', lambda: nullcontext(self.conn)):
+            for market, start_hour, end_hour, offset in [
+                (None, None, None, 180), ('ozon', 0, 2, 180),
+                ('yandex', 0, 12, 180), (None, None, None, -180),
+            ]:
+                with self.subTest(market=market, hours=(start_hour, end_hour), offset=offset):
+                    args = dict(date_from='2026-11-05', date_to='2026-11-05', marketplace=market,
+                                hour_from=start_hour, hour_to=end_hour, tz_offset_minutes=offset)
+                    count_args = dict(self.kwargs, marketplace=market, hour_from=start_hour,
+                                      hour_to=end_hour, modifier=analytics._tz_modifier(offset))
+                    bounded = analytics.build_chat_analytics_drilldown(**args)
+                    count = analytics._fetch_excluded_service_message_count(self.conn, **count_args)
+                    with patch.object(analytics, '_coarse_created_at_bounds', return_value=('0000-00-00', '9999-12-31')):
+                        self.assertEqual(bounded, analytics.build_chat_analytics_drilldown(**args))
+                        self.assertEqual(count, analytics._fetch_excluded_service_message_count(self.conn, **count_args))
+            result = analytics.build_chat_analytics_drilldown(date_from='2026-11-05', date_to='2026-11-05')
+            self.assertEqual({row['message_id'] for row in result['items']}, {2, 4, 22})
+            self.assertEqual({row['message_id'] for row in result['excluded_service_items']}, {20, 23})
+            no_excluded = analytics.build_chat_analytics_drilldown(date_from='2026-11-05', date_to='2026-11-05', include_excluded=False, limit=1)
+            self.assertEqual(len(no_excluded['items']), 1)
+            self.assertEqual(no_excluded['excluded_service_items'], [])
+
+    def test_historical_messages_do_not_dominate_drilldown_or_excluded_count(self):
+        self.prepare_drilldown()
+        self.conn.executemany("INSERT INTO messages(id, chat_id, direction, created_at, author, raw_json) VALUES (?, 3, 'inbound', '2020-01-01T00:00:00Z', ?, '{}')",
+                              [(i, 'bot' if i % 2 else 'buyer') for i in range(100, 10100)])
+        def measured(action):
+            ticks = [0]
+            def progress():
+                ticks[0] += 1
+                return 0
+            self.conn.set_progress_handler(progress, 1000)
+            try:
+                return action(), ticks[0]
+            finally:
+                self.conn.set_progress_handler(None, 0)
+        with patch.object(analytics, 'get_connection', lambda: nullcontext(self.conn)):
+            for action in (
+                lambda: analytics.build_chat_analytics_drilldown(date_from='2026-11-05', date_to='2026-11-05'),
+                lambda: analytics._fetch_excluded_service_message_count(self.conn, **self.kwargs, hour_from=None, hour_to=None),
+            ):
+                with patch.object(analytics, '_coarse_created_at_bounds', return_value=('0000-00-00', '9999-12-31')):
+                    before, old_ticks = measured(action)
+                after, new_ticks = measured(action)
+                self.assertEqual(after, before)
+                self.assertLess(new_ticks, old_ticks / 5)
 
 
 if __name__ == '__main__':

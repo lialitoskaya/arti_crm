@@ -353,7 +353,8 @@ def _fetch_excluded_service_message_count(
     hour_to: int | None,
 ) -> int:
     """Count inbound-looking messages excluded from analytics as service/bot/system."""
-    params: list[Any] = [modifier, start, end]
+    coarse_from, coarse_to = _coarse_created_at_bounds(start, end)
+    params: list[Any] = [coarse_from, coarse_to, modifier, start, end]
     marketplace_sql = _marketplace_filter_sql("c", marketplace, params)
     hour_sql = ""
     if hour_from is not None or hour_to is not None:
@@ -365,6 +366,7 @@ def _fetch_excluded_service_message_count(
         FROM messages m
         JOIN chats c ON c.id = m.chat_id
         WHERE m.direction='inbound'
+          AND m.created_at >= ? AND m.created_at < ?
           AND NOT {_analytics_client_message_sql('m')}
           AND date(datetime(m.created_at, ?)) BETWEEN ? AND ?
           {marketplace_sql}
@@ -765,7 +767,8 @@ def build_chat_analytics_drilldown(
     modifier = _tz_modifier(offset)
     safe_limit = max(1, min(int(limit or 1000), 5000))
 
-    params: list[Any] = [modifier, modifier, modifier, modifier, modifier, start, end]
+    coarse_from, coarse_to = _coarse_created_at_bounds(start, end)
+    params: list[Any] = [modifier, modifier, modifier, modifier, coarse_from, coarse_to, modifier, start, end]
     marketplace_sql = _marketplace_filter_sql("c", market, params)
     hour_sql = _hour_filter_sql("local_hour", h_from, h_to, params)
 
@@ -797,6 +800,7 @@ def build_chat_analytics_drilldown(
             FROM messages m
             JOIN chats c ON c.id = m.chat_id
             WHERE m.direction='inbound'
+              AND m.created_at >= ? AND m.created_at < ?
               AND {_analytics_client_message_sql('m')}
               AND date(datetime(m.created_at, ?)) BETWEEN ? AND ?
               {marketplace_sql}
@@ -835,7 +839,7 @@ def build_chat_analytics_drilldown(
 
         excluded_items: list[dict[str, Any]] = []
         if include_excluded:
-            excluded_params: list[Any] = [modifier, modifier, modifier, start, end]
+            excluded_params: list[Any] = [modifier, modifier, coarse_from, coarse_to, modifier, start, end]
             excluded_market_sql = _marketplace_filter_sql("c", market, excluded_params)
             excluded_hour_sql = ""
             if h_from is not None or h_to is not None:
@@ -861,6 +865,7 @@ def build_chat_analytics_drilldown(
                 FROM messages m
                 JOIN chats c ON c.id = m.chat_id
                 WHERE m.direction='inbound'
+                  AND m.created_at >= ? AND m.created_at < ?
                   AND NOT {_analytics_client_message_sql('m')}
                   AND date(datetime(m.created_at, ?)) BETWEEN ? AND ?
                   {excluded_market_sql}

@@ -985,6 +985,7 @@ html[data-theme="dark"] button.reply-template-delete-action:focus-visible {
 .analytics-card strong { font-size: 24px; }
 .analytics-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
 .analytics-panel { padding: 14px; }
+.analytics-drilldown-panel > summary { min-height: 40px; padding: 8px 0; cursor: pointer; font-weight: 600; }
 .analytics-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .analytics-panel h3 { margin: 0; font-size: 15px; }
 .analytics-table { overflow: auto; }

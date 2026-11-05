@@ -6400,25 +6400,103 @@ function setAnalyticsText(id, value) {
   if (el) el.textContent = value;
 }
 
-let analyticsLoadInFlight = null;
-async function loadAnalytics() {
-  if (analyticsLoadInFlight) return analyticsLoadInFlight; // не копить параллельные тяжёлые запросы
-  setupAnalyticsDefaults();
+const analyticsRequests = {
+  summary: { pending: null, query: '' },
+  details: { pending: null, query: '', loadedQuery: null },
+};
+
+function resetAnalyticsDrilldown(message) {
+  setAnalyticsText('analyticsDrilldownSummary', message);
+  $('analyticsDrilldownTable')?.replaceChildren();
+  $('analyticsExcludedTable')?.replaceChildren();
+}
+
+function requestAnalyticsResource(kind) {
+  const state = analyticsRequests[kind];
+  state.query = analyticsQueryString();
+  if (state.pending) return state.pending;
+  const isDetails = kind === 'details';
+  state.pending = (async () => {
+    // Serialize each endpoint and skip superseded filter results. A new filter
+    // during a slow request is queued instead of being lost or starting a storm.
+    while (true) {
+      if (isDetails && !$('analyticsDrilldownDetails')?.open) return;
+      const query = state.query;
+      if (isDetails) {
+        state.loadedQuery = null;
+        resetAnalyticsDrilldown('Загрузка сообщений…');
+        $('analyticsDrilldownTable')?.setAttribute('aria-busy', 'true');
+        if ($('analyticsDrilldownRefreshBtn')) $('analyticsDrilldownRefreshBtn').disabled = true;
+      } else {
+        setAnalyticsText('analyticsLoadStatus', analyticsLoadedOnce
+          ? 'Обновление сводки… Пока показаны предыдущие данные.' : 'Загрузка сводки…');
+      }
+      try {
+        const path = isDetails ? 'chats/drilldown' : 'chats';
+        const extra = isDetails ? '&limit=1000&include_excluded=1' : '';
+        const data = await api(`/api/analytics/${path}?${query}${extra}`);
+        if (query !== state.query) continue;
+        if (isDetails) {
+          renderAnalyticsDrilldown(data);
+          state.loadedQuery = query;
+        } else {
+          renderAnalytics(data);
+          analyticsLoadedOnce = true;
+          setAnalyticsText('analyticsLoadStatus', '');
+        }
+        return;
+      } catch (error) {
+        if (query !== state.query) continue;
+        if (isDetails) {
+          resetAnalyticsDrilldown('Не удалось загрузить сообщения. Нажмите «Обновить строки», чтобы повторить.');
+        } else {
+          setAnalyticsText('analyticsLoadStatus', analyticsLoadedOnce
+            ? 'Не удалось обновить сводку. Показаны предыдущие данные.' : 'Не удалось загрузить сводку. Нажмите «Обновить».');
+        }
+        throw error;
+      }
+    }
+  })().finally(() => {
+    state.pending = null;
+    if (isDetails) {
+      $('analyticsDrilldownTable')?.setAttribute('aria-busy', 'false');
+      if ($('analyticsDrilldownRefreshBtn')) $('analyticsDrilldownRefreshBtn').disabled = false;
+    }
+  });
+  return state.pending;
+}
+
+function loadAnalyticsDrilldown(force = false) {
+  if (!$('analyticsDrilldownDetails')?.open) return Promise.resolve();
+  const state = analyticsRequests.details;
   const query = analyticsQueryString();
-  analyticsLoadInFlight = (async () => {
-    const [data, drilldown] = await Promise.all([
-      api(`/api/analytics/chats?${query}`),
-      api(`/api/analytics/chats/drilldown?${query}&limit=1000&include_excluded=1`),
-    ]);
-    renderAnalytics(data);
-    renderAnalyticsDrilldown(drilldown);
-    analyticsLoadedOnce = true;
-  })();
-  try {
-    return await analyticsLoadInFlight;
-  } finally {
-    analyticsLoadInFlight = null;
+  if (!force && state.loadedQuery === query && !state.pending) return Promise.resolve();
+  return requestAnalyticsResource('details');
+}
+
+function loadAnalytics() {
+  setupAnalyticsDefaults();
+  const details = analyticsRequests.details;
+  details.query = analyticsQueryString();
+  details.loadedQuery = null;
+  resetAnalyticsDrilldown('Раскройте раздел, чтобы загрузить сообщения по выбранным фильтрам.');
+  const summary = requestAnalyticsResource('summary');
+  if ($('analyticsDrilldownDetails')?.open) {
+    loadAnalyticsDrilldown().catch(err => notify('Ошибка загрузки сообщений', String(err.message || err)));
   }
+  return summary;
+}
+
+function bindAnalyticsDrilldown() {
+  const details = $('analyticsDrilldownDetails');
+  if (!details || details.dataset.boundAnalyticsDetails) return;
+  details.dataset.boundAnalyticsDetails = '1';
+  details.addEventListener('toggle', () => {
+    if (details.open) loadAnalyticsDrilldown().catch(err => notify('Ошибка загрузки сообщений', String(err.message || err)));
+  });
+  $('analyticsDrilldownRefreshBtn')?.addEventListener('click', () => {
+    loadAnalyticsDrilldown(true).catch(err => notify('Ошибка загрузки сообщений', String(err.message || err)));
+  });
 }
 
 const ANALYTICS_WEEKDAY_NAMES = [
@@ -6561,6 +6639,7 @@ function renderAnalyticsHourly(rows) {
       const to = $('analyticsHourTo');
       if (from) from.value = String(hour);
       if (to) to.value = String(hour);
+      if ($('analyticsDrilldownDetails')) $('analyticsDrilldownDetails').open = true;
       loadAnalytics().catch(err => notify('Ошибка аналитики', String(err.message || err)));
       $('analyticsDrilldownTable')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
@@ -8452,7 +8531,7 @@ function init() {
     showView(targetView);
   });
   bind('analyticsRefreshBtn', 'click', loadAnalytics);
-  bind('analyticsDrilldownRefreshBtn', 'click', loadAnalytics);
+  bindAnalyticsDrilldown();
   ['analyticsDateFrom', 'analyticsDateTo', 'analyticsMarketplace', 'analyticsHourFrom', 'analyticsHourTo'].forEach((id) => {
     const el = $(id);
     if (el && !el.dataset.boundAnalytics) {
