@@ -272,7 +272,7 @@ def _daily_requests_cte_sql(
     The timezone is applied through SQLite's datetime modifier.
     """
     coarse_from, coarse_to = _coarse_created_at_bounds(start, end)
-    params: list[Any] = [modifier, modifier, modifier, modifier, coarse_from, coarse_to, start, end]
+    params: list[Any] = [modifier, modifier, modifier, coarse_from, coarse_to, modifier, start, end]
     marketplace_sql = _marketplace_filter_sql("c", marketplace, params)
     hour_sql = _hour_filter_sql("local_hour", hour_from, hour_to, params) if include_hour_filter else ""
 
@@ -561,12 +561,17 @@ def _response_blocks_cte_sql(
     for peak hours (first inbound per chat per day). Response time must include
     every manager response cycle, not only the first daily request.
     """
-    params: list[Any] = [modifier, modifier, modifier, start, end]
+    coarse_from, coarse_to = _coarse_created_at_bounds(start, end)
+    params: list[Any] = [coarse_from, coarse_to, modifier, modifier, modifier, start, end]
     marketplace_sql = _marketplace_filter_sql("c", marketplace, params)
     hour_sql = _hour_filter_sql("request_hour", hour_from, hour_to, params) if include_hour_filter else ""
 
     return f"""
-        WITH ordered_messages AS (
+        WITH candidate_chats AS (
+            SELECT DISTINCT chat_id
+            FROM messages
+            WHERE direction='inbound' AND created_at >= ? AND created_at < ?
+        ), ordered_messages AS (
             SELECT
                 m.id,
                 m.chat_id,
@@ -587,6 +592,7 @@ def _response_blocks_cte_sql(
             FROM messages m
             JOIN chats c ON c.id = m.chat_id
             WHERE m.direction IN ('inbound', 'outbound')
+              AND m.chat_id IN (SELECT chat_id FROM candidate_chats)
               AND (m.direction != 'inbound' OR {_analytics_client_message_sql('m')})
         ),
         inbound_blocks_all AS (
