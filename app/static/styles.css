@@ -1430,6 +1430,7 @@ textarea {
   flex: 1 1 auto;
   min-height: 0;
   grid-auto-rows: minmax(125px, auto);
+  align-content: start;
   gap: 8px;
   padding: 0 0 8px;
 }
