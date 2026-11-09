@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import asyncio
 import ipaddress
 import os
@@ -134,6 +135,8 @@ _REAL_SQLITE_CONNECT = db.sqlite3.connect
 
 
 def _guarded_sqlite_connect(database, *args, **kwargs):
+    if database == ":memory:":
+        return _REAL_SQLITE_CONNECT(database, *args, **kwargs)
     try:
         candidate = Path(os.fspath(database)).resolve()
     except TypeError as exc:
@@ -171,7 +174,9 @@ def _remove_test_runtime_files() -> None:
         shutil.rmtree(_ATTACHMENTS_PATH)
 
 
-def tearDownModule() -> None:
+# Other test modules import and use these process-wide guards after this module runs.
+@atexit.register
+def _close_test_runtime() -> None:
     pytest_current_test = os.environ.get("PYTEST_CURRENT_TEST")
     _remove_test_runtime_files()
     _TEST_EVENT_LOOP.close()

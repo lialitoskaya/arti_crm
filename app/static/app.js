@@ -847,7 +847,7 @@ async function registerPwaServiceWorker() {
   if (pwaServiceWorkerRegisterPromise) return pwaServiceWorkerRegisterPromise;
 
   pwaServiceWorkerRegisterPromise = navigator.serviceWorker.register(
-    '/static/sw.js?v=v89-yandex-oauth-tombstone-20260803',
+    `/static/sw.js?v=${encodeURIComponent(document.querySelector('meta[name="arti-build-version"]').content)}`,
     { updateViaCache: 'none' },
   )
     .then((registration) => {
@@ -1421,6 +1421,7 @@ async function api(path, options = {}) {
 
       if (!response.ok) {
         const body = await response.text();
+        if (response.status === 403) refreshSessionPermissions();
         const error = createApiError(response.status, body, path);
         if (isCsrfApiError(error) && isUnsafeHttpMethod(method) && !_csrfRetryDone) {
           await refreshCsrfToken();
@@ -1851,6 +1852,7 @@ function assigneeOptions(selectedId, includeEmpty = true) {
 }
 
 async function loadAssignees() {
+  if (!canSection('chats') && !canSection('tasks')) return [];
   try {
     const data = await api('/api/users/assignees');
     assignees = Array.isArray(data) ? data : [];
@@ -1947,6 +1949,7 @@ async function deleteTask(taskId, options = {}) {
 }
 
 function bindTaskCardActions(item, options = {}) {
+  markTaskPermissionControls(item);
   item.querySelectorAll('[data-task-action]').forEach(btn => {
     btn.onclick = async () => {
       const taskId = Number(btn.dataset.taskId);
@@ -2019,6 +2022,7 @@ function statusOptions(selected = '', includeClosed = false, funnelId = '') {
 }
 
 async function loadChatSettings(options = {}) {
+  if (!canSection('chats') && !canSection('techSettings')) return;
   try {
     chatSettings = await api('/api/chat-settings');
     const nextNames = {};
@@ -2163,6 +2167,7 @@ async function saveAllChatStatuses() {
 
 
 async function loadTaskTypes(options = {}) {
+  if (!canSection('chats') && !canSection('tasks') && !canSection('techSettings')) return;
   try {
     const includeInactive = options.includeInactive !== false;
     taskTypes = await api(`/api/task-types?include_inactive=${includeInactive ? 'true' : 'false'}`);
@@ -2622,6 +2627,7 @@ function scrollMessagesToBottom(reason = '') {
 }
 
 async function loadSyncStatus() {
+  if (currentUser?.role !== 'admin') return;
   if (syncStatusLoadPromise) return syncStatusLoadPromise;
   syncStatusLoadPromise = (async () => {
     try {
@@ -2686,6 +2692,7 @@ const ALERTS_REFRESH_INTERVAL_MS = 10000;
 const NOTIFICATIONS_REFRESH_INTERVAL_MS = 10000;
 
 function isFrontendSyncAllowed() {
+  if (currentUser?.role !== 'admin') return false;
   if (!appInitialized || !currentUser) return false;
   if (document.hidden) return false;
   if (chatOpenInFlight) return false;
@@ -2747,6 +2754,7 @@ async function runFrontendOzonFastSync(options = {}) {
 }
 
 async function runFrontendOzonQuestionsSync(options = {}) {
+  if (!canSection('questions', 'write')) return null;
   const { silent = true, force = false, respectMinGap = false } = options;
   if (!appInitialized || !currentUser) return null;
   if (document.hidden) return null;
@@ -3061,6 +3069,7 @@ async function loadMoreChats() {
 }
 
 async function loadChats(options = {}) {
+  if (!canSection('chats')) return;
   const { withStats = true, render = true, append = false } = options;
   const requestedRenderKey = currentChatListRenderKey();
   const requestedNextOffset = chatListNextOffset;
@@ -3227,7 +3236,8 @@ async function refreshVisibleData() {
       return;
     }
     if (activeView === 'questions') {
-      await runFrontendOzonQuestionsSync({ silent: true });
+      if (canSection('questions', 'write')) await runFrontendOzonQuestionsSync({ silent: true });
+      else await loadQuestions();
       await loadSyncStatus();
       return;
     }
@@ -3512,6 +3522,7 @@ function paintChatShellFromSummary(chatId, previousChatId) {
 }
 
 async function refreshChatListOnly(options = {}) {
+  if (!canSection('chats')) return;
   const { force = false } = options;
   if (!appInitialized || !currentUser) return null;
   if (document.hidden) return null;
@@ -3877,6 +3888,7 @@ function renderChatList(options = {}) {
 }
 
 async function openChat(chatId, options = {}) {
+  if (!canSection('chats')) return;
   const requestSeq = ++openChatRequestSeq;
   mobileChatClosedByUser = false;
   const previousChatId = currentChatId;
@@ -4158,6 +4170,7 @@ function renderMessages(messages) {
 
       const noteActions = document.createElement('span');
       noteActions.className = 'internal-note-actions';
+      noteActions.dataset.permissionWrite = 'chats';
 
       const editBtn = document.createElement('button');
       editBtn.type = 'button';
@@ -4646,7 +4659,10 @@ function imagePreviewSrc(url) {
     const host = parsed.hostname.toLowerCase();
     // Marketplace links often need backend headers or fail because of browser/CORS/referrer rules.
     if (host.includes('ozon') || host.includes('ozone') || host.includes('o3') || host.includes('cdn')) {
-      return `/api/assets/image?url=${encodeURIComponent(url)}`;
+      if (currentUser?.role === 'admin') return `/api/assets/image?url=${encodeURIComponent(url)}`;
+      const section = activeView === 'reviews' ? 'reviews' : activeView === 'questions' ? 'questions' : 'chats';
+      const entityId = section === 'reviews' ? currentReviewId : section === 'questions' ? currentQuestionId : currentChatId;
+      return `/api/assets/entity-image?section=${section}&entity_id=${Number(entityId) || 0}&url=${encodeURIComponent(url)}`;
     }
   } catch (err) {
     return url;
@@ -5523,6 +5539,7 @@ function renderTasks(tasks) {
 }
 
 function bindTaskChatEditToggle(item) {
+  markTaskPermissionControls(item);
   const toggle = item.querySelector('[data-task-edit-toggle]');
   const panel = item.querySelector('[data-task-edit-panel]');
   const cancel = item.querySelector('[data-task-edit-cancel]');
@@ -5667,6 +5684,7 @@ function collectTaskEditBody(card) {
 }
 
 function bindTaskBoardCardActions(item) {
+  markTaskPermissionControls(item);
   const statusButton = item.querySelector('[data-task-status-pill]');
   const statusMenu = item.querySelector('[data-task-status-menu]');
   if (statusButton && statusMenu) {
@@ -5816,6 +5834,7 @@ function renderAllTasks(tasks) {
     const typeLabel = getTaskTypeLabel(task);
     const fieldLabel = getTaskCustomFieldLabel(task);
     const isStandaloneTask = task.is_standalone === true || task.is_standalone === 1 || String(task.marketplace || '') === 'internal_tasks';
+    item.dataset.permissionTaskStandalone = String(isStandaloneTask);
     const clientLabel = isStandaloneTask ? 'Без чата' : (customerLabel(task) || task.customer_id || task.external_chat_id || `ID ${task.chat_id || task.id || ''}`.trim());
     const primaryText = getTaskPrimaryText(task);
     const responsibleLabel = assigneeNameFromTask(task) || 'Не назначен';
@@ -6012,6 +6031,7 @@ function toggleExtraMenu(force) {
 }
 
 function showExtraPanel(panelName) {
+  if (panelName === 'tasks' && !canSection('tasks')) return;
   pauseMobileChatBackgroundWork(2600);
 
   activeExtraPanel = activeExtraPanel === panelName ? '' : panelName;
@@ -6467,6 +6487,7 @@ function requestAnalyticsResource(kind) {
 }
 
 function loadAnalyticsDrilldown(force = false) {
+  if (!canSection('chats')) return Promise.resolve();
   if (!$('analyticsDrilldownDetails')?.open) return Promise.resolve();
   const state = analyticsRequests.details;
   const query = analyticsQueryString();
@@ -6871,6 +6892,7 @@ function readSupplyPlanningState() {
 }
 
 function writeSupplyPlanningState() {
+  if (!canSection('supplyPlanning', 'write')) return;
   try {
     localStorage.setItem(SUPPLY_PLANNING_STORAGE_KEY, JSON.stringify({
       defaultTargetDays: getSupplyPlanningDefaultTargetDays(),
@@ -6979,6 +7001,7 @@ function mergeSupplyPlanningApiRows(apiRows = []) {
 }
 
 async function syncSupplyPlanningFromApi(options = {}) {
+  if (!canSection('supplyPlanning', 'write')) return;
   if (supplyPlanningApiSyncInFlight) return;
   const targetDays = getSupplyPlanningDefaultTargetDays();
   const marketplace = options.marketplace || getSupplyPlanningMarketplaceFilter() || 'all';
@@ -7094,11 +7117,11 @@ function supplyPlanningRowHtml(row) {
         ${supplyPlanningValueHtml('Продажи/день', formatSupplyPlanningNumber(row.avgDailySales, 2))}
         <label>
           <span>Доставка, дней</span>
-          <input data-supply-field="deliveryDays" type="number" min="0" step="1" value="${escapeHtml(row.deliveryDays)}" placeholder="0" />
+          <input data-permission-write="supplyPlanning" data-supply-field="deliveryDays" type="number" min="0" step="1" value="${escapeHtml(row.deliveryDays)}" placeholder="0" />
         </label>
         <label>
           <span>В пути, шт</span>
-          <input data-supply-field="inTransit" type="number" min="0" step="1" value="${escapeHtml(row.inTransit)}" placeholder="0" />
+          <input data-permission-write="supplyPlanning" data-supply-field="inTransit" type="number" min="0" step="1" value="${escapeHtml(row.inTransit)}" placeholder="0" />
         </label>
       </div>
       <div class="supply-planning-row-result">
@@ -7137,7 +7160,7 @@ function renderSupplyPlanning() {
   if (!box) return;
   const rows = supplyPlanningVisibleRows();
   if (!supplyPlanningRows.length) {
-    box.innerHTML = '<div class="empty-card supply-planning-empty">Данные по складам ещё не загружены. Нажмите «Обновить из API» — вручную склады, остатки и продажи вводить не нужно.</div>';
+    box.innerHTML = '<div class="empty-card supply-planning-empty">В этом браузере ещё нет сохранённых данных по складам.</div>';
     renderSupplyPlanningSummary();
     return;
   }
@@ -7183,6 +7206,7 @@ function updateSupplyPlanningRowResults(rowId) {
 }
 
 function handleSupplyPlanningInput(event) {
+  if (!canSection('supplyPlanning', 'write')) return;
   const field = event.target.closest('[data-supply-field]');
   if (!field) return;
   const card = field.closest('[data-supply-row]');
@@ -7196,6 +7220,7 @@ function handleSupplyPlanningInput(event) {
 }
 
 function resetSupplyPlanningRows() {
+  if (!canSection('supplyPlanning', 'write')) return;
   if (!confirm('Очистить загруженные данные поставок из этого браузера?')) return;
   supplyPlanningRows = [];
   writeSupplyPlanningState();
@@ -7208,7 +7233,7 @@ function handleSupplyPlanningFilterChange(event) {
   const marketplace = getSupplyPlanningMarketplaceFilter();
   if (event?.target?.id === 'supplyPlanningMarketplaceFilter' && marketplace !== 'all') {
     const hasRows = supplyPlanningRows.some(row => String(row.marketplace || '').toLowerCase() === marketplace);
-    if (!hasRows) syncSupplyPlanningFromApi({ marketplace });
+    if (!hasRows && canSection('supplyPlanning', 'write')) syncSupplyPlanningFromApi({ marketplace });
   }
 }
 
@@ -7224,6 +7249,7 @@ function bindSupplyPlanningControls() {
   if (defaultTargetInput && !defaultTargetInput.dataset.boundSupplyPlanning) {
     defaultTargetInput.dataset.boundSupplyPlanning = '1';
     defaultTargetInput.addEventListener('input', () => {
+      if (!canSection('supplyPlanning', 'write')) return;
       writeSupplyPlanningState();
       renderSupplyPlanning();
     });
@@ -7414,8 +7440,10 @@ function syncRouteForChat(chatId, { replace = false } = {}) {
 function showView(view, options = {}) {
   if (view !== 'chats') setMobileChatOpen(false);
 
-  const normalizedView = normalizeViewName(view);
+  const requestedView = normalizeViewName(view);
+  const normalizedView = canOpenView(requestedView) ? requestedView : firstAllowedView();
   activeView = normalizedView;
+  updateSectionAccessStatus(normalizedView);
   document.body.dataset.activeView = normalizedView;
   if (options.syncRoute !== false) {
     syncRouteForView(normalizedView, { replace: Boolean(options.replaceRoute) });
@@ -7580,7 +7608,7 @@ function renderReplyTemplates() {
   }
   list.innerHTML = items.map((template) => {
     const templateId = escapeHtml(String(template.id ?? ''));
-    const actions = currentUser?.role === 'admin'
+    const actions = canSection('techSettings', 'write')
       ? `<span class="reply-template-actions" aria-label="Действия с шаблоном">
           <button class="reply-template-action reply-template-edit-action icon-btn" type="button" data-reply-template-edit="${templateId}" aria-label="Редактировать шаблон" title="Редактировать">
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 20h4l10.5-10.5a2.12 2.12 0 0 0-3-3L5 17v3Zm10.5-12.5 3 3"/></svg>
@@ -7639,7 +7667,7 @@ function replyTemplateById(templateId) {
 }
 
 function openReplyTemplateEditBox(templateId) {
-  if (currentUser?.role !== 'admin') return;
+  if (!canSection('techSettings', 'write')) return;
   const template = replyTemplateById(templateId);
   if (!template) return;
   replyTemplateEditingId = String(template.id);
@@ -7668,7 +7696,7 @@ ${chunk}` : chunk;
 }
 
 async function deleteReplyTemplate(templateId) {
-  if (currentUser?.role !== 'admin') return;
+  if (!canSection('techSettings', 'write')) return;
   const template = replyTemplateById(templateId);
   if (!template) return;
   if (!window.confirm(`Удалить шаблон «${String(template.title || 'Без названия')}»?`)) return;
@@ -7893,6 +7921,8 @@ function updateAuthUiForUser() {
   const roleLabel = user.role === 'admin' ? 'администратор' : user.role === 'viewer' ? 'наблюдатель' : 'менеджер';
   if ($('currentUserLabel')) $('currentUserLabel').textContent = user.username ? `${user.display_name || user.username} · ${roleLabel}` : '—';
   document.querySelectorAll('.admin-only').forEach((el) => el.classList.toggle('hidden', user.role !== 'admin'));
+  document.querySelectorAll('[data-permission-display]').forEach(el => el.classList.toggle('hidden', !canSection(el.dataset.permissionDisplay, 'write')));
+  updatePermissionNavigation();
 }
 
 function fillProfileForm() {
@@ -7929,7 +7959,8 @@ async function submitProfile(event) {
 
 function openUserCreateModal() {
   const modal = $('userCreateModal');
-  if (!modal) return;
+  if (!modal || !employeePermissionCatalog.length) return;
+  renderEmployeePermissions('new');
   modal.classList.remove('hidden');
   modal.setAttribute('aria-hidden', 'false');
   setTimeout(() => $('newUserUsername')?.focus(), 30);
@@ -7963,6 +7994,9 @@ function openUserEditModal(userId) {
   if ($('editUserRole')) $('editUserRole').value = user.role || 'manager';
   if ($('editUserPassword')) $('editUserPassword').value = '';
   if ($('editUserActive')) $('editUserActive').checked = Boolean(user.is_active);
+  renderEmployeePermissions('edit', user.permissions);
+  if ($('editUserRole')) $('editUserRole').disabled = Number(user.id) === Number(currentUser?.id);
+  if ($('editUserActive')) $('editUserActive').disabled = Number(user.id) === Number(currentUser?.id);
   if ($('userEditModalSubtitle')) {
     $('userEditModalSubtitle').textContent = `@${user.username || 'user'} · ${roleLabel(user.role)} · ${user.is_active ? 'активен' : 'отключён'}`;
   }
@@ -7987,6 +8021,8 @@ function handleUserEditModalBackdropClick(event) {
 
 async function submitUserEdit(event) {
   event.preventDefault();
+  const form = event.currentTarget;
+  if (form.dataset.saving) return;
   const modal = $('userEditModal');
   const userId = Number(modal?.dataset.userId || 0);
   if (!userId) return;
@@ -7996,7 +8032,11 @@ async function submitUserEdit(event) {
     is_active: Boolean($('editUserActive')?.checked),
   };
   const password = $('editUserPassword')?.value || '';
+  form.dataset.saving = '1';
+  const submitButton = form.querySelector('[type=submit]');
+  if (submitButton) submitButton.disabled = true;
   try {
+    payload.permissions = readEmployeePermissions('edit');
     await api(`/api/users/${userId}`, { method: 'PATCH', body: JSON.stringify(payload) });
     if (password) {
       await api(`/api/users/${userId}/password`, { method: 'POST', body: JSON.stringify({ password }) });
@@ -8007,6 +8047,9 @@ async function submitUserEdit(event) {
     notify('Готово', 'Данные сотрудника сохранены.');
   } catch (err) {
     notify('Не удалось сохранить сотрудника', String(err.message || err));
+  } finally {
+    delete form.dataset.saving;
+    if (submitButton) submitButton.disabled = false;
   }
 }
 
@@ -8016,7 +8059,11 @@ async function loadUsers() {
     showView('profile');
     return;
   }
-  const users = await api('/api/users');
+  const createButton = $('openUserCreateModalBtn');
+  if (createButton) createButton.disabled = true;
+  const [users, catalog] = await Promise.all([api('/api/users'), api('/api/permissions')]);
+  employeePermissionCatalog = catalog.sections || [];
+  if (createButton) createButton.disabled = !employeePermissionCatalog.length;
   usersCache = Array.isArray(users) ? users : [];
   const list = $('usersList');
   if (!list) return;
@@ -8176,6 +8223,8 @@ function userCreateValidationError(payload) {
 
 async function submitUserCreate(event) {
   event.preventDefault();
+  const form = event.currentTarget;
+  if (form.dataset.saving) return;
   const payload = {
     username: $('newUserUsername')?.value?.trim() || '',
     display_name: $('newUserDisplayName')?.value?.trim() || null,
@@ -8188,7 +8237,11 @@ async function submitUserCreate(event) {
     $(validation.fieldId)?.focus();
     return;
   }
+  form.dataset.saving = '1';
+  const submitButton = form.querySelector('[type=submit]');
+  if (submitButton) submitButton.disabled = true;
   try {
+    payload.permissions = readEmployeePermissions('new');
     await api('/api/users', { method: 'POST', body: JSON.stringify(payload) });
     ['newUserUsername', 'newUserDisplayName', 'newUserPassword'].forEach(id => { if ($(id)) $(id).value = ''; });
     closeUserCreateModal();
@@ -8198,6 +8251,9 @@ async function submitUserCreate(event) {
   } catch (err) {
     const message = String(err.message || err).replace(/^422:\s*/,'');
     notify('Не удалось создать сотрудника', message || 'Проверьте логин, пароль и роль.');
+  } finally {
+    delete form.dataset.saving;
+    if (submitButton) submitButton.disabled = false;
   }
 }
 
@@ -8387,6 +8443,7 @@ async function bootstrap() {
 function init() {
   if (appInitialized) return;
   appInitialized = true;
+  bindSectionPermissions();
   updateCrmThemeUi();
   bindExtraPanelGeometry();
   bind('themeToggleBtn', 'click', toggleCrmTheme);
@@ -9062,6 +9119,7 @@ function init() {
     }
   });
   window.addEventListener('focus', () => {
+    refreshSessionPermissions();
     runFrontendSyncSoon('focus');
     loadNotifications().catch(err => console.warn('focus notifications failed', err));
     if (activeView === 'chats') runActiveChatRefreshSoon('focus');
@@ -9079,7 +9137,7 @@ function init() {
     if (!document.hidden && activeView !== 'chats') refreshVisibleData();
   }, 60000);
   statusTimer = setInterval(() => {
-    if (!document.hidden) loadSyncStatus();
+    if (!document.hidden) { loadSyncStatus(); refreshSessionPermissions(); }
   }, 60000);
   notificationsTimer = setInterval(() => {
     if (!document.hidden) loadNotifications();

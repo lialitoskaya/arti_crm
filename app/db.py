@@ -637,6 +637,9 @@ def init_db() -> None:
         def _columns(table: str) -> set[str]:
             return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
 
+        if "section_permissions" not in _columns("users"):
+            conn.execute("ALTER TABLE users ADD COLUMN section_permissions TEXT")
+
         task_columns = _columns("tasks")
         if "completed_at" not in task_columns:
             conn.execute("ALTER TABLE tasks ADD COLUMN completed_at TEXT")

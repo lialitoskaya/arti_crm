@@ -141,11 +141,16 @@ class LoginCreate(BaseModel):
     password: str = Field(min_length=1, max_length=500)
 
 
+SectionName = Literal["chats", "tasks", "reviews", "questions", "knowledge", "analytics", "supplyPlanning", "ozonFbo", "techSettings"]
+SectionPermissions = dict[SectionName, Literal["none", "read", "write"]]
+
+
 class UserCreate(BaseModel):
     username: str = Field(min_length=2, max_length=120)
     password: str = Field(min_length=6, max_length=500)
     display_name: str | None = Field(default=None, max_length=160)
     role: Literal["admin", "manager", "viewer"] = "manager"
+    permissions: SectionPermissions | None = None
 
 
 class UserPasswordUpdate(BaseModel):
@@ -156,6 +161,7 @@ class UserUpdate(BaseModel):
     display_name: str | None = Field(default=None, max_length=160)
     role: Literal["admin", "manager", "viewer"] | None = None
     is_active: bool | None = None
+    permissions: SectionPermissions | None = None
 
 
 class YandexOAuthManagedLinkCreate(BaseModel):

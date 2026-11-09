@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -220,7 +221,10 @@ class LiveBatch(unittest.TestCase):
 
     def test_old_draft_is_rebuilt_before_order(self):
         api = BatchApi({}, DAYS)
-        out, lines, asked = self.run_batch(api, age_drafts=True)
+        # Draft creation and approval can occur within one Windows clock tick.
+        with mock.patch("app.services.ozon_fbo.drafts.time", wraps=time) as draft_clock:
+            draft_clock.monotonic.return_value = time.monotonic() - 3600
+            out, lines, asked = self.run_batch(api, age_drafts=True)
         self.assertEqual(len(api.supply_calls), 2)
         self.assertTrue(any("пересобираю" in ln_ for ln_ in lines))
         self.assertEqual(len(api.compositions), 4)

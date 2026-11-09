@@ -17,6 +17,7 @@ from fastapi.responses import Response
 from starlette.concurrency import run_in_threadpool
 
 from app.integrations.ozon_fbo import client as fbo_client
+from app.permissions import can
 from app.schemas import OzonFboRunAnswer, OzonFboSettingsUpdate
 from app.services.ozon_fbo import runner as fbo_runner
 from app.services.ozon_fbo.cargo import load_orders_awaiting_cargo, order_view
@@ -86,15 +87,15 @@ def create_ozon_fbo_router(fbo_repo: Any, require_admin_dependency: RequireAdmin
 
     @router.get("/api/ozon-fbo/status")
     def api_status(request: Request) -> dict[str, Any]:
-        require_admin_dependency(request)
-        recovered = fbo_runner.recover_interrupted_runs()
+        user = require_admin_dependency(request)
+        recovered = fbo_runner.recover_interrupted_runs() if can(user, "ozonFbo", "write") else []
         settings, errors = _settings()
         return {
             "keys_configured": fbo_client.credentials_configured() or api_factory is not None,
             "active_run": fbo_repo.get_active_run(),
             "recovered_runs": recovered,
-            "settings": settings,
-            "settings_errors": errors,
+            "settings": settings if user.get("role") == "admin" else {},
+            "settings_errors": errors if user.get("role") == "admin" else [],
             "lk_url": LK_ORDERS_URL,
             "stale_after_seconds": fbo_runner.STALE_HEARTBEAT_SECONDS,
         }

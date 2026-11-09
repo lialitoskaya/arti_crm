@@ -8,6 +8,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any
 
 from app.db import get_connection
+from app.permissions import can, effective_permissions, notification_allowed, public_user
 from app.marketplace_sender import (
     extract_sender_designations as _shared_extract_sender_designations,
     normalize_system_sender as _shared_normalize_system_sender,
@@ -1698,6 +1699,9 @@ def _enqueue_push_outbox_conn(
     entity_id: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> None:
+    push_user = public_user(conn.execute("SELECT id, role, is_active, section_permissions FROM users WHERE id=?", (user_id,)).fetchone())
+    if not push_user or not notification_allowed(push_user, {"type": type, "chat_id": chat_id, "task_id": task_id, "entity_type": entity_type}):
+        return
     _ensure_push_storage_conn(conn)
     payload = {
         "title": title or "Arti CRM",
@@ -2037,6 +2041,13 @@ def _notification_day_scope(user_id: int) -> tuple[str, list[Any]]:
     )
 
 
+def _notification_permission_clause(conn: Any, user_id: int) -> str:
+    user = public_user(conn.execute("SELECT id, role, is_active, section_permissions FROM users WHERE id=?", (user_id,)).fetchone()) or {}
+    conn.create_function("crm_notification_allowed", 4, lambda kind, chat, task, entity: int(notification_allowed(
+        user, {"type": kind, "chat_id": chat, "task_id": task, "entity_type": entity})))
+    return "crm_notification_allowed(type, chat_id, task_id, entity_type)=1"
+
+
 def list_notifications(user_id: int, *, limit: int = 30, unread_only: bool = False) -> dict[str, Any]:
     limit = max(1, min(int(limit or 30), 100))
     day_where, params = _notification_day_scope(user_id)
@@ -2047,6 +2058,9 @@ def list_notifications(user_id: int, *, limit: int = 30, unread_only: bool = Fal
     cleanup_read_marketplace_notifications()
     with get_connection() as conn:
         _resolve_stale_message_notifications_conn(conn)
+        permission_clause = _notification_permission_clause(conn, user_id)
+        where += " AND " + permission_clause
+        day_where += " AND " + permission_clause
         rows = conn.execute(
             f"""
             SELECT
@@ -2074,8 +2088,9 @@ def list_notifications(user_id: int, *, limit: int = 30, unread_only: bool = Fal
 
 def mark_notification_read(notification_id: int, user_id: int) -> bool:
     with get_connection() as conn:
+        permission_clause = _notification_permission_clause(conn, user_id)
         cur = conn.execute(
-            "UPDATE notifications SET is_read=1, read_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?",
+            f"UPDATE notifications SET is_read=1, read_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=? AND {permission_clause}",
             (int(notification_id), int(user_id)),
         )
         return bool(cur.rowcount)
@@ -2084,6 +2099,7 @@ def mark_notification_read(notification_id: int, user_id: int) -> bool:
 def mark_all_notifications_read(user_id: int) -> int:
     day_where, params = _notification_day_scope(user_id)
     with get_connection() as conn:
+        day_where += " AND " + _notification_permission_clause(conn, user_id)
         cur = conn.execute(
             f"UPDATE notifications SET is_read=1, read_at=CURRENT_TIMESTAMP WHERE {day_where} AND is_read=0",
             params,
@@ -3187,6 +3203,50 @@ def chat_has_messages(chat_id: int) -> bool:
         return bool(row)
 
 
+def _provider_attachment_urls(value: Any) -> set[str]:
+    """Extract exact URL fields only from provider-defined attachment structures."""
+    if isinstance(value, str):
+        return {value}
+    if isinstance(value, list):
+        return {url for item in value for url in _provider_attachment_urls(item)}
+    if not isinstance(value, dict):
+        return set()
+    keys = ("url", "src", "downloadUrl", "downloadURL", "file_url", "image_url",
+            "preview_url", "link", "images", "photos", "files", "file", "image", "photo")
+    return {url for key in keys if key in value for url in _provider_attachment_urls(value[key])}
+
+
+def entity_contains_image_url(section: str, entity_id: int, url: str) -> bool:
+    if section == "reviews":
+        review = get_review(entity_id)
+        if not review or not isinstance(review.get("raw"), dict):
+            return False
+        return any(url in _provider_attachment_urls(review["raw"].get(key))
+                   for key in ("photos", "images", "attachments", "media"))
+    if section != "chats":
+        return False
+    with get_connection() as conn:
+        rows = conn.execute("""
+            SELECT raw_json FROM messages
+            WHERE chat_id=? AND direction='inbound' AND raw_json IS NOT NULL
+        """, (entity_id,))
+        for row in rows:
+            try:
+                raw = json.loads(row["raw_json"])
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(raw, dict):
+                continue
+            # Only imported attachment fields may authorize forwarding. Message text,
+            # operator notes and locally submitted links never grant access.
+            for item in (raw, raw.get("message"), raw.get("data")):
+                if isinstance(item, dict):
+                    for key in ("attachments", "files", "images", "photos", "file_url", "image_url"):
+                        if url in _provider_attachment_urls(item.get(key)):
+                            return True
+    return False
+
+
 def get_chat(
     chat_id: int,
     messages_limit: int | None = None,
@@ -3978,11 +4038,13 @@ def get_task(task_id: int) -> dict[str, Any] | None:
         row = conn.execute("""
             SELECT
                 t.*,
+                CASE WHEN c.marketplace='internal_tasks' THEN 1 ELSE 0 END AS is_standalone,
                 tt.title AS task_type_title,
                 tt.comment_label AS task_type_comment_label,
                 u.display_name AS assignee_user_display_name,
                 u.username AS assignee_user_username
             FROM tasks t
+            JOIN chats c ON c.id=t.chat_id
             LEFT JOIN task_types tt ON tt.id = t.task_type_id
             LEFT JOIN users u ON u.id = t.assigned_user_id
             WHERE t.id=?
@@ -4031,8 +4093,11 @@ def list_tasks(
     task_type_id: int | None = None,
     due_date_from: str | None = None,
     due_date_to: str | None = None,
+    standalone_only: bool = False,
 ) -> list[dict[str, Any]]:
     clauses = ["c.marketplace != 'mock'"]
+    if standalone_only:
+        clauses.append("c.marketplace = 'internal_tasks'")
     params: list[Any] = []
     normalized_status = _normalize_task_status(status) if status else None
     if normalized_status == "new":
@@ -4668,33 +4733,37 @@ def ensure_initial_admin(username: str, password: str, display_name: str | None 
             """,
             (username.strip(), (display_name or username).strip(), password_hash),
         )
-        row = conn.execute("SELECT id, username, display_name, role, is_active, created_at FROM users WHERE id=?", (cur.lastrowid,)).fetchone()
-        return row_to_dict(row)
+        row = conn.execute("SELECT id, username, display_name, role, is_active, created_at, section_permissions FROM users WHERE id=?", (cur.lastrowid,)).fetchone()
+        return public_user(row)
 
 
-def create_user(username: str, password: str, display_name: str | None = None, role: str = 'manager') -> dict[str, Any]:
+def create_user(username: str, password: str, display_name: str | None = None, role: str = 'manager', *, permissions: dict[str, str] | None = None) -> dict[str, Any]:
     role = role if role in {'admin', 'manager', 'viewer'} else 'manager'
     with get_connection() as conn:
         cur = conn.execute(
             """
-            INSERT INTO users (username, display_name, role, password_hash, is_active)
-            VALUES (?, ?, ?, ?, 1)
+            INSERT INTO users (username, display_name, role, password_hash, is_active, section_permissions)
+            VALUES (?, ?, ?, ?, 1, ?)
             """,
-            (username.strip(), (display_name or username).strip(), role, _hash_password(password)),
+            (username.strip(), (display_name or username).strip(), role, _hash_password(password),
+             json.dumps(effective_permissions("manager", permissions)) if permissions is not None else None),
         )
-        row = conn.execute("SELECT id, username, display_name, role, is_active, created_at, updated_at FROM users WHERE id=?", (cur.lastrowid,)).fetchone()
-        return row_to_dict(row)
+        row = conn.execute("SELECT id, username, display_name, role, is_active, created_at, updated_at, section_permissions FROM users WHERE id=?", (cur.lastrowid,)).fetchone()
+        return public_user(row)
 
 
 def list_users() -> list[dict[str, Any]]:
     with get_connection() as conn:
-        rows = conn.execute("SELECT id, username, display_name, role, is_active, created_at, updated_at FROM users ORDER BY id ASC").fetchall()
-        return [row_to_dict(r) for r in rows]
+        rows = conn.execute("SELECT id, username, display_name, role, is_active, created_at, updated_at, section_permissions FROM users ORDER BY id ASC").fetchall()
+        return [public_user(r) for r in rows]
 
 
-def update_user(user_id: int, *, display_name: str | None = None, role: str | None = None, is_active: bool | None = None) -> dict[str, Any] | None:
+def update_user(user_id: int, *, display_name: str | None = None, role: str | None = None, is_active: bool | None = None, permissions: dict[str, str] | None = None, actor_user_id: int | None = None) -> dict[str, Any] | None:
     fields=[]
     params=[]
+    if permissions is not None:
+        fields.append('section_permissions=?')
+        params.append(json.dumps(effective_permissions("manager", permissions)))
     if display_name is not None:
         fields.append('display_name=?')
         params.append(display_name.strip() or None)
@@ -4711,9 +4780,16 @@ def update_user(user_id: int, *, display_name: str | None = None, role: str | No
     fields.append('updated_at=CURRENT_TIMESTAMP')
     params.append(user_id)
     with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if actor_user_id == user_id and (is_active is False or (role is not None and role != "admin")):
+            raise ValueError("Нельзя отключить себя или снять у себя права администратора")
+        current_admin = conn.execute("SELECT role, is_active FROM users WHERE id=?", (user_id,)).fetchone()
+        if current_admin and current_admin['role'] == 'admin' and current_admin['is_active'] and (is_active is False or (role is not None and role != 'admin')):
+            other_admin = conn.execute("SELECT 1 FROM users WHERE role='admin' AND is_active=1 AND id<>? LIMIT 1", (user_id,)).fetchone()
+            if not other_admin:
+                raise ValueError("Нельзя отключить последнего администратора")
         was_active = False
         if is_active is not None:
-            conn.execute("BEGIN IMMEDIATE")
             current = conn.execute(
                 "SELECT is_active FROM users WHERE id=?",
                 (user_id,),
@@ -4834,8 +4910,8 @@ def change_user_password_and_rotate_session(
 
 def get_user_by_id(user_id: int) -> dict[str, Any] | None:
     with get_connection() as conn:
-        row = conn.execute("SELECT id, username, display_name, role, is_active, created_at, updated_at FROM users WHERE id=?", (user_id,)).fetchone()
-        return row_to_dict(row) if row else None
+        row = conn.execute("SELECT id, username, display_name, role, is_active, created_at, updated_at, section_permissions FROM users WHERE id=?", (user_id,)).fetchone()
+        return public_user(row) if row else None
 
 
 def authenticate_user(username: str, password: str) -> dict[str, Any] | None:
@@ -4846,7 +4922,7 @@ def authenticate_user(username: str, password: str) -> dict[str, Any] | None:
         data = dict(row)
         if not _verify_password(password, data.get('password_hash') or ''):
             return None
-        return {k: data[k] for k in ('id', 'username', 'display_name', 'role', 'is_active', 'created_at', 'updated_at') if k in data}
+        return public_user({k: data[k] for k in ('id', 'username', 'display_name', 'role', 'is_active', 'created_at', 'updated_at', 'section_permissions') if k in data})
 
 
 def authenticate_user_and_create_session(
@@ -4881,10 +4957,10 @@ def authenticate_user_and_create_session(
         )
         user = {
             key: data[key]
-            for key in ('id', 'username', 'display_name', 'role', 'is_active', 'created_at', 'updated_at')
+            for key in ('id', 'username', 'display_name', 'role', 'is_active', 'created_at', 'updated_at', 'section_permissions')
             if key in data
         }
-        return user, token
+        return public_user(user), token
 
 
 def _normalize_yandex_oauth_identifier(identifier: str) -> str:
@@ -5183,10 +5259,10 @@ def create_session_for_yandex_identity(
             )
             user = {
                 key: data[key]
-                for key in ('id', 'username', 'display_name', 'role', 'is_active', 'created_at', 'updated_at')
+                for key in ('id', 'username', 'display_name', 'role', 'is_active', 'created_at', 'updated_at', 'section_permissions')
                 if key in data
             }
-            return user, token
+            return public_user(user), token
     except InactiveUserAuthenticationError:
         raise
     except Exception as exc:
@@ -5214,14 +5290,14 @@ def get_user_by_session(token: str | None) -> dict[str, Any] | None:
     with get_connection() as conn:
         row = conn.execute(
             """
-            SELECT u.id, u.username, u.display_name, u.role, u.is_active, u.created_at, u.updated_at
+            SELECT u.id, u.username, u.display_name, u.role, u.is_active, u.created_at, u.updated_at, u.section_permissions
             FROM sessions s
             JOIN users u ON u.id = s.user_id
             WHERE s.session_token=? AND s.revoked_at IS NULL AND s.expires_at > ? AND u.is_active=1
             """,
             (token, now),
         ).fetchone()
-        return row_to_dict(row) if row else None
+        return public_user(row) if row else None
 
 
 def revoke_session(token: str | None) -> None:

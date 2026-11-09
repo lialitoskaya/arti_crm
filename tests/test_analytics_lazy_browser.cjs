@@ -28,6 +28,7 @@ const fixture = { summary: { requests: 42 }, filters: {}, daily: [], hourly: [],
         const $ = id => document.getElementById(id);
         let analyticsLoadedOnce = false;
         const notify = () => {};
+        const canSection = () => true;
         const escapeHtml = text => String(text).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
         window.requests = [];
         const api = url => new Promise((resolve, reject) => requests.push({ url, resolve, reject }));

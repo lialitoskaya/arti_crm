@@ -513,6 +513,7 @@ class ChatOperatorUiTests(unittest.TestCase):
         _run_node(
             f"""
             const EXTRA_PANEL_GAP_PX = 8;
+            const canSection = () => true;
             let activeExtraPanel = '';
             let extraPanelGeometryFrame = 0;
             let extraPanelResizeObserver = null;

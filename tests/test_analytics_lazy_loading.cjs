@@ -14,7 +14,7 @@ function fixture() {
   };
   const requests = [];
   const rendered = [];
-  const context = vm.createContext({ $, Promise, analyticsLoadedOnce: false, query: 'date_from=2026-11-01',
+  const context = vm.createContext({ $, Promise, canSection: () => true, analyticsLoadedOnce: false, query: 'date_from=2026-11-01',
     setupAnalyticsDefaults() {}, analyticsQueryString: () => context.query,
     setAnalyticsText: (id, text) => { element(id).textContent = text; },
     api: url => new Promise((resolve, reject) => requests.push({ url, resolve, reject })),

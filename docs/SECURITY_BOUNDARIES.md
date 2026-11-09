@@ -108,7 +108,7 @@ Repeated deactivation is safe and does not affect other users' sessions.
 
 Knowledge articles and their images require a normal authenticated CRM session.
 Images are read only through `GET /api/knowledge/articles/{article_id}/image`, with
-the same viewer-and-admin permission semantics as article reads. The endpoint first
+the same knowledge section read permission as article reads. The endpoint first
 loads the article and uses its server-stored image reference; anonymous requests
 return `401`, while unknown articles, invalid references, and missing files return a
 generic `404` without filesystem details.
@@ -119,10 +119,7 @@ derives `/api/knowledge/articles/{article_id}/image`. Text create/update DTOs re
 raw `image_url` and `clear_image` fields. Text updates do not write `image_url`, so a
 stale client cannot restore or replace an image reference.
 
-Knowledge mutation endpoints require the admin role. The shared frontend
-`admin-only hidden` mechanism hides article creation/editing, image upload/removal,
-and category management controls from viewers, but backend RBAC remains the source
-of truth. Viewers retain article and image read access.
+Knowledge mutation endpoints require knowledge write access. The server checks the effective permissions on every request, including image and category operations.
 
 New files are attached with
 `POST /api/knowledge/articles/{article_id}/image`. The server chooses the filename,
@@ -191,10 +188,7 @@ temporary SQLite database and synthetic files under the test temporary directory
 
 ## Ozon FBO supplies
 
-Every `/api/ozon-fbo/*` route, including GET, is admin-only through the
-`_ADMIN_GET_PREFIXES` entry and the general unsafe-method rule; the inventory test in
-`tests/test_route_rbac.py` enforces it. The navigation entry and mobile item carry
-`admin-only hidden`, but the backend remains the source of truth.
+FBO operations require the corresponding section read or write permission. Settings, API logs and connection checks require an administrator. The inventory test in `tests/test_ozon_fbo_router.py` verifies each route. The employee permission model and deployment steps are described in [Employee section permissions](EMPLOYEE_SECTION_PERMISSIONS.md).
 
 Ozon credentials are read only from the process environment inside
 `app/integrations/ozon_fbo/client.py`. They are never accepted from the browser,

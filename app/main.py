@@ -26,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app import repository as repo
 from app import yandex_oauth
+from app.permissions import SECTIONS, can, notification_allowed, route_allowed, route_requirements
 from app.asset_proxy_policy import (
     asset_url_resolves_globally,
     asset_url_allowed,
@@ -37,7 +38,6 @@ from app.asset_proxy_policy import (
 from app.auth_dependencies import (
     current_user as _shared_current_user,
     require_admin as _shared_require_admin,
-    route_requires_admin as _shared_route_requires_admin,
 )
 from app.auth_bootstrap import (
     AuthBootstrapError,
@@ -452,14 +452,12 @@ async def require_auth_for_api(request: Request, call_next):
         _apply_security_headers(request, response)
         return response
     request.state.user = user
-    if _shared_route_requires_admin(request.method, request.url.path):
-        try:
-            _shared_require_admin(request)
-        except HTTPException as exc:
-            response = JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
-            _delete_legacy_csrf_cookie(response, request)
-            _apply_security_headers(request, response)
-            return response
+    if not route_allowed(user, request.method, request.url.path):
+        detail = ("Нужны права администратора" if route_requirements(request.method, request.url.path) is None
+                  else "Нет доступа к этому действию или разделу")
+        response = JSONResponse(status_code=403, content={"detail": detail})
+        _apply_security_headers(request, response)
+        return response
     return await call_next(request)
 
 
@@ -536,6 +534,27 @@ def _current_user(request: Request) -> dict[str, Any]:
 
 def _require_admin(request: Request) -> dict[str, Any]:
     return _shared_require_admin(request, auth_disabled=AUTH_DISABLED)
+
+
+def _require_section(request: Request, section: str, level: str = "read") -> dict[str, Any]:
+    user = _current_user(request)
+    if not can(user, section, level):
+        raise HTTPException(status_code=403, detail="Нет доступа к этому действию или разделу")
+    return user
+
+
+def _require_route_permission(request: Request) -> dict[str, Any]:
+    user = _current_user(request)
+    if not route_allowed(user, request.method, request.url.path):
+        raise HTTPException(status_code=403, detail="Нет доступа к этому действию или разделу")
+    return user
+
+
+def _chat_for_user(chat_id: int, request: Request, **kwargs: Any) -> dict[str, Any] | None:
+    chat = repo.get_chat(chat_id, **kwargs)
+    if chat and not can(_current_user(request), "tasks"):
+        chat["tasks"] = []
+    return chat
 
 
 def _web_push_public_key() -> str:
@@ -642,6 +661,11 @@ async def _drain_push_outbox_once() -> dict[str, Any]:
     skipped_items = 0
     for item in items:
         payload = item.get("payload") or {}
+        push_user = repo.get_user_by_id(int(item["user_id"]))
+        if not push_user or not notification_allowed(push_user, payload):
+            repo.mark_push_outbox_sent(int(item["id"]))
+            skipped_items += 1
+            continue
         result = await _send_web_push_to_user(int(item["user_id"]), payload)
         if result.get("sent", 0) > 0:
             repo.mark_push_outbox_sent(int(item["id"]))
@@ -2756,6 +2780,12 @@ def api_list_users(request: Request) -> list[dict[str, Any]]:
     return repo.list_users()
 
 
+@app.get("/api/permissions")
+def api_permission_catalog(request: Request) -> dict[str, Any]:
+    _current_user(request)
+    return {"sections": [{"key": key, "label": label} for key, label in SECTIONS.items()]}
+
+
 @app.get("/api/admin/yandex-oauth-links")
 def api_list_yandex_oauth_managed_links(request: Request) -> dict[str, Any]:
     _require_admin(request)
@@ -2823,15 +2853,19 @@ def api_list_assignees(request: Request) -> list[dict[str, Any]]:
 def api_create_user(payload: UserCreate, request: Request) -> dict[str, Any]:
     _require_admin(request)
     try:
-        return repo.create_user(payload.username, payload.password, payload.display_name, payload.role)
+        return repo.create_user(payload.username, payload.password, payload.display_name, payload.role, permissions=payload.permissions or {})
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Не удалось создать сотрудника: {exc}") from exc
 
 
 @app.patch("/api/users/{user_id}")
 def api_update_user(user_id: int, payload: UserUpdate, request: Request) -> dict[str, Any]:
-    _require_admin(request)
-    updated = repo.update_user(user_id, display_name=payload.display_name, role=payload.role, is_active=payload.is_active)
+    actor = _require_admin(request)
+    try:
+        updated = repo.update_user(user_id, display_name=payload.display_name, role=payload.role, is_active=payload.is_active,
+                                   permissions=payload.permissions, actor_user_id=int(actor["id"]))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not updated:
         raise HTTPException(status_code=404, detail="Сотрудник не найден")
     return updated
@@ -4559,8 +4593,14 @@ async def supply_planning_sync(request: Request) -> dict[str, Any]:
 
 
 @app.get("/api/stats")
-def stats() -> dict[str, Any]:
-    return repo.stats()
+def stats(request: Request) -> dict[str, Any]:
+    user = _current_user(request)
+    values = repo.stats()
+    sections = {"chats_by_status": "chats", "chats_by_marketplace": "chats",
+                "waiting_response": "chats", "archived_chats": "chats", "tasks_open": "tasks",
+                "reviews_unanswered": "reviews", "questions_unanswered": "questions"}
+    return {key: value for key, value in values.items() if can(user, sections.get(key, "@unknown"))
+            and (key != "tasks_open" or can(user, "chats"))}
 
 
 @app.get("/api/analytics/chats")
@@ -4715,6 +4755,16 @@ async def proxy_image(url: str) -> Response:
         "X-Content-Type-Options": "nosniff",
     }
     return Response(content=content, media_type=content_type, headers=headers)
+
+
+@app.get("/api/assets/entity-image")
+async def proxy_entity_image(request: Request, section: str, entity_id: int, url: str) -> Response:
+    if section not in {"chats", "reviews"}:
+        raise HTTPException(status_code=400, detail="Неизвестный раздел")
+    _require_section(request, section)
+    if not repo.entity_contains_image_url(section, entity_id, url):
+        raise HTTPException(status_code=404, detail="Изображение не найдено")
+    return await proxy_image(url)
 
 
 
@@ -5042,10 +5092,11 @@ def list_tasks(
         task_type_id=task_type_id,
         due_date_from=normalized_from.isoformat() if normalized_from else None,
         due_date_to=normalized_to.isoformat() if normalized_to else None,
+        standalone_only=not can(user, "chats"),
     )
 
 
-app.include_router(create_task_types_router(repo, _current_user, _require_admin))
+app.include_router(create_task_types_router(repo, _current_user, _require_route_permission))
 
 
 
@@ -5108,7 +5159,7 @@ async def debug_ozon_visibility() -> dict[str, Any]:
     }
 
 
-app.include_router(create_chat_settings_router(repo, _require_admin))
+app.include_router(create_chat_settings_router(repo, _require_route_permission))
 
 
 @app.get("/api/chats")
@@ -5162,8 +5213,8 @@ def get_chat(
 ) -> dict[str, Any]:
     user = _current_user(request)
     safe_limit = max(20, min(int(messages_limit or 120), 500))
-    chat = repo.get_chat(
-        chat_id,
+    chat = _chat_for_user(
+        chat_id, request,
         messages_limit=safe_limit,
         current_user_id=int(user["id"]),
     )
@@ -5350,8 +5401,8 @@ def update_chat(chat_id: int, payload: ChatUpdate, request: Request) -> dict[str
 
 
 @app.post("/api/chats/{chat_id}/ai-reply")
-async def ai_reply(chat_id: int, payload: AiReplyCreate) -> dict[str, Any]:
-    chat = repo.get_chat(chat_id)
+async def ai_reply(chat_id: int, payload: AiReplyCreate, request: Request) -> dict[str, Any]:
+    chat = _chat_for_user(chat_id, request)
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
 
@@ -5441,7 +5492,7 @@ async def add_chat_attachments(
     caption_text = (caption or "").strip()
     if caption_text:
         raise HTTPException(status_code=422, detail="Подпись отправляется отдельной командой сообщения")
-    chat = repo.get_chat(chat_id)
+    chat = _chat_for_user(chat_id, request)
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
     if not images:
@@ -5490,7 +5541,7 @@ async def add_chat_attachments(
                 crm_author_label=author,
                 client_operation_id=client_operation_id,
             )
-            return {"ok": True, "message_id": message_id, "attachments": attachments, "chat": repo.get_chat(chat_id)}
+            return {"ok": True, "message_id": message_id, "attachments": attachments, "chat": _chat_for_user(chat_id, request)}
 
         if not hasattr(connector, "send_file"):
             raise HTTPException(status_code=400, detail=f"Отправка изображений в {marketplace} пока не поддержана")
@@ -5553,7 +5604,7 @@ async def add_chat_attachments(
             user_id=current_user_id,
             reason="first_crm_attachment_reply",
         )
-    return {"ok": True, "message_id": message_id, "attachments": attachments, "chat": repo.get_chat(chat_id), "assigned_on_send": assigned_on_send}
+    return {"ok": True, "message_id": message_id, "attachments": attachments, "chat": _chat_for_user(chat_id, request), "assigned_on_send": assigned_on_send}
 
 
 def _message_send_http_status(operation: dict[str, Any]) -> int:
@@ -5566,7 +5617,7 @@ def _message_send_http_status(operation: dict[str, Any]) -> int:
 
 @app.post("/api/chats/{chat_id}/messages")
 async def send_message(chat_id: int, payload: MessageCreate, request: Request) -> JSONResponse:
-    chat = repo.get_chat(chat_id)
+    chat = _chat_for_user(chat_id, request)
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
 
@@ -5597,14 +5648,14 @@ async def send_message(chat_id: int, payload: MessageCreate, request: Request) -
     body = {
         "ok": True,
         "operation": public_operation(operation, deduplicated=deduplicated),
-        "chat": repo.get_chat(chat_id),
+        "chat": _chat_for_user(chat_id, request),
     }
     return JSONResponse(content=body, status_code=_message_send_http_status(operation))
 
 
 @app.get("/api/chats/{chat_id}/message-send-operations")
-def list_message_send_operations(chat_id: int) -> dict[str, Any]:
-    if not repo.get_chat(chat_id):
+def list_message_send_operations(chat_id: int, request: Request) -> dict[str, Any]:
+    if not _chat_for_user(chat_id, request):
         raise HTTPException(status_code=404, detail="Chat not found")
     return {
         "operations": [
@@ -5615,8 +5666,8 @@ def list_message_send_operations(chat_id: int) -> dict[str, Any]:
 
 
 @app.get("/api/chats/{chat_id}/message-send-operations/{client_operation_id}")
-def get_message_send_operation(chat_id: int, client_operation_id: str) -> dict[str, Any]:
-    if not repo.get_chat(chat_id):
+def get_message_send_operation(chat_id: int, client_operation_id: str, request: Request) -> dict[str, Any]:
+    if not _chat_for_user(chat_id, request):
         raise HTTPException(status_code=404, detail="Chat not found")
     operation = message_send_service.get_chat_operation(chat_id, client_operation_id)
     if not operation:
@@ -5625,8 +5676,8 @@ def get_message_send_operation(chat_id: int, client_operation_id: str) -> dict[s
 
 
 @app.post("/api/chats/{chat_id}/notes")
-def add_internal_note(chat_id: int, payload: InternalNoteCreate) -> dict[str, Any]:
-    chat = repo.get_chat(chat_id)
+def add_internal_note(chat_id: int, payload: InternalNoteCreate, request: Request) -> dict[str, Any]:
+    chat = _chat_for_user(chat_id, request)
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
     message_id = repo.add_message(
@@ -5636,34 +5687,35 @@ def add_internal_note(chat_id: int, payload: InternalNoteCreate) -> dict[str, An
         author=payload.author,
         raw={"internal": True},
     )
-    return {"message_id": message_id, "chat": repo.get_chat(chat_id)}
+    return {"message_id": message_id, "chat": _chat_for_user(chat_id, request)}
 
 
 @app.patch("/api/chats/{chat_id}/notes/{message_id}")
-def update_internal_note(chat_id: int, message_id: int, payload: InternalNoteUpdate) -> dict[str, Any]:
-    chat = repo.get_chat(chat_id)
+def update_internal_note(chat_id: int, message_id: int, payload: InternalNoteUpdate, request: Request) -> dict[str, Any]:
+    chat = _chat_for_user(chat_id, request)
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
     message = repo.update_internal_note(chat_id, message_id, payload.text)
     if not message:
         raise HTTPException(status_code=404, detail="Internal note not found")
-    return {"message": message, "chat": repo.get_chat(chat_id)}
+    return {"message": message, "chat": _chat_for_user(chat_id, request)}
 
 
 @app.delete("/api/chats/{chat_id}/notes/{message_id}")
-def delete_internal_note(chat_id: int, message_id: int) -> dict[str, Any]:
-    chat = repo.get_chat(chat_id)
+def delete_internal_note(chat_id: int, message_id: int, request: Request) -> dict[str, Any]:
+    chat = _chat_for_user(chat_id, request)
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
     deleted = repo.delete_internal_note(chat_id, message_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Internal note not found")
-    return {"ok": True, "chat": repo.get_chat(chat_id)}
+    return {"ok": True, "chat": _chat_for_user(chat_id, request)}
 
 
 @app.post("/api/tasks")
 def create_task(payload: TaskCreate, request: Request) -> dict[str, Any]:
     current_user = _current_user(request)
+    _require_section(request, "chats", "write")
     chat = repo.get_chat(payload.chat_id)
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
@@ -5743,6 +5795,7 @@ def create_standalone_task(payload: dict[str, Any], request: Request) -> dict[st
 @app.patch("/api/tasks/{task_id}")
 def update_task(task_id: int, payload: TaskUpdate, request: Request) -> dict[str, Any]:
     user = _current_user(request)
+    _require_task_chat_access(task_id, request)
     if payload.comment and not payload.comment_author:
         payload.comment_author = user.get("display_name") or user.get("username") or "manager"
     task = repo.update_task(task_id, payload)
@@ -5751,8 +5804,17 @@ def update_task(task_id: int, payload: TaskUpdate, request: Request) -> dict[str
     return task
 
 
+def _require_task_chat_access(task_id: int, request: Request) -> None:
+    task = repo.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if not task.get("is_standalone"):
+        _require_section(request, "chats", "write")
+
+
 def _delete_task_or_404(task_id: int, request: Request) -> dict[str, Any]:
     _current_user(request)
+    _require_task_chat_access(task_id, request)
     try:
         ok = repo.delete_task(task_id)
     except Exception as exc:
@@ -5782,7 +5844,7 @@ def api_knowledge_categories(request: Request) -> list[dict[str, Any]]:
 
 @app.post("/api/knowledge/categories")
 def api_create_knowledge_category(payload: KnowledgeCategoryCreate, request: Request) -> dict[str, Any]:
-    _require_admin(request)
+    _require_section(request, "knowledge", "write")
     return repo.create_knowledge_category(payload.title, payload.description, payload.sort_order)
 
 
@@ -5875,7 +5937,7 @@ def _cleanup_new_knowledge_image(path: Path, original_error: BaseException) -> N
 
 @app.post("/api/knowledge/articles/{article_id}/image")
 async def api_upload_knowledge_image(article_id: int, request: Request, file: UploadFile = File(...)) -> dict[str, Any]:
-    user = _require_admin(request)
+    user = _require_section(request, "knowledge", "write")
     existing_article = repo.get_knowledge_article(article_id)
     if not existing_article:
         raise HTTPException(status_code=404, detail="Article not found")
@@ -5959,7 +6021,7 @@ async def api_upload_knowledge_image(article_id: int, request: Request, file: Up
 
 @app.delete("/api/knowledge/articles/{article_id}/image")
 def api_delete_knowledge_image(article_id: int, request: Request) -> dict[str, Any]:
-    user = _require_admin(request)
+    user = _require_section(request, "knowledge", "write")
     article = repo.clear_knowledge_article_image_reference(article_id, int(user["id"]))
     if not article:
         raise HTTPException(status_code=404, detail="Article not found")
@@ -5968,14 +6030,14 @@ def api_delete_knowledge_image(article_id: int, request: Request) -> dict[str, A
 
 @app.post("/api/knowledge/articles")
 def api_create_knowledge_article(payload: KnowledgeArticleCreate, request: Request) -> dict[str, Any]:
-    user = _require_admin(request)
+    user = _require_section(request, "knowledge", "write")
     article = repo.create_knowledge_article(category_id=payload.category_id, title=payload.title, content=payload.content, tags=payload.tags, is_published=payload.is_published, user_id=int(user["id"]))
     return _knowledge_article_response(article)
 
 
 @app.patch("/api/knowledge/articles/{article_id}")
 def api_update_knowledge_article(article_id: int, payload: KnowledgeArticleUpdate, request: Request) -> dict[str, Any]:
-    user = _require_admin(request)
+    user = _require_section(request, "knowledge", "write")
     article = repo.update_knowledge_article(
         article_id,
         category_id=payload.category_id,
@@ -5990,8 +6052,8 @@ def api_update_knowledge_article(article_id: int, payload: KnowledgeArticleUpdat
     return _knowledge_article_response(article)
 
 
-app.include_router(create_reply_templates_router(repo, _current_user, _require_admin))
-app.include_router(create_ozon_fbo_router(ozon_fbo_repository, _require_admin))
+app.include_router(create_reply_templates_router(repo, _current_user, _require_route_permission))
+app.include_router(create_ozon_fbo_router(ozon_fbo_repository, _require_route_permission))
 
 
 def _frontend_operator_sync_lock() -> asyncio.Lock:

@@ -10,12 +10,12 @@
   <meta name="apple-mobile-web-app-title" content="Arti CRM" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <link rel="apple-touch-icon" href="/static/icons/app-icon-180.png?v=v57-mobile-questions-inline-and-dark-analytics-20260701" />
-  <meta name="arti-build-version" content="v96-ozon-fbo-supplies-20261029" />
+  <meta name="arti-build-version" content="v97-employee-permissions-20261109" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <script src="/static/theme-init.js?v=v79-strict-csp-secure-cookie-20260708"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=analytics-lazy-details-20261105" />
+  <link rel="stylesheet" href="/static/styles.css?v=v97-employee-permissions-20261109" />
 
 </head>
 <body class="auth-pending">
@@ -201,16 +201,16 @@
                 </div>
               </div>
               <div class="chat-controls">
-                <select id="chatStatus" aria-label="Статус чата">
+                <select id="chatStatus" data-permission-write="chats" aria-label="Статус чата">
                   <option value="new">Новый</option>
                 </select>
-                <select id="assignedUserSelect" aria-label="Ответственный за чат"><option value="">Не назначен</option></select>
+                <select id="assignedUserSelect" data-permission-write="chats" aria-label="Ответственный за чат"><option value="">Не назначен</option></select>
                 <button id="extraMenuBtn" class="icon-btn" type="button" aria-label="Дополнительные функции" title="Дополнительные функции">⋯</button>
                   <div id="extraMenu" class="extra-menu hidden" role="menu">
                     <button type="button" data-extra="tasks">Задачи по чату</button>
                     <button type="button" data-extra="note">Внутренняя заметка</button>
                     <button type="button" data-extra="customer">Имя клиента</button>
-                    <button id="aiGenerateMenuBtn" type="button">✨ ИИ ответ на выбранное</button>
+                    <button id="aiGenerateMenuBtn" data-permission-write="chats" type="button">✨ ИИ ответ на выбранное</button>
                 </div>
               </div>
             </div>
@@ -222,7 +222,7 @@
                   <button class="link-btn" type="button" data-view="tasks">Открыть все задачи</button>
                 </div>
                 <div id="taskList" class="task-list"></div>
-                <form id="taskForm" class="task-form task-form-grid task-create-form-v2">
+                <form id="taskForm" data-permission-write="tasks chats" class="task-form task-form-grid task-create-form-v2">
                   <label class="task-create-field" for="taskTypeSelect">
                     <span>Тип</span>
                     <select id="taskTypeSelect" aria-label="Тип задачи"><option value="">Тип задачи</option></select>
@@ -247,7 +247,7 @@
 
               <section id="noteSection" class="extra-section hidden">
                 <div class="section-head"><h3>Внутренняя заметка</h3></div>
-                <form id="noteForm" class="note-form">
+                <form id="noteForm" data-permission-write="chats" class="note-form">
                   <textarea id="noteText" placeholder="Эта заметка видна только внутри CRM и не уйдёт клиенту"></textarea>
                   <button type="submit">Добавить заметку</button>
                 </form>
@@ -255,7 +255,7 @@
 
               <section id="customerSection" class="extra-section hidden">
                 <div class="section-head"><h3>Имя клиента</h3></div>
-                <form id="customerForm" class="customer-form">
+                <form id="customerForm" data-permission-write="chats" class="customer-form">
                   <input id="customerNameInput" placeholder="Например: Анна" />
                   <button type="submit">Сохранить имя</button>
                 </form>
@@ -272,12 +272,12 @@
                 <span id="aiNotice" class="ai-notice"></span>
               </div>
               <div class="ai-selection-actions">
-                <button id="aiGenerateBtn" type="button">✨ ИИ ответ</button>
+                <button id="aiGenerateBtn" data-permission-write="chats" type="button">✨ ИИ ответ</button>
                 <button id="aiClearSelectionBtn" class="secondary" type="button">Снять выбор</button>
               </div>
             </div>
 
-            <form id="messageForm" class="composer">
+            <form id="messageForm" data-permission-write="chats" class="composer">
               <section id="replyTemplatesPanel" class="reply-templates-panel hidden" aria-label="Шаблоны ответа">
                 <div class="reply-templates-head">
                   <div>
@@ -285,7 +285,7 @@
                     <div class="reply-templates-subtitle">Выберите шаблон — он вставится в поле сообщения.</div>
                   </div>
                   <div class="reply-templates-head-actions">
-                    <button id="replyTemplateAddBtn" class="reply-template-add-icon" type="button" aria-label="Добавить шаблон" title="Добавить шаблон">＋</button>
+                    <button id="replyTemplateAddBtn" data-permission-write="techSettings" class="reply-template-add-icon" type="button" aria-label="Добавить шаблон" title="Добавить шаблон">＋</button>
                     <button id="replyTemplatesCloseBtn" class="reply-templates-close" type="button" aria-label="Скрыть шаблоны" title="Скрыть">×</button>
                   </div>
                 </div>
@@ -293,7 +293,7 @@
                   <input id="replyTemplateTitle" type="text" maxlength="160" placeholder="Название шаблона" />
                   <textarea id="replyTemplateContent" rows="4" maxlength="8000" placeholder="Текст шаблона"></textarea>
                   <div class="reply-template-create-actions">
-                    <button id="replyTemplateSaveBtn" type="button">Сохранить</button>
+                    <button id="replyTemplateSaveBtn" data-permission-write="techSettings" type="button">Сохранить</button>
                     <button id="replyTemplateCancelBtn" class="secondary" type="button">Отмена</button>
                   </div>
                 </div>
@@ -438,8 +438,8 @@
             <h2>Расчёт потребности по товарам и складам</h2>
           </div>
           <div class="supply-planning-actions">
-            <button id="supplyPlanningApiSyncBtn" type="button">Обновить из API</button>
-            <button id="supplyPlanningResetBtn" class="secondary" type="button">Очистить</button>
+            <button id="supplyPlanningApiSyncBtn" data-permission-write="supplyPlanning" type="button">Обновить из API</button>
+            <button id="supplyPlanningResetBtn" data-permission-write="supplyPlanning" class="secondary" type="button">Очистить</button>
           </div>
         </section>
 
@@ -449,7 +449,7 @@
           </div>
           <label class="supply-planning-default-target">
             <span>Неснижаемый остаток, дней</span>
-            <input id="supplyPlanningDefaultTargetDays" type="number" min="1" step="1" value="45" />
+            <input id="supplyPlanningDefaultTargetDays" data-permission-write="supplyPlanning" type="number" min="1" step="1" value="45" />
           </label>
         </section>
 
@@ -525,7 +525,7 @@
             <p id="ozonFboKeysStatus">Проверяю ключи Ozon…</p>
           </div>
           <div class="ozon-fbo-hero-actions">
-            <button id="ozonFboCheckBtn" class="secondary small" type="button">Проверить связь с Ozon</button>
+            <button id="ozonFboCheckBtn" data-permission-admin class="secondary small" type="button">Проверить связь с Ozon</button>
             <a id="ozonFboLkLink" class="button-like secondary small" href="https://seller.ozon.ru/app/supply/orders?filter=SupplyPreparation" target="_blank" rel="noopener noreferrer">Заявки в кабинете Ozon</a>
           </div>
         </section>
@@ -537,7 +537,7 @@
                 <h3 id="ozonFboFormTitle">Новая поставка</h3>
               </div>
             </div>
-            <form id="ozonFboRunForm" class="settings-form ozon-fbo-form" novalidate>
+            <form id="ozonFboRunForm" data-permission-write="ozonFbo" class="settings-form ozon-fbo-form" novalidate>
               <fieldset class="ozon-fbo-fieldset">
                 <legend>Режим</legend>
                 <label class="ozon-fbo-choice"><input type="radio" name="ozonFboMode" value="trial" checked /><span>Пробная поставка и проверка слотов (заявки не создаются)</span></label>
@@ -608,8 +608,8 @@
                 <p id="ozonFboRunMeta" class="muted">Поставок ещё не было.</p>
               </div>
               <div class="ozon-fbo-run-actions">
-                <button id="ozonFboStopBtn" class="secondary" type="button" disabled>Остановить</button>
-                <button id="ozonFboReleaseBtn" class="secondary hidden" type="button">Снять зависшую поставку</button>
+                <button id="ozonFboStopBtn" data-permission-write="ozonFbo" class="secondary" type="button" disabled>Остановить</button>
+                <button id="ozonFboReleaseBtn" data-permission-write="ozonFbo" class="secondary hidden" type="button">Снять зависшую поставку</button>
               </div>
             </div>
             <div id="ozonFboQuestionBar" class="ozon-fbo-question-bar hidden" role="status">
@@ -653,7 +653,7 @@
                 <h3 id="ozonFboSettingsTitle">Настройки</h3>
               </div>
             </div>
-            <form id="ozonFboSettingsForm" class="settings-form ozon-fbo-settings" novalidate>
+            <form id="ozonFboSettingsForm" data-permission-admin class="settings-form ozon-fbo-settings" novalidate>
               <div class="ozon-fbo-settings-grid">
                 <label>Вместимость грузоместа по умолчанию, шт.<input id="ozonFboSetting_default_cargo_capacity" type="number" min="1" step="1" /></label>
                 <label>Тип грузоместа (BOX — короб)<input id="ozonFboSetting_cargo_type" /></label>
@@ -686,8 +686,8 @@
             </div>
             <pre id="ozonFboDecisionText" class="ozon-fbo-log ozon-fbo-decision-text" tabindex="0"></pre>
             <div class="user-create-form-actions">
-              <button id="ozonFboDecisionNoBtn" class="secondary" type="button">Нет</button>
-              <button id="ozonFboDecisionYesBtn" type="button">Да</button>
+              <button id="ozonFboDecisionNoBtn" data-permission-write="ozonFbo" class="secondary" type="button">Нет</button>
+              <button id="ozonFboDecisionYesBtn" data-permission-write="ozonFbo" type="button">Да</button>
             </div>
           </div>
         </div>
@@ -699,7 +699,7 @@
             <div>
               <h2>Отзывы Ozon</h2>
             </div>
-            <button id="syncReviewsBtn" class="secondary small" type="button">Обновить</button>
+            <button id="syncReviewsBtn" data-permission-write="reviews" class="secondary small" type="button">Обновить</button>
           </div>
           <div class="filters review-filters">
             <select id="reviewStatusFilter" aria-label="Фильтр отзывов">
@@ -731,14 +731,14 @@
             <section class="review-reply-card">
               <h3>Ответ на отзыв</h3>
               <div id="reviewExistingReply" class="existing-reply hidden"></div>
-              <form id="reviewReplyForm" class="review-reply-form">
+              <form id="reviewReplyForm" data-permission-write="reviews" class="review-reply-form">
                 <label>Текст ответа<textarea id="reviewReplyText" placeholder="Напишите ответ на отзыв..." required></textarea></label>
                 <div class="review-actions">
                   <label class="check-filter"><input id="reviewMarkProcessed" type="checkbox" checked /> отметить как обработанный</label>
                   <button type="submit">Ответить</button>
                 </div>
               </form>
-              <button id="startChatFromReviewBtn" class="ghost" type="button">Создать чат по отзыву</button>
+              <button id="startChatFromReviewBtn" data-permission-write="reviews chats" class="ghost" type="button">Создать чат по отзыву</button>
               <p class="muted">Чат можно создать только если Ozon передал в отзыве номер отправления.</p>
             </section>
           </div>
@@ -751,7 +751,7 @@
             <div>
               <h2>Вопросы Ozon</h2>
             </div>
-            <button id="syncQuestionsBtn" class="secondary small" type="button">Обновить</button>
+            <button id="syncQuestionsBtn" data-permission-write="questions" class="secondary small" type="button">Обновить</button>
           </div>
           <div class="filters review-filters">
             <select id="questionStatusFilter" aria-label="Фильтр вопросов">
@@ -783,7 +783,7 @@
             <section class="review-reply-card">
               <h3>Ответ на вопрос</h3>
               <div id="questionExistingAnswer" class="existing-reply hidden"></div>
-              <form id="questionAnswerForm" class="review-reply-form">
+              <form id="questionAnswerForm" data-permission-write="questions" class="review-reply-form">
                 <label>Текст ответа<textarea id="questionAnswerText" placeholder="Напишите ответ на вопрос покупателя..." required></textarea></label>
                 <div class="review-actions">
                   <label class="check-filter"><input id="questionMarkProcessed" type="checkbox" checked /> отметить как обработанный</label>
@@ -799,7 +799,7 @@
         <section class="tasks-ref-toolbar" aria-label="Фильтры задач">
           <div class="tasks-ref-title-row">
             <h2>Задачи</h2>
-            <button id="taskStandaloneNewBtn" class="tasks-ref-new-btn" type="button">Новая задача</button>
+            <button id="taskStandaloneNewBtn" data-permission-write="tasks" class="tasks-ref-new-btn" type="button">Новая задача</button>
           </div>
           <div class="tasks-ref-search" role="search">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
@@ -839,7 +839,7 @@
           <input id="taskBucketFilter" type="hidden" value="active" />
         </section>
         <section id="taskStandaloneCreatePanel" class="panel-card tasks-standalone-create-panel hidden" aria-label="Создание задачи без чата">
-          <form id="taskStandaloneForm" class="tasks-standalone-form">
+          <form id="taskStandaloneForm" data-permission-write="tasks" class="tasks-standalone-form">
             <div class="tasks-standalone-form-head">
               <div>
                 <h3>Новая задача</h3>
@@ -882,7 +882,7 @@
             </div>
             <div class="knowledge-search-row">
               <input id="knowledgeSearch" placeholder="Поиск по названию, тегам и содержанию" aria-label="Поиск по базе знаний" />
-              <button id="knowledgeNewArticleBtn" class="admin-only hidden" type="button">Добавить статью</button>
+              <button id="knowledgeNewArticleBtn" data-permission-write="knowledge" class="hidden" type="button" data-permission-display="knowledge">Добавить статью</button>
             </div>
           </div>
           <div class="knowledge-layout knowledge-layout-v51">
@@ -893,7 +893,7 @@
                 </div>
               </div>
               <div id="knowledgeCategories" class="knowledge-category-list knowledge-tree"></div>
-              <form id="knowledgeCategoryForm" class="knowledge-category-form admin-only hidden">
+              <form id="knowledgeCategoryForm" data-permission-write="knowledge" class="knowledge-category-form hidden" data-permission-display="knowledge">
                 <div class="knowledge-form-caption">Быстрое добавление раздела</div>
                 <input id="knowledgeCategoryTitle" placeholder="Новый раздел" aria-label="Название нового раздела" />
                 <button class="small secondary" type="submit">Добавить раздел</button>
@@ -915,14 +915,14 @@
                   </div>
                   <div class="knowledge-reader-actions">
                     <button id="knowledgeBackToListBtn" class="secondary small knowledge-mobile-back hidden" type="button">← К списку</button>
-                    <button id="knowledgeEditArticleBtn" class="icon-btn knowledge-edit-icon admin-only hidden" type="button" title="Редактировать статью" aria-label="Редактировать статью">✎</button>
+                    <button id="knowledgeEditArticleBtn" data-permission-write="knowledge" class="icon-btn knowledge-edit-icon hidden" type="button" title="Редактировать статью" aria-label="Редактировать статью" data-permission-display="knowledge">✎</button>
                   </div>
                 </div>
                 <img id="knowledgeReaderImage" class="knowledge-reader-image hidden" alt="Изображение статьи" />
                 <div id="knowledgeReaderContent" class="knowledge-reader-content"></div>
               </article>
 
-              <form id="knowledgeArticleForm" class="knowledge-article-form admin-only hidden">
+              <form id="knowledgeArticleForm" data-permission-write="knowledge" class="knowledge-article-form hidden">
                 <div class="knowledge-form-head">
                   <h3 id="knowledgeFormTitle">Новая статья</h3>
                   <div class="knowledge-form-actions">
@@ -987,6 +987,7 @@
                   <option value="admin">Администратор</option>
                 </select>
               </label>
+              <fieldset class="employee-permissions"><legend>Доступ к разделам</legend><p id="newUserPermissionsNote" class="muted"></p><div id="newUserPermissions" class="employee-permissions-list"></div></fieldset>
               <div class="user-create-form-actions">
                 <button id="cancelUserCreateBtn" class="secondary" type="button">Отмена</button>
                 <button type="submit">Создать сотрудника</button>
@@ -1020,6 +1021,7 @@
                 <input id="editUserActive" type="checkbox" />
                 <span>Сотрудник активен</span>
               </label>
+              <fieldset class="employee-permissions"><legend>Доступ к разделам</legend><p id="editUserPermissionsNote" class="muted"></p><div id="editUserPermissions" class="employee-permissions-list"></div></fieldset>
               <div class="user-create-form-actions">
                 <button id="cancelUserEditBtn" class="secondary" type="button">Отмена</button>
                 <button type="submit">Сохранить</button>
@@ -1045,7 +1047,7 @@
               </div>
             </div>
 
-            <form id="chatStatusForm" class="chat-status-create-form">
+            <form id="chatStatusForm" data-permission-write="techSettings" class="chat-status-create-form">
               <label>Название<input id="chatStatusTitle" placeholder="Например: Ожидает видео" required /></label>
               <label>Цвет
                 <select id="chatStatusColor" aria-label="Цвет статуса">
@@ -1067,7 +1069,7 @@
               <span>Активность</span>
               <span>Действия</span>
             </div>
-            <div id="chatStatusesList" class="status-settings-list"></div>
+            <div id="chatStatusesList" data-permission-write="techSettings" class="status-settings-list"></div>
 
             <div class="settings-actions-bottom settings-actions-bottom-compact">
               <button id="saveChatSettingsBottomBtn" class="secondary hidden" type="button">Сохранить</button>
@@ -1081,7 +1083,7 @@
               </div>
             </div>
 
-            <form id="taskTypeForm" class="task-type-create-form">
+            <form id="taskTypeForm" data-permission-write="techSettings" class="task-type-create-form">
               <label>Тип задачи<input id="taskTypeTitle" placeholder="Например: Доставки" required /></label>
               <label>Поле в карточке<input id="taskTypeCommentLabel" placeholder="Например: Адрес" value="Комментарий" /></label>
               <label>Статус чата
@@ -1101,7 +1103,7 @@
               <span>Активен</span>
               <span></span>
             </div>
-            <div id="taskTypesSettingsList" class="task-type-settings-list"></div>
+            <div id="taskTypesSettingsList" data-permission-write="techSettings" class="task-type-settings-list"></div>
           </div>
 
           <section id="yandexOAuthLinksCard" class="settings-card panel-card admin-only hidden">
@@ -1165,7 +1167,7 @@
       <div class="knowledge-modal-topbar">
         <button id="knowledgeModalBackBtn" class="knowledge-modal-nav" type="button" aria-label="Назад к списку">←</button>
         <div class="knowledge-modal-toolbar-actions">
-          <button id="knowledgeModalEditBtn" class="secondary small admin-only hidden" type="button">Редактировать</button>
+          <button id="knowledgeModalEditBtn" class="secondary small" data-permission-write="knowledge" type="button">Редактировать</button>
           <button id="knowledgeModalCloseBtn" class="knowledge-modal-close" type="button" aria-label="Закрыть">✕</button>
         </div>
       </div>
@@ -1181,6 +1183,7 @@
 
   <div id="notificationToasts" class="notification-toast-stack" aria-live="polite"></div>
 
-  <script src="/static/app.js?v=analytics-lazy-details-20261105"></script>
+  <script src="/static/permissions.js?v=v97-employee-permissions-20261109"></script>
+  <script src="/static/app.js?v=v97-employee-permissions-20261109"></script>
 </body>
 </html>

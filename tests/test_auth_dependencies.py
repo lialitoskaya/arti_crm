@@ -162,7 +162,7 @@ class AuthDependenciesParityTests(unittest.TestCase):
             for node in ast.walk(tree)
             if isinstance(node, ast.ImportFrom) and node.module
         )
-        self.assertEqual({"__future__", "re", "typing", "fastapi"}, imported_roots)
+        self.assertLessEqual(imported_roots, {"__future__", "typing", "fastapi"})
         self.assertNotIn("os", source_path.read_text(encoding="utf-8"))
 
 

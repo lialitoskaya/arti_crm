@@ -224,7 +224,7 @@ assert.match(elements.ozonFboRows.markup, /Результатов пока не�
         match = re.search(r"ARTI_CRM_SW_VERSION = '([^']+)'", SERVICE_WORKER)
         self.assertIsNotNone(match)
         version = match.group(1)
-        self.assertIn("ozon-fbo", version)
+        self.assertGreaterEqual(int(version.split("-", 1)[0].removeprefix("v")), 96)
         self.assertIn(f"styles.css?v={version}", INDEX)
         self.assertIn(f"app.js?v={version}", INDEX)
 

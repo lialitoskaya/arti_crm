@@ -1,67 +1,20 @@
 from __future__ import annotations
 
-import asyncio
-import os
-import socket
 import sqlite3
-import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import test_regression_foundation as foundation
 
-_IMPORT_TEMP_DIRECTORY = tempfile.TemporaryDirectory(prefix="arti_crm_yandex_import_")
-_IMPORT_DATABASE_PATH = str(Path(_IMPORT_TEMP_DIRECTORY.name) / "import.sqlite3")
-_SAFE_IMPORT_ENV = {
-    "APP_ENV": "test",
-    "DATABASE_PATH": _IMPORT_DATABASE_PATH,
-    "CRM_AUTH_DISABLED": "0",
-    "CRM_FORCE_HTTPS": "0",
-    "WB_EVENTS_AUTO_IMPORT_ENABLED": "false",
-    "WEB_PUSH_ENABLED": "false",
-    "PYTHON_DOTENV_DISABLED": "1",
-    "OZON_CLIENT_ID": "",
-    "OZON_API_KEY": "",
-    "WB_BUYERS_CHAT_TOKEN": "",
-    "YANDEX_MARKET_TOKEN": "",
-    "YANDEX_MARKET_BUSINESS_ID": "",
-    "OPENAI_API_KEY": "",
-}
+db, main, repo = foundation.db, foundation.main, foundation.repo
 
-
-def _deny_network(*_args, **_kwargs):
-    raise AssertionError("Network access is forbidden in Yandex chat sync tests")
-
-
-_REAL_SOCKET = socket.socket
-
-
-class _NoNetworkSocket(_REAL_SOCKET):
-    def connect(self, *_args, **_kwargs):
-        return _deny_network()
-
-    def connect_ex(self, *_args, **_kwargs):
-        return _deny_network()
-
-
-import dotenv  # noqa: E402  (must be patched before app.db is imported)
-
-with (
-    patch.dict(os.environ, _SAFE_IMPORT_ENV, clear=True),
-    patch.object(dotenv, "load_dotenv", return_value=False),
-    patch.object(socket, "socket", _NoNetworkSocket),
-    patch.object(socket, "create_connection", _deny_network),
-):
-    from app import db  # noqa: E402
-    from app import main  # noqa: E402
-    from app import repository as repo  # noqa: E402
-    from app.connectors.base import UnifiedChat, UnifiedMessage  # noqa: E402
-    from app.connectors.yandex_market import (  # noqa: E402
-        YandexChatHistoryContractError,
-        YandexChatHistoryFetchError,
-        YandexMarketConnector,
-    )
-    from app.schemas import ChatCreate  # noqa: E402
+from app.connectors.base import UnifiedChat, UnifiedMessage  # noqa: E402
+from app.connectors.yandex_market import (  # noqa: E402
+    YandexChatHistoryContractError,
+    YandexChatHistoryFetchError,
+    YandexMarketConnector,
+)
+from app.schemas import ChatCreate  # noqa: E402
 
 
 def _chat(external_id: str, *, provider_status: str = "NEW") -> UnifiedChat:
@@ -121,18 +74,13 @@ class FakeYandexConnector:
 
 class YandexChatSyncTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.old_database_path = db.DATABASE_PATH
-        db.DATABASE_PATH = str(Path(self.temp_dir.name) / "test.sqlite3")
+        foundation._remove_test_runtime_files()
+        self.addCleanup(foundation._remove_test_runtime_files)
         db.init_db()
-
-    def tearDown(self) -> None:
-        db.DATABASE_PATH = self.old_database_path
-        self.temp_dir.cleanup()
 
     def _sync(self, connector: FakeYandexConnector) -> dict[str, object]:
         with patch.dict(main.connectors, {"yandex": connector}):
-            return asyncio.run(main._sync_marketplace_unlocked("yandex"))
+            return foundation._TEST_EVENT_LOOP.run_until_complete(main._sync_marketplace_unlocked("yandex"))
 
     def _create_chat(self, chat: UnifiedChat) -> int:
         return repo.upsert_chat(
@@ -185,7 +133,7 @@ class YandexChatSyncTests(unittest.TestCase):
         connector.business_id = "test-business"
         connector._post = AsyncMock(return_value={"result": {"messages": []}})  # type: ignore[method-assign]
 
-        messages = asyncio.run(connector.get_messages("chat-empty"))
+        messages = foundation._TEST_EVENT_LOOP.run_until_complete(connector.get_messages("chat-empty"))
 
         self.assertEqual([], messages)
         connector._post.assert_awaited_once()
@@ -197,7 +145,7 @@ class YandexChatSyncTests(unittest.TestCase):
         connector._post = AsyncMock(side_effect=RuntimeError("private provider payload"))  # type: ignore[method-assign]
 
         with self.assertRaises(YandexChatHistoryFetchError) as raised:
-            asyncio.run(connector.get_messages("chat-error"))
+            foundation._TEST_EVENT_LOOP.run_until_complete(connector.get_messages("chat-error"))
 
         self.assertEqual("Yandex chat history request failed", str(raised.exception))
         self.assertIsNone(raised.exception.__cause__)
@@ -211,7 +159,7 @@ class YandexChatSyncTests(unittest.TestCase):
             connector._post = AsyncMock(return_value=payload)  # type: ignore[method-assign]
             with self.subTest(payload=payload):
                 with self.assertRaisesRegex(YandexChatHistoryContractError, "invalid chat history response"):
-                    asyncio.run(connector.get_messages("chat-contract"))
+                    foundation._TEST_EVENT_LOOP.run_until_complete(connector.get_messages("chat-contract"))
 
     def test_first_message_failure_rolls_back_new_chat(self) -> None:
         connector = FakeYandexConnector(

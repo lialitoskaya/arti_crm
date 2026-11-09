@@ -9,7 +9,7 @@ from fastapi.routing import APIRoute
 from starlette.responses import JSONResponse
 
 import test_regression_foundation as foundation  # noqa: E402
-from app import auth_dependencies  # noqa: E402
+from app.permissions import route_requirements  # noqa: E402
 
 
 main = foundation.main
@@ -20,6 +20,7 @@ _ADMIN = {"id": 1, "username": "admin", "role": "admin", "is_active": True}
 
 _VIEWER_READ_ROUTES = (
     "/api/chats",
+    "/api/chat-uploads/example.jpg",
     "/api/tasks",
     "/api/analytics/chats",
     "/api/knowledge/articles",
@@ -35,14 +36,14 @@ _VIEWER_SELF_SERVICE_ROUTES = (
     ("PATCH", "/api/chats/91/pin-state"),
     ("POST", "/api/notifications/read-all"),
 )
-_ADMIN_ONLY_ROUTES = (
+_DENIED_TO_LEGACY_VIEWER = (
     ("GET", "/api/debug/local"),
     ("GET", "/api/debug/messages/1"),
     ("GET", "/api/debug/ozon/fast-sync"),
     ("GET", "/api/supply-planning/status"),
     ("GET", "/api/supply-planning/sync"),
     ("GET", "/api/supply-planning/sync/"),
-    ("GET", "/api/chat-uploads/example.jpg"),
+
     ("GET", "/api/ozon-fbo/status"),
     ("GET", "/api/ozon-fbo/runs"),
     ("GET", "/api/ozon-fbo/runs/1"),
@@ -140,16 +141,16 @@ class RouteRbacTests(unittest.TestCase):
                 self.assertEqual({"preserved": True, "path": path}, _json_body(response))
                 self.assertEqual([(method, path)], calls)
 
-    def test_viewer_gets_exact_403_on_admin_only_routes(self) -> None:
-        for method, path in _ADMIN_ONLY_ROUTES:
+    def test_legacy_viewer_gets_403_on_restricted_routes(self) -> None:
+        for method, path in _DENIED_TO_LEGACY_VIEWER:
             with self.subTest(method=method, path=path):
                 response, calls = _run_without_event_loop(_run_auth_guard(method, path, _VIEWER))
                 self.assertEqual(403, response.status_code)
-                self.assertEqual({"detail": "Нужны права администратора"}, _json_body(response))
+                self.assertIn(_json_body(response)["detail"], {"Нужны права администратора", "Нет доступа к этому действию или разделу"})
                 self.assertEqual([], calls)
 
     def test_admin_workflows_continue_unchanged_through_auth_guard(self) -> None:
-        for method, path in _ADMIN_ONLY_ROUTES:
+        for method, path in _DENIED_TO_LEGACY_VIEWER:
             with self.subTest(method=method, path=path):
                 response, calls = _run_without_event_loop(_run_auth_guard(method, path, _ADMIN))
                 self.assertEqual(200, response.status_code)
@@ -176,10 +177,13 @@ class RouteRbacTests(unittest.TestCase):
                 self.assertEqual(200, response.status_code)
                 self.assertEqual([(method, path)], calls)
 
-    def test_yandex_webhook_keeps_existing_session_contract(self) -> None:
+    def test_yandex_webhook_requires_admin_session(self) -> None:
         response, calls = _run_without_event_loop(
             _run_auth_guard("POST", "/api/webhooks/yandex", _VIEWER)
         )
+        self.assertEqual(403, response.status_code)
+        self.assertEqual([], calls)
+        response, calls = _run_without_event_loop(_run_auth_guard("POST", "/api/webhooks/yandex", _ADMIN))
         self.assertEqual(200, response.status_code)
         self.assertEqual([("POST", "/api/webhooks/yandex")], calls)
 
@@ -198,70 +202,19 @@ class RouteRbacTests(unittest.TestCase):
             if method != "HEAD"
         }
         self.assertTrue(inventory)
+        # Every unrestricted mutation must be a known self-service operation.
+        common_writes = {
+            ("POST", "/api/auth/logout"), ("PATCH", "/api/auth/profile"),
+            ("POST", "/api/push/subscribe"), ("POST", "/api/push/unsubscribe"),
+            ("POST", "/api/notifications/{notification_id}/read"),
+            ("POST", "/api/notifications/read-all"),
+        }
         for method, path in inventory:
-            access_class = auth_dependencies.route_access_class(method, path)
-            with self.subTest(method=method, path=path):
-                self.assertIn(
-                    access_class,
-                    {
-                        "public",
-                        "session_self_check",
-                        "authenticated_read",
-                        "viewer_self_service",
-                        "admin_only",
-                        "token_only",
-                        "webhook_unchanged",
-                    },
-                )
-                if method in {"POST", "PUT", "PATCH", "DELETE"} and path.startswith("/api/"):
-                    expected_exceptions = {
-                        ("POST", "/api/auth/login"),
-                        ("POST", "/api/auth/logout"),
-                        ("PATCH", "/api/auth/profile"),
-                        ("POST", "/api/push/subscribe"),
-                        ("POST", "/api/push/unsubscribe"),
-                        ("POST", "/api/notifications/{notification_id}/read"),
-                        ("PATCH", "/api/chats/{chat_id}/read-state"),
-                        ("PATCH", "/api/chats/{chat_id}/pin-state"),
-                        ("POST", "/api/notifications/read-all"),
-                        ("POST", "/api/background/tick"),
-                        ("POST", "/api/webhooks/yandex"),
-                    }
-                    if (method, path) not in expected_exceptions:
-                        self.assertEqual("admin_only", access_class)
-
-        expected_special_routes = {
-            ("GET", "/api/chat-settings"): "authenticated_read",
-            ("POST", "/api/notifications/{notification_id}/read"): "viewer_self_service",
-            ("PATCH", "/api/chats/{chat_id}/read-state"): "viewer_self_service",
-            ("PATCH", "/api/chats/{chat_id}/pin-state"): "viewer_self_service",
-            ("POST", "/api/notifications/read-all"): "viewer_self_service",
-            ("POST", "/api/background/tick"): "token_only",
-            ("POST", "/api/webhooks/yandex"): "webhook_unchanged",
-        }
-        for route, expected in expected_special_routes.items():
-            self.assertIn(route, inventory)
-            self.assertEqual(expected, auth_dependencies.route_access_class(*route))
-
-    def test_sensitive_get_inventory_is_admin_only(self) -> None:
-        sensitive_gets = {
-            (method, route.path)
-            for route in main.app.routes
-            if isinstance(route, APIRoute)
-            for method in route.methods
-            if method == "GET"
-            and (
-                route.path.startswith("/api/debug/")
-                or route.path.startswith("/api/chat-uploads/")
-                or route.path.startswith("/api/ozon-fbo/")
-                or route.path.rstrip("/")
-                in {"/api/supply-planning/status", "/api/supply-planning/sync"}
-            )
-        }
-        self.assertTrue(sensitive_gets)
-        for method, path in sensitive_gets:
-            with self.subTest(path=path):
-                self.assertEqual("admin_only", auth_dependencies.route_access_class(method, path))
+            concrete = path.replace("{notification_id}", "1").replace("{chat_id}", "1")
+            if method in {"POST", "PATCH", "PUT", "DELETE"} and route_requirements(method, concrete) == []:
+                self.assertIn((method, path), common_writes)
+        for path in ("/api/debug/local", "/api/users", "/api/assets/image", "/api/unknown"):
+            self.assertIsNone(route_requirements("GET", path))
 
 
 if __name__ == "__main__":

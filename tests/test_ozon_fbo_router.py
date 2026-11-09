@@ -19,7 +19,7 @@ import test_regression_foundation as foundation  # noqa: E402
 from test_ozon_fbo_core import Sheet  # noqa: E402
 from fastapi.routing import APIRoute  # noqa: E402
 
-from app import auth_dependencies  # noqa: E402
+from app.permissions import route_requirements  # noqa: E402
 from app import db  # noqa: E402
 from app import ozon_fbo_repository as fbo_repo  # noqa: E402
 from app import repository as repo  # noqa: E402
@@ -93,10 +93,11 @@ class OzonFboRouterContractTests(unittest.TestCase):
         for item in EXPECTED_ROUTES:
             self.assertEqual(app_routes.count(item), 1, item)
 
-    def test_every_route_is_admin_only(self) -> None:
+    def test_every_route_requires_fbo_right_or_admin(self) -> None:
         for path, method in EXPECTED_ROUTES:
             concrete = path.replace("{run_id}", "1")
-            self.assertEqual("admin_only", auth_dependencies.route_access_class(method, concrete), (method, concrete))
+            expected = None if path.endswith(("/api-log", "/settings", "/check-connection")) else [("ozonFbo", "read" if method == "GET" else "write")]
+            self.assertEqual(expected, route_requirements(method, concrete), (method, concrete))
 
 
 class OzonFboRouterHttpTests(unittest.TestCase):

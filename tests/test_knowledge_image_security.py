@@ -682,7 +682,7 @@ class KnowledgeImageSecurityTests(unittest.TestCase):
         )
         self.assertEqual(existing_payload, private_path.read_bytes())
 
-    def test_knowledge_ui_has_no_raw_url_and_uses_shared_admin_only_controls(self) -> None:
+    def test_knowledge_ui_has_no_raw_url_and_requires_knowledge_write_controls(self) -> None:
         static_root = Path(main.__file__).resolve().parent / "static"
         index_html = (static_root / "index.html").read_text(encoding="utf-8")
         app_js = (static_root / "app.js").read_text(encoding="utf-8")
@@ -699,7 +699,7 @@ class KnowledgeImageSecurityTests(unittest.TestCase):
         ):
             self.assertRegex(
                 index_html,
-                rf'id="{element_id}"[^>]*class="[^"]*admin-only[^"]*hidden[^"]*"',
+                rf'id="{element_id}"[^>]*data-permission-write="knowledge"',
             )
 
     def test_text_update_preserves_internal_reference_and_raw_image_fields_are_rejected(self) -> None:

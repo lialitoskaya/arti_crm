@@ -65,7 +65,7 @@ a { color: inherit; }
 .hidden { display: none !important; }
 .muted { color: var(--crm-muted); }
 .soft-counter { color: var(--crm-muted); font-weight: 500; }
-#navSupplyPlanning {visibility: hidden}
+#navSupplyPlanning:not([data-section-granted]) {visibility: hidden}
 button,
 .button-like {
   min-height: 34px;
@@ -1220,6 +1220,8 @@ html[data-theme="dark"] button.reply-template-delete-action:focus-visible {
   position: relative;
   z-index: 1;
   width: min(520px, 100%);
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
   display: grid;
   gap: 12px;
   padding: 16px;
@@ -1232,6 +1234,14 @@ html[data-theme="dark"] button.reply-template-delete-action:focus-visible {
 .user-create-form-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .user-edit-active-row { display: flex; align-items: center; gap: 8px; }
 .user-edit-active-row input { width: auto; min-height: auto; }
+
+.employee-permissions { margin: 0; padding: 10px 0 0; border: 0; border-top: 1px solid var(--crm-line); min-width: 0; }
+.employee-permissions legend { padding: 0; font-weight: 600; }
+.employee-permissions-list { display: grid; gap: 6px; }
+.employee-permissions-list .employee-permission-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(min(100%, 168px), 1fr); gap: 8px; align-items: center; }
+.employee-permission-row select { min-width: 0; width: 100%; }
+.permission-readonly { opacity: .55; }
+.section-access-status { margin: 4px 0 0; font-size: 12px; }
 
 .knowledge-modal {
   position: fixed;
