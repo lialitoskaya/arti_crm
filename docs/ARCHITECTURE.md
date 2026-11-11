@@ -6,6 +6,8 @@
 app/
   main.py                 FastAPI app, API routes, sync orchestration
   repository.py           SQLite repository layer
+  reply_templates_repository.py  saved replies, ordering and author attribution
+  reply_templates_router.py      CRUD endpoints for saved replies
   chat_state_repository.py  per-user read and pin queries and mutations
   chat_state_router.py    PATCH routes for personal chat marks
   yandex_oauth_links_router.py      administrator API for Yandex account links

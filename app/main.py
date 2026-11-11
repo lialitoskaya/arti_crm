@@ -55,7 +55,7 @@ from app.yandex_oauth_links_router import create_yandex_oauth_links_router
 from app.chat_state_router import create_chat_state_router
 from app.notifications_router import create_notifications_router
 from app.reply_templates_router import create_reply_templates_router
-from app import ozon_fbo_repository
+from app import ozon_fbo_repository, reply_templates_repository
 from app.ozon_fbo_router import create_ozon_fbo_router
 from app.services.analytics import build_chat_analytics, build_chat_analytics_drilldown
 from app.services.knowledge_images import (
@@ -5966,7 +5966,7 @@ def api_update_knowledge_article(article_id: int, payload: KnowledgeArticleUpdat
     return _knowledge_article_response(article)
 
 
-app.include_router(create_reply_templates_router(repo, _current_user, _require_route_permission))
+app.include_router(create_reply_templates_router(reply_templates_repository, _current_user, _require_route_permission))
 app.include_router(create_ozon_fbo_router(ozon_fbo_repository, _require_route_permission))
 
 

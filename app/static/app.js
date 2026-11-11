@@ -7707,6 +7707,46 @@ async function saveReplyTemplateFromComposer() {
   }
 }
 
+function bindReplyTemplateEvents() {
+  bind('replyTemplatesToggleBtn', 'click', async () => {
+    const next = !replyTemplatesPanelOpen;
+    setReplyTemplatesPanel(next);
+    if (next) {
+      try { await loadReplyTemplates(); } catch (err) { notify('Шаблоны', String(err.message || err)); }
+    }
+  });
+  bind('replyTemplateAddBtn', 'click', async () => {
+    try {
+      await loadReplyTemplates();
+      openReplyTemplateCreateBox();
+    } catch (err) { notify('Шаблоны', String(err.message || err)); }
+  });
+  bind('replyTemplatesCloseBtn', 'click', () => setReplyTemplatesPanel(false));
+  bind('replyTemplateCancelBtn', 'click', resetReplyTemplateCreateBox);
+  bind('replyTemplateSaveBtn', 'click', saveReplyTemplateFromComposer);
+  $('replyTemplatesList')?.addEventListener('click', async (event) => {
+    const editButton = event.target?.closest?.('[data-reply-template-edit]');
+    if (editButton) {
+      openReplyTemplateEditBox(editButton.dataset.replyTemplateEdit);
+      return;
+    }
+    const deleteButton = event.target?.closest?.('[data-reply-template-delete]');
+    if (deleteButton) {
+      deleteButton.disabled = true;
+      try {
+        await deleteReplyTemplate(deleteButton.dataset.replyTemplateDelete);
+      } catch (err) {
+        notify('Шаблоны', `Не удалось удалить шаблон: ${String(err.message || err)}`);
+      } finally {
+        deleteButton.disabled = false;
+      }
+      return;
+    }
+    const applyButton = event.target?.closest?.('[data-reply-template-apply]');
+    if (applyButton) applyReplyTemplate(applyButton.dataset.replyTemplateApply);
+  });
+}
+
 function bind(id, eventName, handler) {
   const el = $(id);
   if (!el) {
@@ -8600,43 +8640,7 @@ function init() {
   }
 
   const messageForm = $('messageForm');
-  bind('replyTemplatesToggleBtn', 'click', async () => {
-    const next = !replyTemplatesPanelOpen;
-    setReplyTemplatesPanel(next);
-    if (next) {
-      try { await loadReplyTemplates(); } catch (err) { notify('Шаблоны', String(err.message || err)); }
-    }
-  });
-  bind('replyTemplateAddBtn', 'click', async () => {
-    try {
-      await loadReplyTemplates();
-      openReplyTemplateCreateBox();
-    } catch (err) { notify('Шаблоны', String(err.message || err)); }
-  });
-  bind('replyTemplatesCloseBtn', 'click', () => setReplyTemplatesPanel(false));
-  bind('replyTemplateCancelBtn', 'click', resetReplyTemplateCreateBox);
-  bind('replyTemplateSaveBtn', 'click', saveReplyTemplateFromComposer);
-  $('replyTemplatesList')?.addEventListener('click', async (event) => {
-    const editButton = event.target?.closest?.('[data-reply-template-edit]');
-    if (editButton) {
-      openReplyTemplateEditBox(editButton.dataset.replyTemplateEdit);
-      return;
-    }
-    const deleteButton = event.target?.closest?.('[data-reply-template-delete]');
-    if (deleteButton) {
-      deleteButton.disabled = true;
-      try {
-        await deleteReplyTemplate(deleteButton.dataset.replyTemplateDelete);
-      } catch (err) {
-        notify('Шаблоны', `Не удалось удалить шаблон: ${String(err.message || err)}`);
-      } finally {
-        deleteButton.disabled = false;
-      }
-      return;
-    }
-    const applyButton = event.target?.closest?.('[data-reply-template-apply]');
-    if (applyButton) applyReplyTemplate(applyButton.dataset.replyTemplateApply);
-  });
+  bindReplyTemplateEvents();
   bind('attachImageBtn', 'click', () => $('chatImageInput')?.click());
   bind('chatImageInput', 'change', handleChatImageSelection);
 

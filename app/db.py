@@ -364,6 +364,21 @@ def _resolve_db_path() -> str:
     return str(path)
 
 
+def row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+    data = dict(row)
+    if "metadata_json" in data:
+        data["metadata"] = json.loads(data.pop("metadata_json") or "{}")
+    if "raw_json" in data:
+        data["raw"] = json.loads(data.pop("raw_json") or "{}")
+    return data
+
+
+def user_label_from_row(row: dict[str, Any] | None) -> str | None:
+    if not row:
+        return None
+    return (row.get("display_name") or row.get("username") or "").strip() or None
+
+
 @contextmanager
 def get_connection() -> Iterator[sqlite3.Connection]:
     conn = sqlite3.connect(_resolve_db_path(), timeout=15)

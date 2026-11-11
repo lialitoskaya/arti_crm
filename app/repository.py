@@ -24,7 +24,14 @@ from app.yandex_oauth_links_repository import (
     list_yandex_oauth_managed_links,
     update_yandex_oauth_managed_link,
 )
-from app.db import get_connection
+from app.db import get_connection, row_to_dict, user_label_from_row
+from app.reply_templates_repository import (
+    create_reply_template,
+    delete_reply_template,
+    get_reply_template,
+    list_reply_templates,
+    update_reply_template,
+)
 from app.permissions import can, effective_permissions, notification_allowed, public_user
 from app.marketplace_sender import (
     extract_sender_designations as _shared_extract_sender_designations,
@@ -99,28 +106,11 @@ def _is_ozon_question_processed_status(status: Any) -> bool:
     }
 
 
-def _user_label_from_row(row: dict[str, Any] | None) -> str | None:
-    if not row:
-        return None
-    return (row.get("display_name") or row.get("username") or "").strip() or None
-
-
 def _get_user_label(conn, user_id: int | None) -> str | None:
     if not user_id:
         return None
     row = conn.execute("SELECT id, username, display_name FROM users WHERE id=? AND is_active=1", (user_id,)).fetchone()
-    return _user_label_from_row(row_to_dict(row)) if row else None
-
-
-def row_to_dict(row) -> dict[str, Any]:
-    data = dict(row)
-    if "metadata_json" in data:
-        data["metadata"] = json.loads(data.pop("metadata_json") or "{}")
-    if "raw_json" in data:
-        data["raw"] = json.loads(data.pop("raw_json") or "{}")
-    return data
-
-
+    return user_label_from_row(row_to_dict(row)) if row else None
 
 
 def _slugify_chat_status_key(title: str) -> str:
@@ -5183,166 +5173,3 @@ def record_login_success(username: str | None, ip: str | None, user_agent: str |
             "INSERT INTO login_attempts (username_norm, ip, user_agent, success, reason) VALUES (?, ?, ?, 1, ?)",
             (username_norm, ip_key, str(user_agent or '')[:500] or None, 'success'),
         )
-
-def _ensure_reply_templates_table(conn) -> None:
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS reply_templates (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            content TEXT NOT NULL,
-            sort_order INTEGER NOT NULL DEFAULT 0,
-            is_active INTEGER NOT NULL DEFAULT 1,
-            created_by_user_id INTEGER,
-            updated_by_user_id INTEGER,
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-        """
-    )
-    columns = {row["name"] for row in conn.execute("PRAGMA table_info(reply_templates)").fetchall()}
-    for column_name, column_sql in {
-        "sort_order": "INTEGER NOT NULL DEFAULT 0",
-        "is_active": "INTEGER NOT NULL DEFAULT 1",
-        "created_by_user_id": "INTEGER",
-        "updated_by_user_id": "INTEGER",
-        "updated_at": "TEXT",
-    }.items():
-        if column_name not in columns:
-            conn.execute(f"ALTER TABLE reply_templates ADD COLUMN {column_name} {column_sql}")
-    conn.execute("UPDATE reply_templates SET updated_at=COALESCE(updated_at, created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL OR updated_at=''")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_reply_templates_active_sort ON reply_templates(is_active, sort_order, updated_at DESC)")
-
-
-def list_reply_templates(q: str | None = None, include_inactive: bool = False) -> list[dict[str, Any]]:
-    params: list[Any] = []
-    where: list[str] = []
-    if not include_inactive:
-        where.append('rt.is_active=1')
-    if q:
-        token = f"%{str(q).strip()}%"
-        where.append('(rt.title LIKE ? OR rt.content LIKE ?)')
-        params.extend([token, token])
-    where_sql = f"WHERE {' AND '.join(where)}" if where else ''
-    with get_connection() as conn:
-        _ensure_reply_templates_table(conn)
-        rows = conn.execute(
-            f"""
-            SELECT rt.*, cu.username AS created_by_username, cu.display_name AS created_by_display_name,
-                   uu.username AS updated_by_username, uu.display_name AS updated_by_display_name
-            FROM reply_templates rt
-            LEFT JOIN users cu ON cu.id = rt.created_by_user_id
-            LEFT JOIN users uu ON uu.id = rt.updated_by_user_id
-            {where_sql}
-            ORDER BY rt.sort_order ASC, rt.updated_at DESC, rt.id DESC
-            """,
-            params,
-        ).fetchall()
-    items: list[dict[str, Any]] = []
-    for row in rows:
-        item = row_to_dict(row)
-        item['created_by'] = _user_label_from_row({
-            'username': item.pop('created_by_username', None),
-            'display_name': item.pop('created_by_display_name', None),
-        })
-        item['updated_by'] = _user_label_from_row({
-            'username': item.pop('updated_by_username', None),
-            'display_name': item.pop('updated_by_display_name', None),
-        })
-        item['is_active'] = bool(item.get('is_active', 1))
-        items.append(item)
-    return items
-
-
-def create_reply_template(*, title: str, content: str, sort_order: int = 0, user_id: int | None = None) -> dict[str, Any]:
-    title = (title or '').strip()
-    content = str(content or '').strip()
-    if not title:
-        raise ValueError('Template title is required')
-    if not content:
-        raise ValueError('Template content is required')
-    with get_connection() as conn:
-        _ensure_reply_templates_table(conn)
-        cur = conn.execute(
-            """
-            INSERT INTO reply_templates (title, content, sort_order, is_active, created_by_user_id, updated_by_user_id, updated_at)
-            VALUES (?, ?, ?, 1, ?, ?, CURRENT_TIMESTAMP)
-            """,
-            (title, content, int(sort_order or 0), user_id, user_id),
-        )
-        template_id = int(cur.lastrowid)
-    return get_reply_template(template_id) or {}
-
-
-def get_reply_template(template_id: int) -> dict[str, Any] | None:
-    with get_connection() as conn:
-        _ensure_reply_templates_table(conn)
-        row = conn.execute(
-            """
-            SELECT rt.*, cu.username AS created_by_username, cu.display_name AS created_by_display_name,
-                   uu.username AS updated_by_username, uu.display_name AS updated_by_display_name
-            FROM reply_templates rt
-            LEFT JOIN users cu ON cu.id = rt.created_by_user_id
-            LEFT JOIN users uu ON uu.id = rt.updated_by_user_id
-            WHERE rt.id=?
-            LIMIT 1
-            """,
-            (template_id,),
-        ).fetchone()
-    if not row:
-        return None
-    item = row_to_dict(row)
-    item['created_by'] = _user_label_from_row({
-        'username': item.pop('created_by_username', None),
-        'display_name': item.pop('created_by_display_name', None),
-    })
-    item['updated_by'] = _user_label_from_row({
-        'username': item.pop('updated_by_username', None),
-        'display_name': item.pop('updated_by_display_name', None),
-    })
-    item['is_active'] = bool(item.get('is_active', 1))
-    return item
-
-
-def update_reply_template(template_id: int, *, title: str | None = None, content: str | None = None, sort_order: int | None = None, is_active: bool | None = None, user_id: int | None = None) -> dict[str, Any] | None:
-    fields: list[str] = []
-    params: list[Any] = []
-    if title is not None:
-        title = str(title).strip()
-        if not title:
-            raise ValueError('Template title is required')
-        fields.append('title=?')
-        params.append(title)
-    if content is not None:
-        content = str(content).strip()
-        if not content:
-            raise ValueError('Template content is required')
-        fields.append('content=?')
-        params.append(content)
-    if sort_order is not None:
-        fields.append('sort_order=?')
-        params.append(int(sort_order))
-    if is_active is not None:
-        fields.append('is_active=?')
-        params.append(1 if is_active else 0)
-    if user_id is not None:
-        fields.append('updated_by_user_id=?')
-        params.append(user_id)
-    if not fields:
-        return get_reply_template(template_id)
-    fields.append('updated_at=CURRENT_TIMESTAMP')
-    params.append(template_id)
-    with get_connection() as conn:
-        _ensure_reply_templates_table(conn)
-        exists = conn.execute('SELECT id FROM reply_templates WHERE id=?', (template_id,)).fetchone()
-        if not exists:
-            return None
-        conn.execute(f"UPDATE reply_templates SET {', '.join(fields)} WHERE id=?", params)
-    return get_reply_template(template_id)
-
-
-def delete_reply_template(template_id: int) -> bool:
-    with get_connection() as conn:
-        _ensure_reply_templates_table(conn)
-        cursor = conn.execute("DELETE FROM reply_templates WHERE id=?", (template_id,))
-        return cursor.rowcount > 0
