@@ -5287,11 +5287,6 @@ def _store_chat_image(upload: UploadFile, chat_id: int, ext: str, data: bytes) -
     }
 
 
-async def _save_chat_image(upload: UploadFile, chat_id: int) -> dict[str, Any]:
-    ext, data = await _read_chat_image(upload)
-    return _store_chat_image(upload, chat_id, ext, data)
-
-
 @app.get("/api/chat-uploads/{filename}")
 def api_chat_upload(filename: str, request: Request) -> FileResponse:
     _current_user(request)

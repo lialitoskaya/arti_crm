@@ -44,16 +44,6 @@ let csrfToken = '';
 let yandexOAuthStatusRequestId = 0;
 // Arti CRM — v82-login-csrf-public-fix-20260710: login is CSRF-exempt; do not request a session CSRF token before the first login.
 
-function readCookieValue(name) {
-  try {
-    const prefix = `${encodeURIComponent(name)}=`;
-    const item = document.cookie.split('; ').find((part) => part.startsWith(prefix));
-    return item ? decodeURIComponent(item.slice(prefix.length)) : '';
-  } catch (_) {
-    return '';
-  }
-}
-
 function isUnsafeHttpMethod(method = 'GET') {
   return ['POST', 'PUT', 'PATCH', 'DELETE'].includes(String(method || 'GET').toUpperCase());
 }
@@ -1271,14 +1261,6 @@ async function openNotification(notificationId) {
   }
 }
 
-async function markAllNotificationsRead() {
-  notificationToastIds = [];
-  notificationsPanelOpen = false;
-  renderNotifications();
-  await api('/api/notifications/read-all', { method: 'POST' });
-  await loadNotifications({ silent: false });
-}
-
 function safeJsonParse(value) {
   try {
     return JSON.parse(value);
@@ -1609,16 +1591,6 @@ function previewText(value) {
   return noMarkdownImages || 'Изображение';
 }
 
-function chatSubtitleParts(chat) {
-  const parts = [];
-  if (chat.order_id) parts.push(`Заказ: ${chat.order_id}`);
-  if (chat.customer_public_id) parts.push(`клиент ID: ${chat.customer_public_id}`);
-  if (chat.external_chat_id) parts.push(`chat_id: ${chat.external_chat_id}`);
-  if (chat.last_message_at) parts.push(`последнее: ${formatDateTime(chat.last_message_at)}`);
-  if (shouldShowWaitingMarker(chat)) parts.push(waitingDurationText(chat.sla_waiting_since_at || chat.last_message_at));
-  return parts.join(' · ');
-}
-
 function directMarketplaceChatUrl(chat) {
   if (!chat) return '';
 
@@ -1933,10 +1905,6 @@ function activeChatStatuses(includeClosed = false) {
   const statuses = (chatSettings.statuses || []).filter(s => s.is_active !== 0 && s.is_active !== false);
   if (includeClosed) return statuses;
   return statuses.filter(s => s.key !== 'closed');
-}
-
-function funnelOptions(selected = '') {
-  return '<option value="">Все статусы</option>';
 }
 
 function statusOptions(selected = '', includeClosed = false, funnelId = '') {
@@ -5155,13 +5123,6 @@ function questionNeedsAnswer(question) {
   return !isQuestionProcessed(question);
 }
 
-function questionAnswerBadge(question) {
-  // Backward-compatible wrapper for older call sites.
-  // New question UI should use questionDisplayStatusBadge(question),
-  // so processed/answered/needs-answer states are not duplicated.
-  return questionDisplayStatusBadge(question);
-}
-
 function questionProductName(question) {
   return question.product_name || (question.sku ? `SKU ${question.sku}` : 'Товар не указан');
 }
@@ -5552,13 +5513,6 @@ const taskUiStatusOptions = [
   { value: 'in_progress', ui: 'in_progress', label: 'В работе' },
   { value: 'archived', ui: 'archive', label: 'Архив' },
 ];
-
-function taskPatchStatusValue(status) {
-  const normalized = normalizeTaskStatus(status);
-  if (normalized === 'in_progress') return 'in_progress';
-  if (normalized === 'archive') return 'archived';
-  return 'new';
-}
 
 function closeTaskStatusMenus(exceptMenu = null) {
   document.querySelectorAll('#tasksView .tasks-ref-status-menu').forEach(menu => {
@@ -6477,15 +6431,6 @@ function analyticsWeekdayIndexFromDate(dateValue) {
   return (date.getDay() + 6) % 7;
 }
 
-function pluralizeAnalyticsRequests(count) {
-  const value = Math.abs(Number(count || 0));
-  const mod10 = value % 10;
-  const mod100 = value % 100;
-  if (mod10 === 1 && mod100 !== 11) return 'обращение';
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'обращения';
-  return 'обращений';
-}
-
 function analyticsDailyRequestCount(row) {
   return Number(row?.requests || row?.daily_first_requests || row?.inbound_messages || 0);
 }
@@ -6530,7 +6475,7 @@ function renderAnalyticsPeakWeekdays(rows) {
 
   if (hint) {
     hint.textContent = topDays
-      .map(day => `${day.name} — ${day.requests} ${pluralizeAnalyticsRequests(day.requests)}`)
+      .map(day => `${day.name} — ${day.requests} ${pluralRu(day.requests, 'обращение', 'обращения', 'обращений')}`)
       .join(' · ');
   }
 }
