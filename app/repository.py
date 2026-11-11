@@ -3496,23 +3496,30 @@ def create_task(payload: TaskCreate) -> int:
         return task_id
 
 
-def _load_task_comments(conn, task_id: int) -> list[dict[str, Any]]:
-    rows = conn.execute(
-        """
-        SELECT id, task_id, comment, author, created_at
-        FROM task_comments
-        WHERE task_id=?
-        ORDER BY datetime(created_at) ASC, id ASC
-        """,
-        (task_id,),
-    ).fetchall()
-    return [row_to_dict(r) for r in rows]
+def _tasks_with_comments(conn: sqlite3.Connection, rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+    task_ids = [row["id"] for row in rows]
+    comments: dict[int, list[dict[str, Any]]] = {}
+    # Bound the number of parameters for older SQLite builds on shared hosting.
+    for start in range(0, len(task_ids), 500):
+        batch = task_ids[start:start + 500]
+        placeholders = ", ".join("?" for _ in batch)
+        for comment in conn.execute(
+            f"""
+            SELECT id, task_id, comment, author, created_at
+            FROM task_comments
+            WHERE task_id IN ({placeholders})
+            ORDER BY task_id, datetime(created_at), id
+            """,
+            batch,
+        ):
+            comments.setdefault(comment["task_id"], []).append(row_to_dict(comment))
+    return [_decorate_task(row, comments.get(row["id"], [])) for row in rows]
 
 
-def _decorate_task(row, conn) -> dict[str, Any]:
+def _decorate_task(row: sqlite3.Row, comments: list[dict[str, Any]]) -> dict[str, Any]:
     data = row_to_dict(row)
     data["status"] = _normalize_task_status(data.get("status"))
-    data["comments"] = _load_task_comments(conn, int(data["id"]))
+    data["comments"] = comments
     data["comments_count"] = len(data["comments"])
     data["last_comment"] = data["comments"][-1]["comment"] if data["comments"] else None
     if data.get("task_type_id"):
@@ -3633,7 +3640,7 @@ def update_task(task_id: int, payload: TaskUpdate) -> dict[str, Any] | None:
             LEFT JOIN users u ON u.id = t.assigned_user_id
             WHERE t.id=?
         """, (task_id,)).fetchone()
-        return _decorate_task(row, conn) if row else None
+        return _tasks_with_comments(conn, [row])[0] if row else None
 
 
 def get_task(task_id: int) -> dict[str, Any] | None:
@@ -3652,7 +3659,7 @@ def get_task(task_id: int) -> dict[str, Any] | None:
             LEFT JOIN users u ON u.id = t.assigned_user_id
             WHERE t.id=?
         """, (task_id,)).fetchone()
-        return _decorate_task(row, conn) if row else None
+        return _tasks_with_comments(conn, [row])[0] if row else None
 
 
 
@@ -3768,7 +3775,7 @@ def list_tasks(
             """,
             params,
         ).fetchall()
-        return [_decorate_task(r, conn) for r in rows]
+        return _tasks_with_comments(conn, rows)
 
 
 
