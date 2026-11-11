@@ -2,6 +2,8 @@
 
 ## Yandex OAuth login (optional)
 
+Администратор привязывает учётную запись сотрудника в технических настройках CRM. Переменная `YANDEX_OAUTH_USER_MAP` служит резервным способом сопоставления. Отключённая управляемая привязка блокирует вход через Яндекс для этой личности, даже если она указана в переменной окружения. [Правила привязки и входа](SECURITY_BOUNDARIES.md#yandex-oauth-login)
+
 ```env
 YANDEX_OAUTH_ENABLED=false
 YANDEX_OAUTH_CLIENT_ID=

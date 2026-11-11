@@ -308,7 +308,9 @@ unread metadata and the global CRM workflow status are not personal read state.
 
 ## Ozon FBO supply orders
 
-1. The section is admin-only. Ozon keys come from the server environment
+1. Viewing FBO data requires read access. Running supply operations requires write
+   access. Settings, connection checks and API logs require the administrator role.
+   Ozon keys come from the server environment
    (`OZON_FBO_CLIENT_ID`/`OZON_FBO_API_KEY`, else `OZON_CLIENT_ID`/`OZON_API_KEY`) and are
    never entered, stored or displayed in the CRM.
 2. A trial run creates only calculation drafts and writes «Факт»; it never creates a

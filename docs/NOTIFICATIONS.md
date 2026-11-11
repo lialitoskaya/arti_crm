@@ -11,6 +11,8 @@ CRM хранит уведомления в таблице `notifications` и п�
 
 ## API
 
+Список и счётчик непрочитанных учитывают права сотрудника на связанный раздел и события текущего дня по московскому времени. Перед отправкой push сервер повторно проверяет права получателя. [Правила уведомлений](BUSINESS_RULES.md#current-day-notifications)
+
 ```text
 GET  /api/notifications?limit=30
 POST /api/notifications/{id}/read

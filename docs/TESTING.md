@@ -26,15 +26,10 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pytest -p no:cacheprovider -q
 ```
 
-Cache provider отключён, поэтому запуск не создаёт `.pytest_cache/`. Текущий набор
-также совместим со standard library runner, если runtime dependencies уже
-установлены:
-
-```powershell
-python -m unittest discover -s tests -p "test_*.py" -v
-```
-
-Нельзя сообщать об успешном результате команды, которая фактически не запускалась.
+Эта команда запускает и классы `unittest`, и тесты с фикстурами `pytest`.
+Правила доступа по разделам проверяют `tests/test_section_permissions.py` и
+`tests/test_route_rbac.py`. Браузерный сценарий назначения прав находится в
+`tests/test_section_permissions_browser.cjs` и использует Playwright с Microsoft Edge.
 
 ## Границы безопасности
 
@@ -48,7 +43,7 @@ python -m unittest discover -s tests -p "test_*.py" -v
 - `dotenv.load_dotenv` подменяется no-op, поэтому `.env` не читается;
 - `DATABASE_PATH`, attachments и state/cache paths направляются во временный
   каталог;
-- SQLite guard разрешает подключение только к конкретной временной БД;
+- SQLite guard разрешает подключение к выбранной временной БД и к SQLite в памяти (`:memory:`);
 - временные SQLite/WAL/SHM-файлы удаляются после каждого теста;
 - socket guard блокирует внешние соединения;
 - HTTP smoke requests используют только in-memory `httpx.ASGITransport`;

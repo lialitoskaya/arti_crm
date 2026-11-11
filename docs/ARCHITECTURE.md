@@ -9,12 +9,13 @@ app/
   task_chat_status_automation.py  Transaction-local chat-status arbiter
   db.py                   schema/migrations/init
   schemas.py              Pydantic DTO
+  permissions.py          section catalog, effective employee rights and API access rules
   services/
     analytics.py          SQL analytics/dashboard calculations
     ozon_fbo/             FBO supply pipeline: rules, drafts, dedupe, orders, cargo, runner
   integrations/
     ozon_fbo/client.py    Ozon Seller API client for FBO supplies (httpx, rate limits, dumps)
-  ozon_fbo_router.py      admin-only /api/ozon-fbo/* routes
+  ozon_fbo_router.py      supply operations and administrator settings for /api/ozon-fbo/*
   ozon_fbo_repository.py  ozon_fbo_* tables (settings, runs, state, warehouse map)
   connectors/
     base.py               unified connector contracts
@@ -25,6 +26,7 @@ app/
   static/
     index.html            single-page UI markup
     app.js                frontend logic
+    permissions.js        employee access controls and navigation
     styles.css            frontend styles
 ```
 
