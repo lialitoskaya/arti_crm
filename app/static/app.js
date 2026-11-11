@@ -2057,6 +2057,19 @@ function renderChatSettingsLists() {
   }).join('') : '<p class="muted">Статусов пока нет.</p>';
 }
 
+function patchChatStatusRow(row, id) {
+  return api(`/api/chat-settings/statuses/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      title: row.querySelector('[data-status-title]')?.value?.trim() || '',
+      funnel_id: null,
+      color: row.querySelector('[data-status-color]')?.value || 'orange',
+      sort_order: Number(row.querySelector('[data-status-sort]')?.value || 0),
+      is_active: Boolean(row.querySelector('[data-status-active]')?.checked),
+    }),
+  });
+}
+
 async function saveAllChatStatuses() {
   const rows = Array.from(document.querySelectorAll('#chatStatusesList [data-status-id]'));
   if (!rows.length) return;
@@ -2066,16 +2079,7 @@ async function saveAllChatStatuses() {
   try {
     for (const row of rows) {
       const id = Number(row.dataset.statusId);
-      await api(`/api/chat-settings/statuses/${id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({
-          title: row.querySelector('[data-status-title]')?.value?.trim() || '',
-          funnel_id: null,
-          color: row.querySelector('[data-status-color]')?.value || 'orange',
-          sort_order: Number(row.querySelector('[data-status-sort]')?.value || 0),
-          is_active: Boolean(row.querySelector('[data-status-active]')?.checked),
-        }),
-      });
+      await patchChatStatusRow(row, id);
     }
     await loadChatSettings({ keepValues: true });
     await loadChats();
@@ -8127,16 +8131,7 @@ async function saveSingleChatStatus(row) {
   const saveBtn = row.querySelector('[data-status-action="save"]');
   if (saveBtn) saveBtn.disabled = true;
   try {
-    await api(`/api/chat-settings/statuses/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({
-        title: row.querySelector('[data-status-title]')?.value?.trim() || '',
-        funnel_id: null,
-        color: row.querySelector('[data-status-color]')?.value || 'orange',
-        sort_order: Number(row.querySelector('[data-status-sort]')?.value || 0),
-        is_active: Boolean(row.querySelector('[data-status-active]')?.checked),
-      }),
-    });
+    await patchChatStatusRow(row, id);
     await loadChatSettings({ keepValues: true });
     await loadChats();
     notify('Технические настройки', 'Статус сохранён.');
