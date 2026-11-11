@@ -1,4 +1,4 @@
-const ARTI_CRM_SW_VERSION = 'v97-employee-permissions-20261109';
+const ARTI_CRM_SW_VERSION = 'v98-personal-chat-state-20261111';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();

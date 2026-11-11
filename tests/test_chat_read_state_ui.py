@@ -126,7 +126,10 @@ class ChatReadStateUiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.source = APP_JS_PATH.read_text(encoding="utf-8")
-        cls.controller = _extract_function(cls.source, "createChatReadStateController")
+        cls.controller = "\n".join((
+            _extract_function(cls.source, "createPersonalChatStateController"),
+            _extract_function(cls.source, "createChatReadStateController"),
+        ))
 
     def test_stale_get_and_other_chat_cannot_overwrite_optimistic_state(self) -> None:
         _run_node(

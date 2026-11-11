@@ -51,6 +51,7 @@ from app.marketplace_sender import (
     normalize_system_sender as _shared_normalize_system_sender,
     system_sender_matches as _shared_system_sender_matches,
 )
+from app.chat_state_router import create_chat_state_router
 from app.notifications_router import create_notifications_router
 from app.reply_templates_router import create_reply_templates_router
 from app import ozon_fbo_repository
@@ -79,7 +80,7 @@ from app.message_send_service import (
     MessageSendService,
     public_operation,
 )
-from app.schemas import AiReplyCreate, ChatCreate, ChatPinStateUpdate, ChatReadStateUpdate, ChatUpdate, InternalNoteCreate, InternalNoteUpdate, LoginCreate, MessageCreate, ReviewReplyCreate, QuestionAnswerCreate, TaskCreate, TaskUpdate, UserCreate, UserPasswordUpdate, UserUpdate, ProfileUpdate, KnowledgeCategoryCreate, KnowledgeArticleCreate, KnowledgeArticleUpdate, YandexOAuthManagedLinkCreate, YandexOAuthManagedLinkUpdate
+from app.schemas import AiReplyCreate, ChatCreate, ChatUpdate, InternalNoteCreate, InternalNoteUpdate, LoginCreate, MessageCreate, ReviewReplyCreate, QuestionAnswerCreate, TaskCreate, TaskUpdate, UserCreate, UserPasswordUpdate, UserUpdate, ProfileUpdate, KnowledgeCategoryCreate, KnowledgeArticleCreate, KnowledgeArticleUpdate, YandexOAuthManagedLinkCreate, YandexOAuthManagedLinkUpdate
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -5224,41 +5225,7 @@ def get_chat(
     return chat
 
 
-@app.patch("/api/chats/{chat_id}/read-state")
-def update_chat_read_state(
-    chat_id: int,
-    payload: ChatReadStateUpdate,
-    request: Request,
-) -> dict[str, Any]:
-    user = _current_user(request)
-    state = repo.set_chat_read_state(
-        chat_id,
-        int(user["id"]),
-        is_unread=payload.is_unread,
-    )
-    if not state:
-        raise HTTPException(status_code=404, detail="Chat not found")
-    return state
-
-
-@app.patch("/api/chats/{chat_id}/pin-state")
-def update_chat_pin_state(
-    chat_id: int,
-    payload: ChatPinStateUpdate,
-    request: Request,
-) -> dict[str, Any]:
-    user = _current_user(request)
-    state = repo.set_chat_pin_state(
-        chat_id,
-        int(user["id"]),
-        is_pinned=payload.is_pinned,
-    )
-    if not state:
-        raise HTTPException(status_code=404, detail="Chat not found")
-    return state
-
-
-
+app.include_router(create_chat_state_router(_current_user))
 app.include_router(create_notifications_router(repo, _current_user))
 
 

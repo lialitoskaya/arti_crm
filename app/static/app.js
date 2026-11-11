@@ -297,19 +297,12 @@ let taskSearchTimer = null;
 let chatMetaControlsHydratedForChatId = null;
 let chatMetaControlsSignatureValue = '';
 let chatMetaControlBusyUntil = 0;
-function createChatReadStateController(options) {
+
+// Each personal mark owns its pending writes. A list refresh started before a
+// write completes must preserve the local value until a fresh response arrives.
+function createPersonalChatStateController(options, { field, snapshot, optimistic, mismatchMessage }) {
   const operations = new Map();
   let operationVersion = 0;
-
-  function snapshot(chat) {
-    return {
-      is_unread: Boolean(chat?.is_unread),
-      is_marked_unread: Boolean(chat?.is_marked_unread),
-      last_read_message_id: chat?.last_read_message_id ?? null,
-      last_read_at: chat?.last_read_at ?? null,
-      unread_message_id: chat?.unread_message_id ?? null,
-    };
-  }
 
   function captureRequestContext() {
     return {
@@ -338,24 +331,24 @@ function createChatReadStateController(options) {
     return serverChat;
   }
 
-  function set(chatId, isUnread) {
+  function set(chatId, value) {
     const normalizedChatId = Number(chatId || 0);
-    const desiredUnread = Boolean(isUnread);
+    const desired = Boolean(value);
     if (!normalizedChatId) return Promise.resolve(null);
 
     const existingOperation = operations.get(normalizedChatId);
     if (existingOperation?.pending) {
-      if (existingOperation.desiredUnread === desiredUnread) {
+      if (existingOperation.desired === desired) {
         return existingOperation.promise;
       }
       return existingOperation.promise
         .catch(() => null)
-        .then(() => set(normalizedChatId, desiredUnread));
+        .then(() => set(normalizedChatId, desired));
     }
 
     const current = options.read(normalizedChatId);
     if (!current) return Promise.resolve(null);
-    if (Boolean(current.is_unread) === desiredUnread) {
+    if (Boolean(current[field]) === desired) {
       return Promise.resolve(snapshot(current));
     }
 
@@ -363,22 +356,17 @@ function createChatReadStateController(options) {
     const version = ++operationVersion;
     const operation = {
       version,
-      desiredUnread,
+      desired,
       pending: true,
       promise: null,
     };
     operations.set(normalizedChatId, operation);
 
-    options.apply(normalizedChatId, {
-      ...previous,
-      is_unread: desiredUnread,
-      is_marked_unread: desiredUnread,
-      unread_message_id: desiredUnread ? previous.unread_message_id : null,
-    });
+    options.apply(normalizedChatId, optimistic(previous, desired));
 
     let requestResult;
     try {
-      requestResult = options.request(normalizedChatId, desiredUnread);
+      requestResult = options.request(normalizedChatId, desired);
     } catch (error) {
       requestResult = Promise.reject(error);
     }
@@ -386,7 +374,7 @@ function createChatReadStateController(options) {
     operation.promise = Promise.resolve(requestResult)
       .then((canonical) => {
         if (Number(canonical?.chat_id || 0) !== normalizedChatId) {
-          throw new Error('Read-state response chat ID mismatch');
+          throw new Error(mismatchMessage);
         }
         const activeOperation = operations.get(normalizedChatId);
         if (!activeOperation || activeOperation.version !== version) return canonical;
@@ -408,106 +396,44 @@ function createChatReadStateController(options) {
   return { captureRequestContext, reconcile, set };
 }
 
+function createChatReadStateController(options) {
+  return createPersonalChatStateController(options, {
+    field: 'is_unread',
+    mismatchMessage: 'Read-state response chat ID mismatch',
+    snapshot(chat) {
+      return {
+        is_unread: Boolean(chat?.is_unread),
+        is_marked_unread: Boolean(chat?.is_marked_unread),
+        last_read_message_id: chat?.last_read_message_id ?? null,
+        last_read_at: chat?.last_read_at ?? null,
+        unread_message_id: chat?.unread_message_id ?? null,
+      };
+    },
+    optimistic(previous, desired) {
+      return {
+        ...previous,
+        is_unread: desired,
+        is_marked_unread: desired,
+        unread_message_id: desired ? previous.unread_message_id : null,
+      };
+    },
+  });
+}
+
 function createChatPinStateController(options) {
-  const operations = new Map();
-  let operationVersion = 0;
-
-  function snapshot(chat) {
-    return {
-      is_pinned: Boolean(chat?.is_pinned),
-      pinned_at: chat?.pinned_at ?? null,
-    };
-  }
-
-  function captureRequestContext() {
-    return {
-      version: operationVersion,
-      pendingChatIds: new Set(
-        [...operations.entries()]
-          .filter(([, operation]) => operation.pending)
-          .map(([chatId]) => Number(chatId)),
-      ),
-    };
-  }
-
-  function reconcile(serverChat, context = {}) {
-    const chatId = Number(serverChat?.id ?? serverChat?.chat_id ?? 0);
-    if (!chatId) return serverChat;
-
-    const operation = operations.get(chatId);
-    const localChat = options.read(chatId);
-    if (!operation || !localChat) return serverChat;
-
-    const requestVersion = Number(context.version || 0);
-    const pendingAtStart = Boolean(context.pendingChatIds?.has?.(chatId));
-    if (operation.pending || operation.version > requestVersion || pendingAtStart) {
-      return { ...serverChat, ...snapshot(localChat) };
-    }
-    return serverChat;
-  }
-
-  function set(chatId, isPinned) {
-    const normalizedChatId = Number(chatId || 0);
-    const desiredPinned = Boolean(isPinned);
-    if (!normalizedChatId) return Promise.resolve(null);
-
-    const existingOperation = operations.get(normalizedChatId);
-    if (existingOperation?.pending) {
-      if (existingOperation.desiredPinned === desiredPinned) return existingOperation.promise;
-      return existingOperation.promise
-        .catch(() => null)
-        .then(() => set(normalizedChatId, desiredPinned));
-    }
-
-    const current = options.read(normalizedChatId);
-    if (!current) return Promise.resolve(null);
-    if (Boolean(current.is_pinned) === desiredPinned) return Promise.resolve(snapshot(current));
-
-    const previous = snapshot(current);
-    const version = ++operationVersion;
-    const operation = {
-      version,
-      desiredPinned,
-      pending: true,
-      promise: null,
-    };
-    operations.set(normalizedChatId, operation);
-
-    options.apply(normalizedChatId, {
-      is_pinned: desiredPinned,
-      pinned_at: desiredPinned ? (previous.pinned_at || new Date().toISOString()) : null,
-    });
-
-    let requestResult;
-    try {
-      requestResult = options.request(normalizedChatId, desiredPinned);
-    } catch (error) {
-      requestResult = Promise.reject(error);
-    }
-
-    operation.promise = Promise.resolve(requestResult)
-      .then((canonical) => {
-        if (Number(canonical?.chat_id || 0) !== normalizedChatId) {
-          throw new Error('Pin-state response chat ID mismatch');
-        }
-        const activeOperation = operations.get(normalizedChatId);
-        if (!activeOperation || activeOperation.version !== version) return canonical;
-        activeOperation.pending = false;
-        options.apply(normalizedChatId, canonical);
-        return canonical;
-      })
-      .catch((error) => {
-        const activeOperation = operations.get(normalizedChatId);
-        if (activeOperation?.version === version) {
-          activeOperation.pending = false;
-          options.apply(normalizedChatId, previous);
-        }
-        throw error;
-      });
-    return operation.promise;
-  }
-
-  return { captureRequestContext, reconcile, set };
+  return createPersonalChatStateController(options, {
+    field: 'is_pinned',
+    mismatchMessage: 'Pin-state response chat ID mismatch',
+    snapshot(chat) {
+      return { is_pinned: Boolean(chat?.is_pinned), pinned_at: chat?.pinned_at ?? null };
+    },
+    optimistic(previous, desired) {
+      return {
+        is_pinned: desired,
+        pinned_at: desired ? (previous.pinned_at || new Date().toISOString()) : null,
+      };
+    },
+  });
 }
 
 function readChatReadStateModel(chatId) {

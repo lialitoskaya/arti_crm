@@ -16,7 +16,10 @@ class ChatPinStateUiTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.source = APP_JS_PATH.read_text(encoding="utf-8")
         cls.styles = STYLES_PATH.read_text(encoding="utf-8")
-        cls.controller = _extract_function(cls.source, "createChatPinStateController")
+        cls.controller = "\n".join((
+            _extract_function(cls.source, "createPersonalChatStateController"),
+            _extract_function(cls.source, "createChatPinStateController"),
+        ))
 
     def test_search_open_state_releases_reserved_space_on_close_and_clear(self) -> None:
         current_search = _extract_function(self.source, "currentChatMessageSearch")
@@ -132,6 +135,36 @@ class ChatPinStateUiTests(unittest.TestCase):
             }}).catch((error) => {{ console.error(error); process.exit(1); }});
             """
         )
+
+    def test_failed_pin_does_not_undo_concurrent_read_change(self) -> None:
+        read_controller = _extract_function(self.source, "createChatReadStateController")
+        _run_node(self.controller + "\n" + read_controller + """
+            const assert = require('node:assert/strict');
+            const row = {id: 7, is_pinned: false, is_unread: false};
+            const model = {
+              read: () => row,
+              apply: (id, state) => Object.assign(row, state),
+            };
+            let confirmRead, rejectPin;
+            const read = createChatReadStateController({
+              ...model, request: () => new Promise(resolve => { confirmRead = resolve; }),
+            });
+            const pin = createChatPinStateController({
+              ...model, request: () => new Promise((_, reject) => { rejectPin = reject; }),
+            });
+            (async () => {
+              const readWrite = read.set(7, true);
+              const pinWrite = pin.set(7, true);
+              assert.ok(row.is_pinned && row.is_unread);
+              confirmRead({chat_id: 7, is_unread: true, is_marked_unread: true});
+              await readWrite;
+              rejectPin(new Error('pin failed'));
+              await assert.rejects(pinWrite, /pin failed/);
+              assert.equal(row.is_pinned, false);
+              assert.equal(row.is_unread, true);
+              assert.equal(row.is_marked_unread, true);
+            })().catch(error => { console.error(error); process.exit(1); });
+        """)
 
     def test_pin_error_rolls_back_previous_state(self) -> None:
         _run_node(

@@ -6,6 +6,8 @@
 app/
   main.py                 FastAPI app, API routes, sync orchestration
   repository.py           SQLite repository layer
+  chat_state_repository.py  per-user read and pin queries and mutations
+  chat_state_router.py    PATCH routes for personal chat marks
   task_chat_status_automation.py  Transaction-local chat-status arbiter
   db.py                   schema/migrations/init
   schemas.py              Pydantic DTO
@@ -126,8 +128,9 @@ The execution flow is:
 ```text
 PATCH /api/chats/{chat_id}/read-state
   -> authenticated current user + shared CSRF middleware
-    -> repository.set_chat_read_state()
-      -> chat_user_states
+    -> chat_state_router.update_chat_read_state()
+      -> chat_state_repository.set_chat_read_state()
+        -> chat_user_states
 ```
 
 `repository.add_message()` creates missing personal boundaries in the same SQLite
@@ -137,7 +140,9 @@ current user's row and compute canonical `is_unread` without loading history or
 calling a marketplace connector.
 
 The frontend applies PATCH optimistically to one in-memory chat and one rendered
-row. A per-chat single-flight operation version plus GET request snapshot prevents
+row. Read and pin use separate instances of `createPersonalChatStateController`.
+Each instance tracks its own pending writes and rollback values. A per-chat
+operation version plus a GET request snapshot prevents
 responses started before or during the mutation from restoring stale state. The
 chat list uses one delegated click/keyboard handler; no per-row listeners are
 created.
@@ -158,8 +163,9 @@ The execution flow is:
 ```text
 PATCH /api/chats/{chat_id}/pin-state
   -> authenticated current user + shared CSRF middleware
-    -> repository.set_chat_pin_state()
-      -> chat_user_states
+    -> chat_state_router.update_chat_pin_state()
+      -> chat_state_repository.set_chat_pin_state()
+        -> chat_user_states
 ```
 
 Chat list SQL sorts the current user's pinned chats first and preserves descending
