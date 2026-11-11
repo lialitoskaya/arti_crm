@@ -141,11 +141,16 @@ class LoginCreate(BaseModel):
     password: str = Field(min_length=1, max_length=500)
 
 
+SectionName = Literal["chats", "tasks", "reviews", "questions", "knowledge", "analytics", "supplyPlanning", "ozonFbo", "techSettings"]
+SectionPermissions = dict[SectionName, Literal["none", "read", "write"]]
+
+
 class UserCreate(BaseModel):
     username: str = Field(min_length=2, max_length=120)
     password: str = Field(min_length=6, max_length=500)
     display_name: str | None = Field(default=None, max_length=160)
     role: Literal["admin", "manager", "viewer"] = "manager"
+    permissions: SectionPermissions | None = None
 
 
 class UserPasswordUpdate(BaseModel):
@@ -156,6 +161,7 @@ class UserUpdate(BaseModel):
     display_name: str | None = Field(default=None, max_length=160)
     role: Literal["admin", "manager", "viewer"] | None = None
     is_active: bool | None = None
+    permissions: SectionPermissions | None = None
 
 
 class YandexOAuthManagedLinkCreate(BaseModel):
@@ -222,3 +228,27 @@ class ReplyTemplateUpdate(BaseModel):
     content: str | None = Field(default=None, min_length=1, max_length=8000)
     sort_order: int | None = None
     is_active: bool | None = None
+
+
+class OzonFboRunAnswer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    answer: Literal["yes", "no"]
+    question_seq: int | None = Field(default=None, ge=0)
+
+
+class OzonFboSettingsUpdate(BaseModel):
+    """Настройки раздела «Поставки FBO»: значения приходят строками из формы или числами, проверяет parse_settings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    default_cargo_capacity: Any | None = None
+    cargo_capacity: Any | None = None
+    cargo_type: Any | None = None
+    drop_off_name: Any | None = None
+    min_slot_offset_days: Any | None = None
+    slot_max_windows: Any | None = None
+    min_qty: Any | None = None
+    step: Any | None = None
+    unavailable_retry_sec: Any | None = None
+    all_clusters: Any | None = None

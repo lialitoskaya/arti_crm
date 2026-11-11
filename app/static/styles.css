@@ -65,7 +65,7 @@ a { color: inherit; }
 .hidden { display: none !important; }
 .muted { color: var(--crm-muted); }
 .soft-counter { color: var(--crm-muted); font-weight: 500; }
-
+#navSupplyPlanning:not([data-section-granted]) {visibility: hidden}
 button,
 .button-like {
   min-height: 34px;
@@ -985,6 +985,7 @@ html[data-theme="dark"] button.reply-template-delete-action:focus-visible {
 .analytics-card strong { font-size: 24px; }
 .analytics-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
 .analytics-panel { padding: 14px; }
+.analytics-drilldown-panel > summary { min-height: 40px; padding: 8px 0; cursor: pointer; font-weight: 600; }
 .analytics-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .analytics-panel h3 { margin: 0; font-size: 15px; }
 .analytics-table { overflow: auto; }
@@ -1149,7 +1150,10 @@ html[data-theme="dark"] button.reply-template-delete-action:focus-visible {
   gap: 14px;
 }
 .settings-grid.one-col,
-.users-settings-grid { grid-template-columns: 1fr; }
+.users-settings-grid { grid-template-columns: 1fr; 
+    display: flex;
+    max-width: 100%;
+    justify-content: start;}
 .settings-card { padding: 14px; display: grid; gap: 12px; }
 .settings-card-head { display: flex; justify-content: space-between; gap: 12px; }
 .settings-card h3 { margin: 0; font-size: 15px; }
@@ -1216,6 +1220,8 @@ html[data-theme="dark"] button.reply-template-delete-action:focus-visible {
   position: relative;
   z-index: 1;
   width: min(520px, 100%);
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
   display: grid;
   gap: 12px;
   padding: 16px;
@@ -1228,6 +1234,14 @@ html[data-theme="dark"] button.reply-template-delete-action:focus-visible {
 .user-create-form-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .user-edit-active-row { display: flex; align-items: center; gap: 8px; }
 .user-edit-active-row input { width: auto; min-height: auto; }
+
+.employee-permissions { margin: 0; padding: 10px 0 0; border: 0; border-top: 1px solid var(--crm-line); min-width: 0; }
+.employee-permissions legend { padding: 0; font-weight: 600; }
+.employee-permissions-list { display: grid; gap: 6px; }
+.employee-permissions-list .employee-permission-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(min(100%, 168px), 1fr); gap: 8px; align-items: center; }
+.employee-permission-row select { min-width: 0; width: 100%; }
+.permission-readonly { opacity: .55; }
+.section-access-status { margin: 4px 0 0; font-size: 12px; }
 
 .knowledge-modal {
   position: fixed;
@@ -1427,6 +1441,7 @@ textarea {
   flex: 1 1 auto;
   min-height: 0;
   grid-auto-rows: minmax(125px, auto);
+  align-content: start;
   gap: 8px;
   padding: 0 0 8px;
 }
@@ -6361,4 +6376,279 @@ html[data-theme] #noteText:focus-visible {
   #tasksView .tasks-ref-toolbar {
     grid-template-columns: minmax(180px, auto) minmax(200px, 1fr) repeat(3, minmax(130px, 1fr)) 44px;
   }
+}
+
+/* =========================================================
+   Arti CRM — section token layer (все разделы, кроме чатов)
+   Назначение: контраст подписей и placeholder (WCAG AA ≥ 4.5:1), видимый фокус,
+   границы полей. Область: main.view:not(#chatsView), .app-nav, #loginScreen.
+   Раздел чатов (#chatsView) намеренно не затронут — см. audit/chat-exclusions.md.
+   Условие удаления слоя: перенос значений в глобальные токены (:root / html[data-theme])
+   отдельным решением владельца; до этого слой — единственное место переопределения.
+   ========================================================= */
+main.view:not(#chatsView),
+.app-nav,
+#loginScreen {
+  --crm-muted: #5f6c80;   /* было #7a879b (3.6:1) → 5.3:1 на панели */
+  --crm-muted-2: #64738a; /* placeholder: было #a0aabb (2.3:1) → 4.8:1 */
+}
+html[data-theme="dark"] :is(main.view:not(#chatsView), .app-nav, #loginScreen) {
+  --crm-muted: #aeb9c9;   /* 5.2:1 на тёмной панели rgb(54 64 92) */
+  --crm-muted-2: #a0acbe; /* placeholder 4.5:1 на панели, 6.9:1 в поле */
+}
+html[data-theme="dark"] :is(main.view:not(#chatsView), #loginScreen) :is(input, textarea)::placeholder {
+  color: var(--crm-muted-2) !important; /* перебивает жёсткий #7f8da3 !important слоя v55 */
+}
+
+main.view:not(#chatsView),
+.app-nav,
+#loginScreen {
+  --crm-focus: 0 0 0 2px var(--crm-panel-solid, #ffffff), 0 0 0 4px var(--crm-primary); /* было кольцо rgba(.16) ≈1.2:1 */
+}
+#analyticsHourlyChart button.analytics-hour-button:focus-visible {
+  box-shadow: var(--crm-focus) !important; /* слой v59 гасит box-shadow !important на 24 кнопках часов */
+  border-radius: var(--crm-radius-xs) !important;
+}
+
+:is(main.view:not(#chatsView), #loginScreen) :is(input, select, textarea) {
+  --crm-line: #7f8da2; /* граница поля: было rgba(130,145,170,.22) ≈1.2:1 → 3.4:1 */
+}
+:is(main.view:not(#chatsView), #loginScreen) :is(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]), select) {
+  min-height: 36px;
+}
+html[data-theme="dark"] :is(main.view:not(#chatsView), #loginScreen) :is(input, select, textarea) {
+  --crm-line: #7a8aa3; /* 4.6:1 на фоне поля #182234 */
+}
+@media (max-width: 560px) {
+  :is(main.view:not(#chatsView), #loginScreen) :is(input, select, textarea) { font-size: 16px; } /* iOS Safari не зумит поля ≥16px */
+}
+
+.tech-settings-page .chat-status-create-form { align-items: end; } /* поля теперь с подписями: кнопка выравнивается по низу */
+
+/* Кнопки вне чатов: одна иерархия (primary = button, secondary, icon-btn), disabled без полупрозрачности, hit-area ≥ 32/40 px */
+#ozonFboView .button-like.secondary { background: var(--crm-panel); border: 1px solid var(--crm-line); color: var(--crm-text); } /* в светлой теме .secondary задан только для button */
+main.view:not(#chatsView) button:disabled { opacity: 1; background: var(--crm-panel-muted); border-color: var(--crm-line); color: var(--crm-muted); }
+main.view:not(#chatsView) button.small { min-height: 32px; }
+main.view:not(#chatsView) :is(.tasks-ref-icon-btn, .tasks-ref-chat-btn, .status-icon-btn) { width: 32px; height: 32px; min-width: 32px; min-height: 32px; }
+@media (max-width: 900px) {
+  main.view:not(#chatsView) :is(button.small, button.icon-btn, .tasks-ref-icon-btn, .tasks-ref-chat-btn, .status-icon-btn) { min-width: 40px; min-height: 40px; }
+  main.view:not(#chatsView) :is(.tasks-ref-icon-btn, .tasks-ref-chat-btn, .status-icon-btn) { width: 40px; height: 40px; }
+}
+
+/* Тёмная тема: общее правило v56 `:is(… #refreshBtn …)` получает специфичность id и красит любую кнопку без
+   .secondary/.ghost/.icon-btn/.nav-btn/.link-btn как primary. Для разделов вне чатов возвращаем нейтральную
+   поверхность иконкам действий и опциям меню; первопричина в общем слое остаётся на отдельное решение. */
+html[data-theme="dark"] :is(main.view:not(#chatsView), #knowledgeModal) :is(.tasks-ref-icon-btn, .tasks-ref-chat-btn, .tasks-ref-status-option, .status-icon-btn, .knowledge-modal-close, .knowledge-modal-nav) {
+  background: var(--crm-button-bg) !important;
+  border-color: var(--crm-line) !important;
+  color: var(--crm-text-soft) !important;
+}
+html[data-theme="dark"] :is(main.view:not(#chatsView), #knowledgeModal) :is(.tasks-ref-icon-btn, .tasks-ref-chat-btn, .tasks-ref-status-option, .status-icon-btn, .knowledge-modal-close, .knowledge-modal-nav):hover {
+  background: var(--crm-button-bg-hover) !important;
+  border-color: var(--crm-line-strong) !important;
+  color: #ffffff !important;
+}
+
+/* Сообщения об ошибках и результатах (notify): неблокирующие тосты вместо window.alert */
+.ui-toast-stack {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 10001;
+  width: min(360px, calc(100vw - 32px));
+  display: grid;
+  gap: 8px;
+}
+.ui-toast {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  padding: 10px 36px 10px 12px;
+  border: 1px solid var(--crm-line);
+  border-radius: var(--crm-radius-md);
+  background: var(--crm-panel-solid, #fff);
+  color: var(--crm-text);
+  box-shadow: var(--crm-shadow-sm);
+  font-size: 13px;
+}
+.ui-toast strong { font-weight: 600; }
+.ui-toast-text { color: var(--crm-text-soft); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow: auto; }
+.ui-toast-error { border-color: var(--crm-red-text); }
+.ui-toast-error strong { color: var(--crm-red-text); }
+.ui-toast-close.link-btn {
+  position: absolute;
+  right: 6px;
+  top: 6px;
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--crm-muted);
+}
+.ui-toast-close.link-btn:hover { color: var(--crm-text); text-decoration: none; }
+
+/* Уведомления о сообщениях: без рамок у иконки и крестика, шрифт и размеры как у остального интерфейса */
+.notification-toast,
+.notification-toast * { font-family: inherit; }
+.notification-toast { padding: 10px 34px 10px 12px; gap: 5px; }
+.notification-toast-icon { border: 0; background: transparent; width: 18px; height: 18px; min-height: 18px; font-size: 14px; }
+.notification-toast-title { font-size: 13px; font-weight: 600; }
+.notification-toast .notification-close-btn,
+html[data-theme="dark"] .notification-toast .notification-close-btn {
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--crm-muted) !important;
+  font-size: 18px;
+  line-height: 1;
+}
+.notification-toast .notification-close-btn:hover,
+html[data-theme="dark"] .notification-toast .notification-close-btn:hover { color: var(--crm-text) !important; transform: none; }
+
+/* Чаты в тёмной теме (по запросу владельца): кнопки «закрепить» и «прочитано» в списке чатов получали
+   primary-заливку и голубую рамку от общего правила v56 (:is(… #refreshBtn …)); возвращаем их базовый вид. */
+html[data-theme="dark"] #chatsView :is(.chat-pin-control, .chat-read-state-control) {
+  background: transparent !important;
+  border-color: transparent !important;
+  color: #aeb8c6 !important;
+}
+html[data-theme="dark"] #chatsView .chat-item.is-pinned .chat-pin-control { color: #ff8a1f !important; }
+html[data-theme="dark"] #chatsView .chat-item:not(.is-unread) .chat-read-state-control { color: var(--crm-blue-text) !important; }
+html[data-theme="dark"] #chatsView :is(.chat-pin-control, .chat-read-state-control):is(:hover, :focus-visible) {
+  background: rgba(255, 255, 255, .08) !important;
+  border-color: rgba(174, 184, 198, .45) !important;
+}
+
+/* Верхняя полоса окна на ≥1200px: внешний margin .app-shell схлопывался с body и открывал фон html над страницей.
+   Переносим отступ в padding body — цвет страницы заполняет окно целиком. */
+@media (min-width: 1200px) {
+  html[data-theme] body { padding: 16px 0; }
+  html[data-theme] .app-shell { margin: 0 auto; }
+}
+
+/* Компактные действия и ширина блоков вне чатов */
+.analytics-filters > button { align-self: end; justify-self: start; min-height: 36px; }
+.settings-card-head { align-items: flex-start; }
+#profileView .settings-form { max-width: 420px; }
+
+/* ---- Поставки FBO Ozon: раздел запуска прогонов. Только существующие токены, без override-слоёв. ---- */
+.ozon-fbo-hero { align-items: flex-start; }
+.ozon-fbo-hero p { margin: 5px 0 0; color: var(--crm-muted); font-size: 13px; }
+.ozon-fbo-hero p[data-kind="error"] { color: var(--crm-red-text); }
+.ozon-fbo-hero-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.ozon-fbo-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0px, 1fr));
+  gap: 14px;
+  margin-bottom: 14px;
+  align-items: start;
+}
+.ozon-fbo-bottom { margin-bottom: 14px; align-items: start; }
+.ozon-fbo-form label,
+.ozon-fbo-settings label { display: grid; gap: 6px; color: var(--crm-muted); font-size: 12px; }
+.ozon-fbo-form .ozon-fbo-choice,
+.ozon-fbo-settings .ozon-fbo-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--crm-text);
+  font-size: 13px;
+  cursor: pointer;
+}
+.ozon-fbo-page input[type="checkbox"],
+.ozon-fbo-page input[type="radio"] { width: auto; min-height: auto; flex: none; }
+.ozon-fbo-form .ozon-fbo-choice input { margin-top: 2px; }
+.ozon-fbo-fieldset { margin: 0; padding: 0; border: 0; min-width: 0; display: grid; gap: 6px; }
+.ozon-fbo-fieldset legend { padding: 0; margin-bottom: 4px; color: var(--crm-muted); font-size: 12px; }
+.ozon-fbo-fieldset-row { grid-auto-flow: column; justify-content: start; gap: 16px; }
+.ozon-fbo-source { display: grid; gap: 9px; }
+.ozon-fbo-form textarea,
+.ozon-fbo-settings textarea { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 13px; }
+.ozon-fbo-form input[type="file"] { padding: 6px 8px; }
+.ozon-fbo-flags { display: grid; gap: 6px; }
+.ozon-fbo-form-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.ozon-fbo-status { margin: 0; min-height: 18px; flex: 1 1 200px; font-size: 13px; color: var(--crm-muted); overflow-wrap: anywhere; }
+.ozon-fbo-status[data-kind="error"] { color: var(--crm-red-text); }
+.ozon-fbo-status[data-kind="success"] { color: var(--crm-green-text); }
+.ozon-fbo-status[data-kind="warning"] { color: var(--crm-orange-text); }
+.ozon-fbo-orders-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+.ozon-fbo-col-check { width: 28px; }
+.ozon-fbo-orders td,
+.ozon-fbo-results td,
+.ozon-fbo-history td { vertical-align: top; }
+.ozon-fbo-run-card { padding: 14px; gap: 10px; min-width: 0; min-height: 100%; }
+.ozon-fbo-run-head { margin-bottom: 0; align-items: flex-start; }
+.ozon-fbo-run-head p { margin: 4px 0 0; font-size: 13px; line-height: 1.5; }
+.ozon-fbo-run-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.ozon-fbo-error { color: var(--crm-red-text); }
+.ozon-fbo-question-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--crm-orange-text);
+  border-radius: var(--crm-radius-md);
+  background: var(--crm-orange);
+  color: var(--crm-orange-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+.ozon-fbo-run-files { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; }
+.ozon-fbo-run-files .link-btn { color: var(--crm-text-soft); text-decoration: underline; }
+.ozon-fbo-log {
+  visibility: hidden;
+  margin: 0;
+  max-height: 0px;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--crm-line);
+  border-radius: var(--crm-radius-md);
+  background: var(--crm-panel-soft);
+  color: var(--crm-text);
+  font: 12px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  white-space: pre;
+}
+.ozon-fbo-log:empty::before { content: "Журнал появится после запуска."; color: var(--crm-muted); }
+.ozon-fbo-num { text-align: right; white-space: nowrap; }
+.ozon-fbo-results .ozon-fbo-note,
+.ozon-fbo-orders .ozon-fbo-note,
+.ozon-fbo-history .ozon-fbo-note { min-width: 220px; max-width: 560px; white-space: normal; overflow-wrap: anywhere; }
+.ozon-fbo-tone { white-space: nowrap; }
+.ozon-fbo-tone-zero { background: var(--crm-red); color: var(--crm-red-text); }
+.ozon-fbo-tone-manual { background: var(--crm-yellow); color: var(--crm-yellow-text); }
+.ozon-fbo-tone-ok { background: var(--crm-green); color: var(--crm-green-text); }
+.ozon-fbo-order-cell { white-space: nowrap; }
+.ozon-fbo-history-actions { white-space: nowrap; }
+.ozon-fbo-settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 12px; }
+.ozon-fbo-decision-dialog { width: min(900px, 100%); }
+.ozon-fbo-decision-text { max-height: min(60vh, 520px); white-space: pre-wrap; }
+.ozon-fbo-state-finished { background: var(--crm-green); color: var(--crm-green-text); }
+.ozon-fbo-state-failed,
+.ozon-fbo-state-interrupted { background: var(--crm-red); color: var(--crm-red-text); }
+.ozon-fbo-state-stopped { background: var(--crm-orange); color: var(--crm-orange-text); }
+.ozon-fbo-state-awaiting_answer { background: var(--crm-yellow); color: var(--crm-yellow-text); }
+
+@media (max-width: 900px) {
+  .ozon-fbo-grid,
+  .ozon-fbo-bottom,
+  .ozon-fbo-settings-grid { grid-template-columns: 1fr; }
+  .ozon-fbo-hero { flex-direction: column; align-items: stretch; }
+  .ozon-fbo-hero-actions { justify-content: stretch; }
+  .ozon-fbo-hero-actions > * { flex: 1 1 auto; }
+  .ozon-fbo-fieldset-row { grid-auto-flow: row; }
+  .ozon-fbo-form-actions { flex-direction: column; align-items: stretch; }
+  .ozon-fbo-form-actions button { width: 100%; }
+  .ozon-fbo-run-head { flex-direction: column; }
+  .ozon-fbo-run-actions { width: 100%; justify-content: stretch; }
+  .ozon-fbo-run-actions button { flex: 1 1 auto; }
+  .ozon-fbo-log { max-height: 260px; }
+  .ozon-fbo-page input:not([type="checkbox"]):not([type="radio"]),
+  .ozon-fbo-page select,
+  .ozon-fbo-page textarea { font-size: 16px; }
+  .ozon-fbo-results .ozon-fbo-note,
+  .ozon-fbo-orders .ozon-fbo-note,
+  .ozon-fbo-history .ozon-fbo-note { max-width: none; }
 }

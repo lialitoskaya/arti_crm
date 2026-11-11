@@ -23,11 +23,12 @@ let chatImageLazyObserver = null;
 let chatImageLazyObserverRoot = null;
 let activeView = 'chats';
 const ROUTE_STORAGE_KEY = 'artiCrm.activeView';
-const VALID_VIEWS = ['chats', 'analytics', 'supplyPlanning', 'tasks', 'reviews', 'questions', 'knowledge', 'users', 'techSettings', 'profile'];
+const VALID_VIEWS = ['chats', 'analytics', 'supplyPlanning', 'ozonFbo', 'tasks', 'reviews', 'questions', 'knowledge', 'users', 'techSettings', 'profile'];
 const VIEW_ROUTES = {
   chats: 'chats',
   analytics: 'analytics',
   supplyPlanning: 'supply',
+  ozonFbo: 'fbo',
   tasks: 'tasks',
   reviews: 'reviews',
   questions: 'questions',
@@ -178,6 +179,10 @@ const ROUTE_VIEWS = {
   supplies: 'supplyPlanning',
   planning: 'supplyPlanning',
   supplyplanning: 'supplyPlanning',
+  fbo: 'ozonFbo',
+  ozonfbo: 'ozonFbo',
+  'ozon-fbo': 'ozonFbo',
+  ozonFbo: 'ozonFbo',
   tasks: 'tasks',
   task: 'tasks',
   reviews: 'reviews',
@@ -746,9 +751,40 @@ function setStatus(text) {
 }
 
 function notify(title, data) {
-  const text = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
-  console.log(title, data);
-  alert(`${title}\n\n${text}`);
+  const text = typeof data === 'string' ? data : (data === undefined || data === null ? '' : JSON.stringify(data, null, 2));
+  const isError = /ошибк|не удалось|не получилось|fail|error/i.test(`${title} ${text}`);
+  if (isError) console.warn(title, text);
+  let stack = $('uiToasts');
+  if (!stack) {
+    stack = document.createElement('div');
+    stack.id = 'uiToasts';
+    stack.className = 'ui-toast-stack';
+    stack.setAttribute('aria-live', 'polite');
+    document.body.appendChild(stack);
+  }
+  const toast = document.createElement('div');
+  toast.className = `ui-toast${isError ? ' ui-toast-error' : ''}`;
+  toast.setAttribute('role', 'status');
+  const heading = document.createElement('strong');
+  heading.textContent = String(title || '');
+  toast.appendChild(heading);
+  if (text) {
+    const details = document.createElement('div');
+    details.className = 'ui-toast-text';
+    details.textContent = text.length > 400 ? `${text.slice(0, 400)}…` : text;
+    toast.appendChild(details);
+  }
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'ui-toast-close link-btn';
+  close.setAttribute('aria-label', 'Закрыть');
+  close.textContent = '×';
+  const remove = () => toast.remove();
+  close.addEventListener('click', remove);
+  toast.appendChild(close);
+  stack.appendChild(toast);
+  while (stack.children.length > 4) stack.firstElementChild.remove();
+  setTimeout(remove, isError ? 10000 : 5000);
 }
 
 function setSoundNotificationsEnabled(enabled) {
@@ -811,7 +847,7 @@ async function registerPwaServiceWorker() {
   if (pwaServiceWorkerRegisterPromise) return pwaServiceWorkerRegisterPromise;
 
   pwaServiceWorkerRegisterPromise = navigator.serviceWorker.register(
-    '/static/sw.js?v=v89-yandex-oauth-tombstone-20260803',
+    `/static/sw.js?v=${encodeURIComponent(document.querySelector('meta[name="arti-build-version"]').content)}`,
     { updateViaCache: 'none' },
   )
     .then((registration) => {
@@ -1155,7 +1191,15 @@ function renderNotifications() {
   stack.innerHTML = visibleIds.map((id) => {
     const item = unreadMap.get(Number(id));
     if (!item) return '';
-    const title = escapeHtml(item.title || 'Уведомление');
+    // Короткий заголовок для сообщений: без «неназначенное», для Ozon без идентификатора клиента.
+    let displayTitle = item.title || 'Уведомление';
+    const titleMatch = /^Новое (?:неназначенное )?сообщение:\s*(.*)$/u.exec(String(item.title || ''));
+    if (item.type === 'new_message' && titleMatch) {
+      let marketplace = '';
+      try { marketplace = String((item.metadata || JSON.parse(item.metadata_json || '{}') || {}).marketplace || ''); } catch (_) { marketplace = ''; }
+      displayTitle = marketplace.toLowerCase() === 'ozon' || !titleMatch[1].trim() ? 'Новое сообщение' : `Новое сообщение: ${titleMatch[1].trim()}`;
+    }
+    const title = escapeHtml(displayTitle);
     const body = escapeHtml(item.body || '');
     const time = escapeHtml(formatDateTime(item.created_at) || '');
     const icon = item.task_id ? '✓' : '✉';
@@ -1377,6 +1421,7 @@ async function api(path, options = {}) {
 
       if (!response.ok) {
         const body = await response.text();
+        if (response.status === 403) refreshSessionPermissions();
         const error = createApiError(response.status, body, path);
         if (isCsrfApiError(error) && isUnsafeHttpMethod(method) && !_csrfRetryDone) {
           await refreshCsrfToken();
@@ -1807,6 +1852,7 @@ function assigneeOptions(selectedId, includeEmpty = true) {
 }
 
 async function loadAssignees() {
+  if (!canSection('chats') && !canSection('tasks')) return [];
   try {
     const data = await api('/api/users/assignees');
     assignees = Array.isArray(data) ? data : [];
@@ -1903,6 +1949,7 @@ async function deleteTask(taskId, options = {}) {
 }
 
 function bindTaskCardActions(item, options = {}) {
+  markTaskPermissionControls(item);
   item.querySelectorAll('[data-task-action]').forEach(btn => {
     btn.onclick = async () => {
       const taskId = Number(btn.dataset.taskId);
@@ -1975,6 +2022,7 @@ function statusOptions(selected = '', includeClosed = false, funnelId = '') {
 }
 
 async function loadChatSettings(options = {}) {
+  if (!canSection('chats') && !canSection('techSettings')) return;
   try {
     chatSettings = await api('/api/chat-settings');
     const nextNames = {};
@@ -2077,7 +2125,7 @@ function renderChatSettingsLists() {
             <span>активен</span>
           </label>
           <div class="status-edit-actions">
-            <button type="button" class="crm-light-btn" data-status-action="cancel">Отмена</button>
+            <button type="button" class="secondary" data-status-action="cancel">Отмена</button>
             <button type="button" data-status-action="save">Сохранить</button>
           </div>
         </div>
@@ -2119,6 +2167,7 @@ async function saveAllChatStatuses() {
 
 
 async function loadTaskTypes(options = {}) {
+  if (!canSection('chats') && !canSection('tasks') && !canSection('techSettings')) return;
   try {
     const includeInactive = options.includeInactive !== false;
     taskTypes = await api(`/api/task-types?include_inactive=${includeInactive ? 'true' : 'false'}`);
@@ -2300,8 +2349,8 @@ function renderTaskTypeSettingsList() {
         <span>${escapeHtml(taskTypeStatusLabel(type))}</span>
       </label>
       <div class="task-type-settings-actions">
-        <button class="crm-light-btn task-type-save-btn" type="button" data-task-type-action="save">Сохранить</button>
-        <button class="crm-light-btn task-type-delete-btn" type="button" data-task-type-action="delete">Удалить</button>
+        <button class="secondary task-type-save-btn" type="button" data-task-type-action="save">Сохранить</button>
+        <button class="secondary task-type-delete-btn" type="button" data-task-type-action="delete">Удалить</button>
       </div>
     </article>
   `).join('') : '<p class="muted">Типов задач пока нет. Добавьте первый тип выше.</p>';
@@ -2578,6 +2627,7 @@ function scrollMessagesToBottom(reason = '') {
 }
 
 async function loadSyncStatus() {
+  if (currentUser?.role !== 'admin') return;
   if (syncStatusLoadPromise) return syncStatusLoadPromise;
   syncStatusLoadPromise = (async () => {
     try {
@@ -2642,6 +2692,7 @@ const ALERTS_REFRESH_INTERVAL_MS = 10000;
 const NOTIFICATIONS_REFRESH_INTERVAL_MS = 10000;
 
 function isFrontendSyncAllowed() {
+  if (currentUser?.role !== 'admin') return false;
   if (!appInitialized || !currentUser) return false;
   if (document.hidden) return false;
   if (chatOpenInFlight) return false;
@@ -2703,6 +2754,7 @@ async function runFrontendOzonFastSync(options = {}) {
 }
 
 async function runFrontendOzonQuestionsSync(options = {}) {
+  if (!canSection('questions', 'write')) return null;
   const { silent = true, force = false, respectMinGap = false } = options;
   if (!appInitialized || !currentUser) return null;
   if (document.hidden) return null;
@@ -3017,6 +3069,7 @@ async function loadMoreChats() {
 }
 
 async function loadChats(options = {}) {
+  if (!canSection('chats')) return;
   const { withStats = true, render = true, append = false } = options;
   const requestedRenderKey = currentChatListRenderKey();
   const requestedNextOffset = chatListNextOffset;
@@ -3183,7 +3236,8 @@ async function refreshVisibleData() {
       return;
     }
     if (activeView === 'questions') {
-      await runFrontendOzonQuestionsSync({ silent: true });
+      if (canSection('questions', 'write')) await runFrontendOzonQuestionsSync({ silent: true });
+      else await loadQuestions();
       await loadSyncStatus();
       return;
     }
@@ -3468,6 +3522,7 @@ function paintChatShellFromSummary(chatId, previousChatId) {
 }
 
 async function refreshChatListOnly(options = {}) {
+  if (!canSection('chats')) return;
   const { force = false } = options;
   if (!appInitialized || !currentUser) return null;
   if (document.hidden) return null;
@@ -3833,6 +3888,7 @@ function renderChatList(options = {}) {
 }
 
 async function openChat(chatId, options = {}) {
+  if (!canSection('chats')) return;
   const requestSeq = ++openChatRequestSeq;
   mobileChatClosedByUser = false;
   const previousChatId = currentChatId;
@@ -4114,6 +4170,7 @@ function renderMessages(messages) {
 
       const noteActions = document.createElement('span');
       noteActions.className = 'internal-note-actions';
+      noteActions.dataset.permissionWrite = 'chats';
 
       const editBtn = document.createElement('button');
       editBtn.type = 'button';
@@ -4602,7 +4659,10 @@ function imagePreviewSrc(url) {
     const host = parsed.hostname.toLowerCase();
     // Marketplace links often need backend headers or fail because of browser/CORS/referrer rules.
     if (host.includes('ozon') || host.includes('ozone') || host.includes('o3') || host.includes('cdn')) {
-      return `/api/assets/image?url=${encodeURIComponent(url)}`;
+      if (currentUser?.role === 'admin') return `/api/assets/image?url=${encodeURIComponent(url)}`;
+      const section = activeView === 'reviews' ? 'reviews' : activeView === 'questions' ? 'questions' : 'chats';
+      const entityId = section === 'reviews' ? currentReviewId : section === 'questions' ? currentQuestionId : currentChatId;
+      return `/api/assets/entity-image?section=${section}&entity_id=${Number(entityId) || 0}&url=${encodeURIComponent(url)}`;
     }
   } catch (err) {
     return url;
@@ -4897,6 +4957,10 @@ function reviewRatingStars(rating) {
   const n = Number(rating || 0);
   if (!n) return '—';
   return '★'.repeat(Math.max(1, Math.min(5, n)));
+}
+
+function reviewModelName(review) {
+  return review.product_name || (review.sku ? `SKU ${review.sku}` : 'Товар не указан');
 }
 
 async function loadReviews() {
@@ -5475,6 +5539,7 @@ function renderTasks(tasks) {
 }
 
 function bindTaskChatEditToggle(item) {
+  markTaskPermissionControls(item);
   const toggle = item.querySelector('[data-task-edit-toggle]');
   const panel = item.querySelector('[data-task-edit-panel]');
   const cancel = item.querySelector('[data-task-edit-cancel]');
@@ -5619,6 +5684,7 @@ function collectTaskEditBody(card) {
 }
 
 function bindTaskBoardCardActions(item) {
+  markTaskPermissionControls(item);
   const statusButton = item.querySelector('[data-task-status-pill]');
   const statusMenu = item.querySelector('[data-task-status-menu]');
   if (statusButton && statusMenu) {
@@ -5768,6 +5834,7 @@ function renderAllTasks(tasks) {
     const typeLabel = getTaskTypeLabel(task);
     const fieldLabel = getTaskCustomFieldLabel(task);
     const isStandaloneTask = task.is_standalone === true || task.is_standalone === 1 || String(task.marketplace || '') === 'internal_tasks';
+    item.dataset.permissionTaskStandalone = String(isStandaloneTask);
     const clientLabel = isStandaloneTask ? 'Без чата' : (customerLabel(task) || task.customer_id || task.external_chat_id || `ID ${task.chat_id || task.id || ''}`.trim());
     const primaryText = getTaskPrimaryText(task);
     const responsibleLabel = assigneeNameFromTask(task) || 'Не назначен';
@@ -5964,6 +6031,7 @@ function toggleExtraMenu(force) {
 }
 
 function showExtraPanel(panelName) {
+  if (panelName === 'tasks' && !canSection('tasks')) return;
   pauseMobileChatBackgroundWork(2600);
 
   activeExtraPanel = activeExtraPanel === panelName ? '' : panelName;
@@ -6352,16 +6420,104 @@ function setAnalyticsText(id, value) {
   if (el) el.textContent = value;
 }
 
-async function loadAnalytics() {
-  setupAnalyticsDefaults();
+const analyticsRequests = {
+  summary: { pending: null, query: '' },
+  details: { pending: null, query: '', loadedQuery: null },
+};
+
+function resetAnalyticsDrilldown(message) {
+  setAnalyticsText('analyticsDrilldownSummary', message);
+  $('analyticsDrilldownTable')?.replaceChildren();
+  $('analyticsExcludedTable')?.replaceChildren();
+}
+
+function requestAnalyticsResource(kind) {
+  const state = analyticsRequests[kind];
+  state.query = analyticsQueryString();
+  if (state.pending) return state.pending;
+  const isDetails = kind === 'details';
+  state.pending = (async () => {
+    // Serialize each endpoint and skip superseded filter results. A new filter
+    // during a slow request is queued instead of being lost or starting a storm.
+    while (true) {
+      if (isDetails && !$('analyticsDrilldownDetails')?.open) return;
+      const query = state.query;
+      if (isDetails) {
+        state.loadedQuery = null;
+        resetAnalyticsDrilldown('Загрузка сообщений…');
+        $('analyticsDrilldownTable')?.setAttribute('aria-busy', 'true');
+        if ($('analyticsDrilldownRefreshBtn')) $('analyticsDrilldownRefreshBtn').disabled = true;
+      } else {
+        setAnalyticsText('analyticsLoadStatus', analyticsLoadedOnce
+          ? 'Обновление сводки… Пока показаны предыдущие данные.' : 'Загрузка сводки…');
+      }
+      try {
+        const path = isDetails ? 'chats/drilldown' : 'chats';
+        const extra = isDetails ? '&limit=1000&include_excluded=1' : '';
+        const data = await api(`/api/analytics/${path}?${query}${extra}`);
+        if (query !== state.query) continue;
+        if (isDetails) {
+          renderAnalyticsDrilldown(data);
+          state.loadedQuery = query;
+        } else {
+          renderAnalytics(data);
+          analyticsLoadedOnce = true;
+          setAnalyticsText('analyticsLoadStatus', '');
+        }
+        return;
+      } catch (error) {
+        if (query !== state.query) continue;
+        if (isDetails) {
+          resetAnalyticsDrilldown('Не удалось загрузить сообщения. Нажмите «Обновить строки», чтобы повторить.');
+        } else {
+          setAnalyticsText('analyticsLoadStatus', analyticsLoadedOnce
+            ? 'Не удалось обновить сводку. Показаны предыдущие данные.' : 'Не удалось загрузить сводку. Нажмите «Обновить».');
+        }
+        throw error;
+      }
+    }
+  })().finally(() => {
+    state.pending = null;
+    if (isDetails) {
+      $('analyticsDrilldownTable')?.setAttribute('aria-busy', 'false');
+      if ($('analyticsDrilldownRefreshBtn')) $('analyticsDrilldownRefreshBtn').disabled = false;
+    }
+  });
+  return state.pending;
+}
+
+function loadAnalyticsDrilldown(force = false) {
+  if (!canSection('chats')) return Promise.resolve();
+  if (!$('analyticsDrilldownDetails')?.open) return Promise.resolve();
+  const state = analyticsRequests.details;
   const query = analyticsQueryString();
-  const [data, drilldown] = await Promise.all([
-    api(`/api/analytics/chats?${query}`),
-    api(`/api/analytics/chats/drilldown?${query}&limit=1000&include_excluded=1`),
-  ]);
-  renderAnalytics(data);
-  renderAnalyticsDrilldown(drilldown);
-  analyticsLoadedOnce = true;
+  if (!force && state.loadedQuery === query && !state.pending) return Promise.resolve();
+  return requestAnalyticsResource('details');
+}
+
+function loadAnalytics() {
+  setupAnalyticsDefaults();
+  const details = analyticsRequests.details;
+  details.query = analyticsQueryString();
+  details.loadedQuery = null;
+  resetAnalyticsDrilldown('Раскройте раздел, чтобы загрузить сообщения по выбранным фильтрам.');
+  const summary = requestAnalyticsResource('summary');
+  if ($('analyticsDrilldownDetails')?.open) {
+    loadAnalyticsDrilldown().catch(err => notify('Ошибка загрузки сообщений', String(err.message || err)));
+  }
+  return summary;
+}
+
+function bindAnalyticsDrilldown() {
+  const details = $('analyticsDrilldownDetails');
+  if (!details || details.dataset.boundAnalyticsDetails) return;
+  details.dataset.boundAnalyticsDetails = '1';
+  details.addEventListener('toggle', () => {
+    if (details.open) loadAnalyticsDrilldown().catch(err => notify('Ошибка загрузки сообщений', String(err.message || err)));
+  });
+  $('analyticsDrilldownRefreshBtn')?.addEventListener('click', () => {
+    loadAnalyticsDrilldown(true).catch(err => notify('Ошибка загрузки сообщений', String(err.message || err)));
+  });
 }
 
 const ANALYTICS_WEEKDAY_NAMES = [
@@ -6504,6 +6660,7 @@ function renderAnalyticsHourly(rows) {
       const to = $('analyticsHourTo');
       if (from) from.value = String(hour);
       if (to) to.value = String(hour);
+      if ($('analyticsDrilldownDetails')) $('analyticsDrilldownDetails').open = true;
       loadAnalytics().catch(err => notify('Ошибка аналитики', String(err.message || err)));
       $('analyticsDrilldownTable')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
@@ -6735,6 +6892,7 @@ function readSupplyPlanningState() {
 }
 
 function writeSupplyPlanningState() {
+  if (!canSection('supplyPlanning', 'write')) return;
   try {
     localStorage.setItem(SUPPLY_PLANNING_STORAGE_KEY, JSON.stringify({
       defaultTargetDays: getSupplyPlanningDefaultTargetDays(),
@@ -6843,6 +7001,7 @@ function mergeSupplyPlanningApiRows(apiRows = []) {
 }
 
 async function syncSupplyPlanningFromApi(options = {}) {
+  if (!canSection('supplyPlanning', 'write')) return;
   if (supplyPlanningApiSyncInFlight) return;
   const targetDays = getSupplyPlanningDefaultTargetDays();
   const marketplace = options.marketplace || getSupplyPlanningMarketplaceFilter() || 'all';
@@ -6958,11 +7117,11 @@ function supplyPlanningRowHtml(row) {
         ${supplyPlanningValueHtml('Продажи/день', formatSupplyPlanningNumber(row.avgDailySales, 2))}
         <label>
           <span>Доставка, дней</span>
-          <input data-supply-field="deliveryDays" type="number" min="0" step="1" value="${escapeHtml(row.deliveryDays)}" placeholder="0" />
+          <input data-permission-write="supplyPlanning" data-supply-field="deliveryDays" type="number" min="0" step="1" value="${escapeHtml(row.deliveryDays)}" placeholder="0" />
         </label>
         <label>
           <span>В пути, шт</span>
-          <input data-supply-field="inTransit" type="number" min="0" step="1" value="${escapeHtml(row.inTransit)}" placeholder="0" />
+          <input data-permission-write="supplyPlanning" data-supply-field="inTransit" type="number" min="0" step="1" value="${escapeHtml(row.inTransit)}" placeholder="0" />
         </label>
       </div>
       <div class="supply-planning-row-result">
@@ -7001,7 +7160,7 @@ function renderSupplyPlanning() {
   if (!box) return;
   const rows = supplyPlanningVisibleRows();
   if (!supplyPlanningRows.length) {
-    box.innerHTML = '<div class="empty-card supply-planning-empty">Данные по складам ещё не загружены. Нажмите «Обновить из API» — вручную склады, остатки и продажи вводить не нужно.</div>';
+    box.innerHTML = '<div class="empty-card supply-planning-empty">В этом браузере ещё нет сохранённых данных по складам.</div>';
     renderSupplyPlanningSummary();
     return;
   }
@@ -7047,6 +7206,7 @@ function updateSupplyPlanningRowResults(rowId) {
 }
 
 function handleSupplyPlanningInput(event) {
+  if (!canSection('supplyPlanning', 'write')) return;
   const field = event.target.closest('[data-supply-field]');
   if (!field) return;
   const card = field.closest('[data-supply-row]');
@@ -7060,6 +7220,7 @@ function handleSupplyPlanningInput(event) {
 }
 
 function resetSupplyPlanningRows() {
+  if (!canSection('supplyPlanning', 'write')) return;
   if (!confirm('Очистить загруженные данные поставок из этого браузера?')) return;
   supplyPlanningRows = [];
   writeSupplyPlanningState();
@@ -7072,7 +7233,7 @@ function handleSupplyPlanningFilterChange(event) {
   const marketplace = getSupplyPlanningMarketplaceFilter();
   if (event?.target?.id === 'supplyPlanningMarketplaceFilter' && marketplace !== 'all') {
     const hasRows = supplyPlanningRows.some(row => String(row.marketplace || '').toLowerCase() === marketplace);
-    if (!hasRows) syncSupplyPlanningFromApi({ marketplace });
+    if (!hasRows && canSection('supplyPlanning', 'write')) syncSupplyPlanningFromApi({ marketplace });
   }
 }
 
@@ -7088,6 +7249,7 @@ function bindSupplyPlanningControls() {
   if (defaultTargetInput && !defaultTargetInput.dataset.boundSupplyPlanning) {
     defaultTargetInput.dataset.boundSupplyPlanning = '1';
     defaultTargetInput.addEventListener('input', () => {
+      if (!canSection('supplyPlanning', 'write')) return;
       writeSupplyPlanningState();
       renderSupplyPlanning();
     });
@@ -7108,7 +7270,7 @@ function bindSupplyPlanningControls() {
 
 
 function isMobileSecondaryView(view) {
-  return ['supplyPlanning', 'questions', 'knowledge', 'users', 'techSettings', 'profile'].includes(String(view || ''));
+  return ['supplyPlanning', 'ozonFbo', 'questions', 'knowledge', 'users', 'techSettings', 'profile'].includes(String(view || ''));
 }
 
 function setMobileMoreActiveState(view = activeView) {
@@ -7278,8 +7440,10 @@ function syncRouteForChat(chatId, { replace = false } = {}) {
 function showView(view, options = {}) {
   if (view !== 'chats') setMobileChatOpen(false);
 
-  const normalizedView = normalizeViewName(view);
+  const requestedView = normalizeViewName(view);
+  const normalizedView = canOpenView(requestedView) ? requestedView : firstAllowedView();
   activeView = normalizedView;
+  updateSectionAccessStatus(normalizedView);
   document.body.dataset.activeView = normalizedView;
   if (options.syncRoute !== false) {
     syncRouteForView(normalizedView, { replace: Boolean(options.replaceRoute) });
@@ -7294,11 +7458,16 @@ function showView(view, options = {}) {
   if (normalizedView !== 'knowledge') {
     closeKnowledgeModal();
   }
+  if (normalizedView !== 'ozonFbo') {
+    stopOzonFboPolling();
+    closeOzonFboDecision();
+  }
 
   const viewMap = {
     chats: $('chatsView'),
     analytics: $('analyticsView'),
     supplyPlanning: $('supplyPlanningView'),
+    ozonFbo: $('ozonFboView'),
     tasks: $('tasksView'),
     reviews: $('reviewsView'),
     questions: $('questionsView'),
@@ -7319,6 +7488,7 @@ function showView(view, options = {}) {
     chats: $('navChats'),
     analytics: $('navAnalytics'),
     supplyPlanning: $('navSupplyPlanning'),
+    ozonFbo: $('navOzonFbo'),
     tasks: $('navTasks'),
     reviews: $('navReviews'),
     questions: $('navQuestions'),
@@ -7341,6 +7511,7 @@ function showView(view, options = {}) {
 
   if (normalizedView === 'analytics') loadAnalytics().catch(err => notify('Ошибка загрузки аналитики', String(err.message || err)));
   if (normalizedView === 'supplyPlanning') loadSupplyPlanning();
+  if (normalizedView === 'ozonFbo') loadOzonFbo();
   if (normalizedView === 'tasks') {
     loadTaskTypes({ silent: true }).finally(() => loadAllTasks()).catch(err => notify('Ошибка загрузки задач', String(err.message || err)));
   }
@@ -7437,7 +7608,7 @@ function renderReplyTemplates() {
   }
   list.innerHTML = items.map((template) => {
     const templateId = escapeHtml(String(template.id ?? ''));
-    const actions = currentUser?.role === 'admin'
+    const actions = canSection('techSettings', 'write')
       ? `<span class="reply-template-actions" aria-label="Действия с шаблоном">
           <button class="reply-template-action reply-template-edit-action icon-btn" type="button" data-reply-template-edit="${templateId}" aria-label="Редактировать шаблон" title="Редактировать">
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 20h4l10.5-10.5a2.12 2.12 0 0 0-3-3L5 17v3Zm10.5-12.5 3 3"/></svg>
@@ -7496,7 +7667,7 @@ function replyTemplateById(templateId) {
 }
 
 function openReplyTemplateEditBox(templateId) {
-  if (currentUser?.role !== 'admin') return;
+  if (!canSection('techSettings', 'write')) return;
   const template = replyTemplateById(templateId);
   if (!template) return;
   replyTemplateEditingId = String(template.id);
@@ -7525,7 +7696,7 @@ ${chunk}` : chunk;
 }
 
 async function deleteReplyTemplate(templateId) {
-  if (currentUser?.role !== 'admin') return;
+  if (!canSection('techSettings', 'write')) return;
   const template = replyTemplateById(templateId);
   if (!template) return;
   if (!window.confirm(`Удалить шаблон «${String(template.title || 'Без названия')}»?`)) return;
@@ -7750,6 +7921,8 @@ function updateAuthUiForUser() {
   const roleLabel = user.role === 'admin' ? 'администратор' : user.role === 'viewer' ? 'наблюдатель' : 'менеджер';
   if ($('currentUserLabel')) $('currentUserLabel').textContent = user.username ? `${user.display_name || user.username} · ${roleLabel}` : '—';
   document.querySelectorAll('.admin-only').forEach((el) => el.classList.toggle('hidden', user.role !== 'admin'));
+  document.querySelectorAll('[data-permission-display]').forEach(el => el.classList.toggle('hidden', !canSection(el.dataset.permissionDisplay, 'write')));
+  updatePermissionNavigation();
 }
 
 function fillProfileForm() {
@@ -7786,7 +7959,8 @@ async function submitProfile(event) {
 
 function openUserCreateModal() {
   const modal = $('userCreateModal');
-  if (!modal) return;
+  if (!modal || !employeePermissionCatalog.length) return;
+  renderEmployeePermissions('new');
   modal.classList.remove('hidden');
   modal.setAttribute('aria-hidden', 'false');
   setTimeout(() => $('newUserUsername')?.focus(), 30);
@@ -7820,6 +7994,9 @@ function openUserEditModal(userId) {
   if ($('editUserRole')) $('editUserRole').value = user.role || 'manager';
   if ($('editUserPassword')) $('editUserPassword').value = '';
   if ($('editUserActive')) $('editUserActive').checked = Boolean(user.is_active);
+  renderEmployeePermissions('edit', user.permissions);
+  if ($('editUserRole')) $('editUserRole').disabled = Number(user.id) === Number(currentUser?.id);
+  if ($('editUserActive')) $('editUserActive').disabled = Number(user.id) === Number(currentUser?.id);
   if ($('userEditModalSubtitle')) {
     $('userEditModalSubtitle').textContent = `@${user.username || 'user'} · ${roleLabel(user.role)} · ${user.is_active ? 'активен' : 'отключён'}`;
   }
@@ -7844,6 +8021,8 @@ function handleUserEditModalBackdropClick(event) {
 
 async function submitUserEdit(event) {
   event.preventDefault();
+  const form = event.currentTarget;
+  if (form.dataset.saving) return;
   const modal = $('userEditModal');
   const userId = Number(modal?.dataset.userId || 0);
   if (!userId) return;
@@ -7853,7 +8032,11 @@ async function submitUserEdit(event) {
     is_active: Boolean($('editUserActive')?.checked),
   };
   const password = $('editUserPassword')?.value || '';
+  form.dataset.saving = '1';
+  const submitButton = form.querySelector('[type=submit]');
+  if (submitButton) submitButton.disabled = true;
   try {
+    payload.permissions = readEmployeePermissions('edit');
     await api(`/api/users/${userId}`, { method: 'PATCH', body: JSON.stringify(payload) });
     if (password) {
       await api(`/api/users/${userId}/password`, { method: 'POST', body: JSON.stringify({ password }) });
@@ -7864,6 +8047,9 @@ async function submitUserEdit(event) {
     notify('Готово', 'Данные сотрудника сохранены.');
   } catch (err) {
     notify('Не удалось сохранить сотрудника', String(err.message || err));
+  } finally {
+    delete form.dataset.saving;
+    if (submitButton) submitButton.disabled = false;
   }
 }
 
@@ -7873,7 +8059,11 @@ async function loadUsers() {
     showView('profile');
     return;
   }
-  const users = await api('/api/users');
+  const createButton = $('openUserCreateModalBtn');
+  if (createButton) createButton.disabled = true;
+  const [users, catalog] = await Promise.all([api('/api/users'), api('/api/permissions')]);
+  employeePermissionCatalog = catalog.sections || [];
+  if (createButton) createButton.disabled = !employeePermissionCatalog.length;
   usersCache = Array.isArray(users) ? users : [];
   const list = $('usersList');
   if (!list) return;
@@ -7890,7 +8080,7 @@ async function loadUsers() {
           <span class="user-status-chip ${u.is_active ? 'is-active' : 'is-disabled'}">${u.is_active ? 'Активен' : 'Отключён'}</span>
         </div>
       </div>
-      <button class="user-light-btn user-edit-btn" type="button" data-user-edit="${u.id}" aria-label="Редактировать сотрудника">
+      <button class="secondary user-edit-btn" type="button" data-user-edit="${u.id}" aria-label="Редактировать сотрудника">
         <span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 20h4l11-11a2.8 2.8 0 0 0-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></svg></span>
         <span>Редактировать</span>
       </button>
@@ -7944,10 +8134,10 @@ function renderYandexOAuthManagedLinks() {
           </div>
         </div>
         <div class="user-create-form-actions">
-          <button class="user-light-btn" type="button" data-yandex-oauth-toggle="${Number(link.id)}" data-active="${link.is_active ? '1' : '0'}">
+          <button class="secondary" type="button" data-yandex-oauth-toggle="${Number(link.id)}" data-active="${link.is_active ? '1' : '0'}">
             ${link.is_active ? 'Отключить' : 'Включить'}
           </button>
-          <button class="user-light-btn" type="button" data-yandex-oauth-delete="${Number(link.id)}">Запретить вход</button>
+          <button class="secondary" type="button" data-yandex-oauth-delete="${Number(link.id)}">Запретить вход</button>
         </div>
       </article>
     `;
@@ -8033,6 +8223,8 @@ function userCreateValidationError(payload) {
 
 async function submitUserCreate(event) {
   event.preventDefault();
+  const form = event.currentTarget;
+  if (form.dataset.saving) return;
   const payload = {
     username: $('newUserUsername')?.value?.trim() || '',
     display_name: $('newUserDisplayName')?.value?.trim() || null,
@@ -8045,7 +8237,11 @@ async function submitUserCreate(event) {
     $(validation.fieldId)?.focus();
     return;
   }
+  form.dataset.saving = '1';
+  const submitButton = form.querySelector('[type=submit]');
+  if (submitButton) submitButton.disabled = true;
   try {
+    payload.permissions = readEmployeePermissions('new');
     await api('/api/users', { method: 'POST', body: JSON.stringify(payload) });
     ['newUserUsername', 'newUserDisplayName', 'newUserPassword'].forEach(id => { if ($(id)) $(id).value = ''; });
     closeUserCreateModal();
@@ -8055,6 +8251,9 @@ async function submitUserCreate(event) {
   } catch (err) {
     const message = String(err.message || err).replace(/^422:\s*/,'');
     notify('Не удалось создать сотрудника', message || 'Проверьте логин, пароль и роль.');
+  } finally {
+    delete form.dataset.saving;
+    if (submitButton) submitButton.disabled = false;
   }
 }
 
@@ -8244,6 +8443,7 @@ async function bootstrap() {
 function init() {
   if (appInitialized) return;
   appInitialized = true;
+  bindSectionPermissions();
   updateCrmThemeUi();
   bindExtraPanelGeometry();
   bind('themeToggleBtn', 'click', toggleCrmTheme);
@@ -8357,9 +8557,11 @@ function init() {
     standaloneTaskForm.addEventListener('submit', submitStandaloneTaskCreate);
   }
   bindSupplyPlanningControls();
+  bindOzonFboControls();
   bind('navChats', 'click', () => showView('chats'));
   bind('navAnalytics', 'click', () => showView('analytics'));
   bind('navSupplyPlanning', 'click', () => showView('supplyPlanning'));
+  bind('navOzonFbo', 'click', () => showView('ozonFbo'));
   bind('navTasks', 'click', () => showView('tasks'));
   bind('navReviews', 'click', () => showView('reviews'));
   bind('navQuestions', 'click', () => showView('questions'));
@@ -8378,15 +8580,15 @@ function init() {
     handleMobileMoreAction(button.dataset.mobileAction || '', button.dataset.mobileView || '');
   });
   document.querySelector('.main-nav')?.addEventListener('click', (event) => {
-    const button = event.target.closest('#navChats, #navAnalytics, #navSupplyPlanning, #navTasks, #navReviews, #navQuestions, #navKnowledge, #navUsers, #navTechSettings, #navProfile, #mobileMoreBtn');
+    const button = event.target.closest('#navChats, #navAnalytics, #navSupplyPlanning, #navOzonFbo, #navTasks, #navReviews, #navQuestions, #navKnowledge, #navUsers, #navTechSettings, #navProfile, #mobileMoreBtn');
     if (!button) return;
     if (button.id === 'mobileMoreBtn') return;
     event.preventDefault();
-    const targetView = ({ navAnalytics: 'analytics', navSupplyPlanning: 'supplyPlanning', navTasks: 'tasks', navReviews: 'reviews', navQuestions: 'questions', navKnowledge: 'knowledge', navUsers: 'users', navTechSettings: 'techSettings', navProfile: 'profile' })[button.id] || 'chats';
+    const targetView = ({ navAnalytics: 'analytics', navSupplyPlanning: 'supplyPlanning', navOzonFbo: 'ozonFbo', navTasks: 'tasks', navReviews: 'reviews', navQuestions: 'questions', navKnowledge: 'knowledge', navUsers: 'users', navTechSettings: 'techSettings', navProfile: 'profile' })[button.id] || 'chats';
     showView(targetView);
   });
   bind('analyticsRefreshBtn', 'click', loadAnalytics);
-  bind('analyticsDrilldownRefreshBtn', 'click', loadAnalytics);
+  bindAnalyticsDrilldown();
   ['analyticsDateFrom', 'analyticsDateTo', 'analyticsMarketplace', 'analyticsHourFrom', 'analyticsHourTo'].forEach((id) => {
     const el = $(id);
     if (el && !el.dataset.boundAnalytics) {
@@ -8917,6 +9119,7 @@ function init() {
     }
   });
   window.addEventListener('focus', () => {
+    refreshSessionPermissions();
     runFrontendSyncSoon('focus');
     loadNotifications().catch(err => console.warn('focus notifications failed', err));
     if (activeView === 'chats') runActiveChatRefreshSoon('focus');
@@ -8934,7 +9137,7 @@ function init() {
     if (!document.hidden && activeView !== 'chats') refreshVisibleData();
   }, 60000);
   statusTimer = setInterval(() => {
-    if (!document.hidden) loadSyncStatus();
+    if (!document.hidden) { loadSyncStatus(); refreshSessionPermissions(); }
   }, 60000);
   notificationsTimer = setInterval(() => {
     if (!document.hidden) loadNotifications();
@@ -9027,4 +9230,691 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
     if (!$('userEditModal')?.classList.contains('hidden')) closeUserEditModal();
   }
+});
+
+// ---------------------------------------------------------------------------
+// Поставки FBO Ozon: запуск прогона, опрос состояния из БД, вопросы пользователю,
+// история и настройки. Бизнес-правила живут на сервере (app/services/ozon_fbo);
+// здесь только transport, server state и рендер.
+// ---------------------------------------------------------------------------
+const OZON_FBO_POLL_MS = 2000;
+const OZON_FBO_MODE_LABELS = {
+  trial: 'Пробная поставка',
+  live: 'Поставка с грузоместами',
+  live_nocargo: 'Поставка без грузомест',
+  cargo: 'Заполнение грузомест',
+};
+const OZON_FBO_STATUS_LABELS = {
+  queued: 'В очереди',
+  running: 'Выполняется',
+  awaiting_answer: 'Ждёт ответа',
+  finished: 'Завершён',
+  failed: 'Ошибка',
+  stopped: 'Остановлен',
+  interrupted: 'Прерван',
+};
+const OZON_FBO_SETTING_KEYS = [
+  'default_cargo_capacity', 'cargo_type', 'drop_off_name', 'min_slot_offset_days', 'slot_max_windows',
+  'min_qty', 'step', 'unavailable_retry_sec', 'cargo_capacity', 'all_clusters',
+];
+const ozonFbo = {
+  status: null,
+  run: null,
+  runId: null,
+  logSeq: 0,
+  pollTimer: null,
+  pollInFlight: false,
+  submitInFlight: false,
+  ordersInFlight: false,
+  orders: [],
+  selectedOrders: new Set(),
+  questionKey: '',
+  staleAfterSeconds: 180,
+  decisionOpener: null,
+};
+
+function ozonFboSetStatus(id, text, kind = '') {
+  const el = $(id);
+  if (!el) return;
+  el.textContent = text || '';
+  if (kind) el.dataset.kind = kind; else delete el.dataset.kind;
+}
+
+function ozonFboErrorText(err) {
+  const detail = err?.parsed?.detail ?? err?.detail;
+  if (detail && typeof detail === 'object') {
+    const items = Array.isArray(detail.errors) ? detail.errors : [];
+    return [detail.message, ...items].filter(Boolean).join(' · ');
+  }
+  if (typeof detail === 'string' && detail) return detail;
+  return String(err?.message || err || 'Неизвестная ошибка');
+}
+
+function ozonFboParseServerTime(value) {
+  if (!value) return null;
+  const text = String(value).trim();
+  const date = new Date(text.includes('T') || text.endsWith('Z') ? text : `${text.replace(' ', 'T')}Z`);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function ozonFboFormatTime(value, withDate = true) {
+  const date = ozonFboParseServerTime(value);
+  if (!date) return '';
+  const time = date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  if (!withDate) return time;
+  return `${date.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })} ${time}`;
+}
+
+function ozonFboStatusBadge(status) {
+  const key = String(status || 'queued');
+  return `<span class="status-badge ozon-fbo-state-${escapeHtml(key)}">${escapeHtml(OZON_FBO_STATUS_LABELS[key] || key)}</span>`;
+}
+
+function ozonFboSelectedMode() {
+  return document.querySelector('input[name="ozonFboMode"]:checked')?.value || 'trial';
+}
+
+function ozonFboSelectedSource() {
+  return document.querySelector('input[name="ozonFboSource"]:checked')?.value || 'file';
+}
+
+function ozonFboApplyModeVisibility() {
+  const mode = ozonFboSelectedMode();
+  const source = ozonFboSelectedSource();
+  $('ozonFboPlanSource')?.classList.toggle('hidden', mode === 'cargo');
+  $('ozonFboOrdersSource')?.classList.toggle('hidden', mode !== 'cargo');
+  $('ozonFboFileSource')?.classList.toggle('hidden', source !== 'file');
+  $('ozonFboManualSource')?.classList.toggle('hidden', source !== 'manual');
+  const force = $('ozonFboForce');
+  if (force) force.disabled = mode === 'cargo';
+  const startBtn = $('ozonFboStartBtn');
+  if (startBtn) {
+    startBtn.textContent = mode === 'cargo' ? 'Заполнить грузоместа'
+      : mode === 'trial' ? 'Проверить слоты' : 'Создать поставку';
+  }
+}
+
+async function loadOzonFbo() {
+  try {
+    await loadOzonFboStatus();
+  } catch (err) {
+    ozonFboSetStatus('ozonFboFormStatus', `Не удалось загрузить состояние раздела: ${ozonFboErrorText(err)}`, 'error');
+  }
+  loadOzonFboHistory().catch(err => console.warn('ozon fbo history failed', err));
+}
+
+async function loadOzonFboStatus() {
+  const status = await api('/api/ozon-fbo/status');
+  ozonFbo.status = status;
+  ozonFbo.staleAfterSeconds = Number(status?.stale_after_seconds) || 180;
+  const keysEl = $('ozonFboKeysStatus');
+  if (keysEl) {
+    keysEl.textContent = status?.keys_configured
+      ? 'Ключи Ozon заданы на сервере.'
+      : 'Ключи Ozon не заданы: задайте OZON_CLIENT_ID и OZON_API_KEY на сервере и перезапустите приложение.';
+    keysEl.dataset.kind = status?.keys_configured ? '' : 'error';
+  }
+  const lk = $('ozonFboLkLink');
+  if (lk && status?.lk_url) lk.href = status.lk_url;
+  fillOzonFboSettings(status?.settings || {});
+  if (Array.isArray(status?.settings_errors) && status.settings_errors.length) {
+    ozonFboSetStatus('ozonFboSettingsStatus', `Ошибки в сохранённых настройках: ${status.settings_errors.join('; ')}`, 'warning');
+  }
+  const startBtn = $('ozonFboStartBtn');
+  if (startBtn) startBtn.disabled = !status?.keys_configured || Boolean(status?.active_run);
+  if (status?.active_run) {
+    watchOzonFboRun(status.active_run.id, { reset: ozonFbo.runId !== status.active_run.id });
+  } else if (!ozonFbo.runId) {
+    const runs = await api('/api/ozon-fbo/runs?limit=1');
+    if (Array.isArray(runs) && runs.length) watchOzonFboRun(runs[0].id, { reset: true });
+  }
+}
+
+function fillOzonFboSettings(settings) {
+  OZON_FBO_SETTING_KEYS.forEach((key) => {
+    const el = $(`ozonFboSetting_${key}`);
+    if (!el) return;
+    const value = settings?.[key];
+    if (key === 'cargo_capacity') {
+      el.value = Object.entries(value || {}).map(([article, qty]) => `${article} = ${qty}`).join('\n');
+    } else if (key === 'all_clusters') {
+      el.value = Array.isArray(value) ? value.join('\n') : '';
+    } else {
+      el.value = value === undefined || value === null ? '' : String(value);
+    }
+  });
+}
+
+function readOzonFboSettingsForm() {
+  const data = {};
+  OZON_FBO_SETTING_KEYS.forEach((key) => {
+    const el = $(`ozonFboSetting_${key}`);
+    if (el) data[key] = el.value;
+  });
+  return data;
+}
+
+async function saveOzonFboSettings(event) {
+  event?.preventDefault?.();
+  const btn = $('ozonFboSaveSettingsBtn');
+  if (btn) btn.disabled = true;
+  ozonFboSetStatus('ozonFboSettingsStatus', 'Сохраняю…', '');
+  try {
+    const result = await api('/api/ozon-fbo/settings', { method: 'PUT', body: JSON.stringify(readOzonFboSettingsForm()) });
+    fillOzonFboSettings(result?.settings || {});
+    if (ozonFbo.status) ozonFbo.status.settings = result?.settings || ozonFbo.status.settings;
+    ozonFboSetStatus('ozonFboSettingsStatus', 'Настройки сохранены.', 'success');
+  } catch (err) {
+    ozonFboSetStatus('ozonFboSettingsStatus', `Не сохранено: ${ozonFboErrorText(err)}`, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function checkOzonFboConnection() {
+  const btn = $('ozonFboCheckBtn');
+  if (!btn || btn.disabled) return;
+  const oldText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Проверяю…';
+  ozonFboSetStatus('ozonFboFormStatus', 'Отправляю безопасный запрос к Ozon…', '');
+  try {
+    const result = await api('/api/ozon-fbo/check-connection', { method: 'POST', body: '{}', timeoutMs: 90000 });
+    ozonFboSetStatus('ozonFboFormStatus', `Связь есть: Ozon вернул ${Number(result?.clusters || 0)} кластеров.`, 'success');
+  } catch (err) {
+    ozonFboSetStatus('ozonFboFormStatus', `Ozon не ответил как надо: ${ozonFboErrorText(err)}`, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = oldText;
+  }
+}
+
+async function handleOzonFboFileChange() {
+  const input = $('ozonFboFile');
+  const select = $('ozonFboSheet');
+  if (!input || !select) return;
+  const file = input.files?.[0];
+  select.innerHTML = '<option value="">Сначала выберите файл</option>';
+  select.disabled = true;
+  if (!file) return;
+  ozonFboSetStatus('ozonFboFormStatus', 'Читаю список листов…', '');
+  try {
+    const form = new FormData();
+    form.append('file', file, file.name);
+    const result = await apiForm('/api/ozon-fbo/workbook-sheets', form);
+    const sheets = Array.isArray(result?.sheets) ? result.sheets : [];
+    if (!sheets.length) throw new Error('в файле нет листов');
+    select.innerHTML = sheets.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+    select.value = sheets[sheets.length - 1];
+    select.disabled = false;
+    ozonFboSetStatus('ozonFboFormStatus', `Файл ${file.name}: листов ${sheets.length}, выбран последний.`, '');
+  } catch (err) {
+    ozonFboSetStatus('ozonFboFormStatus', `Не удалось открыть файл: ${ozonFboErrorText(err)}`, 'error');
+  }
+}
+
+async function loadOzonFboOrders() {
+  if (ozonFbo.ordersInFlight) return;
+  const btn = $('ozonFboLoadOrdersBtn');
+  ozonFbo.ordersInFlight = true;
+  if (btn) btn.disabled = true;
+  const statusEl = $('ozonFboOrdersStatus');
+  if (statusEl) statusEl.textContent = 'Загружаю заявки из Ozon…';
+  try {
+    const result = await api('/api/ozon-fbo/awaiting-cargo-orders', { timeoutMs: 180000 });
+    ozonFbo.orders = Array.isArray(result?.orders) ? result.orders : [];
+    ozonFbo.selectedOrders = new Set(ozonFbo.orders.map(o => String(o.number)));
+    renderOzonFboOrders();
+    if (statusEl) {
+      statusEl.textContent = ozonFbo.orders.length
+        ? `Заявок, ожидающих грузомест: ${ozonFbo.orders.length}.`
+        : 'Заявок, ожидающих грузомест, нет.';
+    }
+  } catch (err) {
+    if (statusEl) statusEl.textContent = 'Не удалось загрузить заявки.';
+    ozonFboSetStatus('ozonFboFormStatus', `Ozon не ответил как надо: ${ozonFboErrorText(err)}`, 'error');
+  } finally {
+    ozonFbo.ordersInFlight = false;
+    if (btn) btn.disabled = false;
+    const selectAll = $('ozonFboSelectAllOrdersBtn');
+    if (selectAll) selectAll.disabled = !ozonFbo.orders.length;
+  }
+}
+
+function ozonFboOrderContentHtml(order) {
+  const parts = (order.supplies || []).map((supply) => {
+    if (supply.skipped) return `${escapeHtml(supply.where)}: ${escapeHtml(supply.skipped)}`;
+    const items = (supply.items || []).map(it => `${escapeHtml(it.offer_id)} ${Number(it.quantity)} шт. (${escapeHtml(it.layout)})`).join(', ');
+    return `${escapeHtml(supply.where)}: ${items || 'состав пустой'}`;
+  });
+  return parts.join('<br />') || '<span class="muted">состав пустой</span>';
+}
+
+function renderOzonFboOrders() {
+  const tbody = $('ozonFboOrdersRows');
+  if (!tbody) return;
+  if (!ozonFbo.orders.length) {
+    tbody.innerHTML = '<tr><td colspan="4" class="muted">Список пуст.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = ozonFbo.orders.map((order) => {
+    const number = String(order.number);
+    const checked = ozonFbo.selectedOrders.has(number) ? ' checked' : '';
+    return `<tr>
+      <td class="ozon-fbo-col-check"><input type="checkbox" data-ozon-fbo-order="${escapeHtml(number)}" aria-label="Заявка ${escapeHtml(number)}"${checked} /></td>
+      <td class="ozon-fbo-order-cell">№${escapeHtml(number)}${order.created ? `<br /><span class="muted">создана ${escapeHtml(order.created)}</span>` : ''}</td>
+      <td class="ozon-fbo-order-cell">${order.slot ? `слот ${escapeHtml(order.slot)}` : ''}${order.deadline ? `<br /><span class="muted">заполнить до ${escapeHtml(order.deadline)}</span>` : ''}</td>
+      <td class="ozon-fbo-note">${ozonFboOrderContentHtml(order)}</td>
+    </tr>`;
+  }).join('');
+}
+
+function ozonFboSelectedOrderKeys() {
+  return ozonFbo.orders.map(o => String(o.number)).filter(number => ozonFbo.selectedOrders.has(number));
+}
+
+async function submitOzonFboRun(event) {
+  event?.preventDefault?.();
+  if (ozonFbo.submitInFlight) return;
+  const mode = ozonFboSelectedMode();
+  const form = new FormData();
+  form.append('mode', mode);
+  form.append('force', $('ozonFboForce')?.checked ? 'true' : 'false');
+  form.append('confirm_each', $('ozonFboConfirmEach')?.checked ? 'true' : 'false');
+  form.append('auto_confirm', $('ozonFboAutoConfirm')?.checked ? 'true' : 'false');
+  if (mode === 'cargo') {
+    const keys = ozonFboSelectedOrderKeys();
+    if (!keys.length) {
+      ozonFboSetStatus('ozonFboFormStatus', 'Сначала загрузите заявки из Ozon и выделите те, по которым передать грузоместа.', 'error');
+      return;
+    }
+    form.append('order_keys', keys.join(','));
+  } else {
+    const source = ozonFboSelectedSource();
+    form.append('source_kind', source);
+    form.append('articles', $('ozonFboArticles')?.value || '');
+    if (source === 'file') {
+      const file = $('ozonFboFile')?.files?.[0];
+      const sheet = $('ozonFboSheet')?.value || '';
+      if (!file || !sheet) {
+        ozonFboSetStatus('ozonFboFormStatus', 'Выберите файл .xlsx и лист.', 'error');
+        return;
+      }
+      form.append('file', file, file.name);
+      form.append('sheet_name', sheet);
+    } else {
+      form.append('manual_text', $('ozonFboManualText')?.value || '');
+      form.append('list_name', $('ozonFboListName')?.value || '');
+    }
+  }
+  if (mode !== 'trial') {
+    const what = mode === 'cargo'
+      ? 'Грузоместа уйдут в Ozon по выбранным заявкам после подтверждения плана.'
+      : 'Будут созданы НАСТОЯЩИЕ заявки на поставку в Ozon после подтверждения плана.';
+    const how = $('ozonFboAutoConfirm')?.checked
+      ? 'ВНИМАНИЕ: подтверждения отключены — всё создастся без вопросов.'
+      : 'Создание начнётся только после вашего ответа на вопрос в этом разделе.';
+    if (!window.confirm(`${what}\n\n${how}\n\nПродолжить?`)) return;
+  }
+  ozonFbo.submitInFlight = true;
+  const btn = $('ozonFboStartBtn');
+  if (btn) btn.disabled = true;
+  ozonFboSetStatus('ozonFboFormStatus', 'Запускаю…', '');
+  try {
+    const run = await apiForm('/api/ozon-fbo/runs', form);
+    ozonFboSetStatus('ozonFboFormStatus', `Поставка №${run.id} запущена.`, 'success');
+    watchOzonFboRun(run.id, { reset: true });
+    loadOzonFboHistory().catch(() => {});
+  } catch (err) {
+    ozonFboSetStatus('ozonFboFormStatus', `Не запущено: ${ozonFboErrorText(err)}`, 'error');
+    if (btn) btn.disabled = false;
+  } finally {
+    ozonFbo.submitInFlight = false;
+  }
+}
+
+function stopOzonFboPolling() {
+  if (ozonFbo.pollTimer) {
+    clearTimeout(ozonFbo.pollTimer);
+    ozonFbo.pollTimer = null;
+  }
+}
+
+function scheduleOzonFboPoll(delay = OZON_FBO_POLL_MS) {
+  stopOzonFboPolling();
+  ozonFbo.pollTimer = setTimeout(() => {
+    ozonFbo.pollTimer = null;
+    pollOzonFboRun().catch(err => console.warn('ozon fbo poll failed', err));
+  }, delay);
+}
+
+function watchOzonFboRun(runId, options = {}) {
+  const id = Number(runId);
+  if (!Number.isFinite(id) || id <= 0) return;
+  if (options.reset || ozonFbo.runId !== id) {
+    ozonFbo.runId = id;
+    ozonFbo.run = null;
+    ozonFbo.logSeq = 0;
+    ozonFbo.questionKey = '';
+    const log = $('ozonFboLog');
+    if (log) log.textContent = '';
+    renderOzonFboRows([]);
+    closeOzonFboDecision();
+  }
+  pollOzonFboRun().catch(err => console.warn('ozon fbo poll failed', err));
+}
+
+async function pollOzonFboRun() {
+  if (ozonFbo.pollInFlight || !ozonFbo.runId) return;
+  const id = ozonFbo.runId;
+  ozonFbo.pollInFlight = true;
+  try {
+    const detail = await api(`/api/ozon-fbo/runs/${id}?after=${ozonFbo.logSeq}`);
+    if (ozonFbo.runId !== id) return;
+    const run = detail?.run;
+    if (!run) return;
+    const wasActive = Boolean(ozonFbo.run?.is_active);
+    ozonFbo.run = run;
+    appendOzonFboLog(detail.log || []);
+    renderOzonFboRows(detail.rows || []);
+    renderOzonFboRun(run);
+    if (run.is_active) {
+      if (activeView === 'ozonFbo') scheduleOzonFboPoll(document.hidden ? OZON_FBO_POLL_MS * 3 : OZON_FBO_POLL_MS);
+    } else {
+      stopOzonFboPolling();
+      const startBtn = $('ozonFboStartBtn');
+      if (startBtn) startBtn.disabled = !ozonFbo.status?.keys_configured;
+      if (wasActive) loadOzonFboHistory().catch(() => {});
+    }
+  } finally {
+    ozonFbo.pollInFlight = false;
+  }
+}
+
+function appendOzonFboLog(lines) {
+  if (!lines.length) return;
+  const log = $('ozonFboLog');
+  if (!log) return;
+  const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+  const text = lines.map(item => item.text).join('\n');
+  log.textContent = log.textContent ? `${log.textContent}\n${text}` : text;
+  ozonFbo.logSeq = Math.max(ozonFbo.logSeq, ...lines.map(item => Number(item.seq) || 0));
+  if (nearBottom) log.scrollTop = log.scrollHeight;
+}
+
+const OZON_FBO_TONE_LABELS = { zero: 'исключён', manual: 'ручная проверка', ok: 'принято' };
+
+function ozonFboToneBadge(tone) {
+  const label = OZON_FBO_TONE_LABELS[tone];
+  if (!label) return '';
+  return `<span class="status-badge ozon-fbo-tone-${tone}">${label}</span>`;
+}
+
+function renderOzonFboRows(rows) {
+  const tbody = $('ozonFboRows');
+  if (!tbody) return;
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="muted">Результатов пока нет.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map((row) => {
+    const fact = row.fact === null || row.fact === undefined ? '' : String(row.fact);
+    return `<tr><td>${escapeHtml(row.article)}</td><td>${escapeHtml(row.cluster)}</td><td class="ozon-fbo-num">${escapeHtml(String(row.plan ?? ''))}</td><td class="ozon-fbo-num">${escapeHtml(fact)}</td><td class="ozon-fbo-tone">${ozonFboToneBadge(row.tone)}</td><td class="ozon-fbo-note">${escapeHtml(row.note || '')}</td></tr>`;
+  }).join('');
+}
+
+function ozonFboHeartbeatAge(run) {
+  const beat = ozonFboParseServerTime(run?.heartbeat_at);
+  if (!beat) return null;
+  return Math.max(0, Math.round((Date.now() - beat.getTime()) / 1000));
+}
+
+function renderOzonFboRun(run) {
+  const title = $('ozonFboRunTitle');
+  if (title) title.textContent = `Поставка №${run.id}`;
+  const meta = $('ozonFboRunMeta');
+  if (meta) {
+    const parts = [
+      OZON_FBO_MODE_LABELS[run.mode] || run.mode,
+      run.sheet_name ? `«${run.sheet_name}»` : '',
+      run.created_by_label ? `запустил ${run.created_by_label}` : '',
+      run.created_at ? `начат ${ozonFboFormatTime(run.created_at)}` : '',
+      run.finished_at ? `завершён ${ozonFboFormatTime(run.finished_at, false)}` : '',
+    ].filter(Boolean);
+    const age = run.is_active ? ozonFboHeartbeatAge(run) : null;
+    const stale = age !== null && age > ozonFbo.staleAfterSeconds;
+    meta.innerHTML = `${ozonFboStatusBadge(run.status)} ${escapeHtml(parts.join(' · '))}`
+      + (run.error_text ? `<br /><span class="ozon-fbo-error">${escapeHtml(run.error_text)}</span>` : '')
+      + (stale ? `<br /><span class="ozon-fbo-error">Рабочий процесс не отвечает ${age} с.</span>` : '');
+    const releaseBtn = $('ozonFboReleaseBtn');
+    if (releaseBtn) releaseBtn.classList.toggle('hidden', !stale);
+  }
+  const stopBtn = $('ozonFboStopBtn');
+  if (stopBtn) {
+    stopBtn.disabled = !run.is_active || Boolean(run.stop_requested);
+    stopBtn.textContent = run.stop_requested && run.is_active ? 'Останавливаю…' : 'Остановить';
+  }
+  const files = $('ozonFboRunFiles');
+  if (files) {
+    files.classList.remove('hidden');
+    const result = $('ozonFboResultLink');
+    if (result) {
+      result.classList.toggle('hidden', !run.has_result_file);
+      result.href = `/api/ozon-fbo/runs/${run.id}/result.xlsx`;
+    }
+    const report = $('ozonFboReportLink');
+    if (report) report.href = `/api/ozon-fbo/runs/${run.id}/report.txt`;
+    const apiLog = $('ozonFboApiLogLink');
+    if (apiLog) {
+      apiLog.href = `/api/ozon-fbo/runs/${run.id}/api-log`;
+      apiLog.classList.toggle('hidden', !run.has_api_log);
+    }
+  }
+  const awaiting = run.status === 'awaiting_answer' && run.question_text;
+  const bar = $('ozonFboQuestionBar');
+  if (bar) bar.classList.toggle('hidden', !awaiting);
+  if (awaiting) {
+    const barText = $('ozonFboQuestionBarText');
+    if (barText) {
+      barText.textContent = run.question_kind === 'duplicates'
+        ? 'Сегодня уже есть такие заявки — нужно ваше решение.'
+        : run.question_kind === 'plan' ? 'План готов — нужно подтверждение.' : 'Нужен ваш ответ.';
+    }
+    const key = `${run.id}:${run.question_seq ?? `${run.question_kind}:${String(run.question_text).length}`}`;
+    if (key !== ozonFbo.questionKey) {
+      ozonFbo.questionKey = key;
+      openOzonFboDecision(run);
+    }
+  } else if (ozonFbo.questionKey) {
+    ozonFbo.questionKey = '';
+    closeOzonFboDecision();
+  }
+}
+
+function ozonFboDecisionLabels(run) {
+  const text = String(run?.question_text || '');
+  if (run?.question_kind === 'duplicates') {
+    return { title: 'Сегодня уже есть такие заявки', hint: '«Всё равно сделать» — строки пойдут в поставку, на один склад уйдёт вторая заявка за день.', yes: 'Всё равно сделать', no: 'Пропустить дубли' };
+  }
+  if (run?.question_kind === 'plan') {
+    const cargo = text.startsWith('ГРУЗОМЕСТА');
+    const yes = cargo ? 'Передать грузоместа' : 'Создать заявки';
+    return { title: cargo ? 'План грузомест' : 'План поставок', hint: `Проверьте план. Данные уйдут в Ozon только после нажатия «${yes}».`, yes, no: 'Отмена' };
+  }
+  return { title: 'Подтверждение', hint: 'Нажмите «Да», чтобы выполнить, или «Нет», чтобы пропустить этот шаг.', yes: 'Да', no: 'Нет' };
+}
+
+function openOzonFboDecision(run) {
+  const modal = $('ozonFboDecisionModal');
+  if (!modal || !run?.question_text) return;
+  if (modal.classList.contains('hidden')) {
+    ozonFbo.decisionOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  }
+  const labels = ozonFboDecisionLabels(run);
+  if ($('ozonFboDecisionTitle')) $('ozonFboDecisionTitle').textContent = labels.title;
+  if ($('ozonFboDecisionHint')) $('ozonFboDecisionHint').textContent = labels.hint;
+  if ($('ozonFboDecisionText')) $('ozonFboDecisionText').textContent = run.question_text;
+  if ($('ozonFboDecisionYesBtn')) { $('ozonFboDecisionYesBtn').textContent = labels.yes; $('ozonFboDecisionYesBtn').disabled = false; }
+  if ($('ozonFboDecisionNoBtn')) { $('ozonFboDecisionNoBtn').textContent = labels.no; $('ozonFboDecisionNoBtn').disabled = false; }
+  modal.classList.remove('hidden');
+  modal.setAttribute('aria-hidden', 'false');
+  setTimeout(() => $('ozonFboDecisionText')?.focus(), 30);
+}
+
+function closeOzonFboDecision() {
+  const modal = $('ozonFboDecisionModal');
+  if (!modal || modal.classList.contains('hidden')) return;
+  modal.classList.add('hidden');
+  modal.setAttribute('aria-hidden', 'true');
+  const bar = $('ozonFboQuestionBar');
+  const target = bar && !bar.classList.contains('hidden') ? $('ozonFboOpenQuestionBtn') : ozonFbo.decisionOpener;
+  ozonFbo.decisionOpener = null;
+  if (target && typeof target.focus === 'function' && document.body.contains(target)) target.focus();
+}
+
+function trapOzonFboDecisionFocus(event) {
+  const modal = $('ozonFboDecisionModal');
+  if (!modal || modal.classList.contains('hidden') || event.key !== 'Tab') return;
+  const focusable = [...modal.querySelectorAll('button:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+    .filter(el => !el.closest('.hidden'));
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && (document.activeElement === first || !modal.contains(document.activeElement))) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && (document.activeElement === last || !modal.contains(document.activeElement))) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+async function answerOzonFboDecision(answer) {
+  const run = ozonFbo.run;
+  if (!run || run.status !== 'awaiting_answer') { closeOzonFboDecision(); return; }
+  const yes = $('ozonFboDecisionYesBtn');
+  const no = $('ozonFboDecisionNoBtn');
+  if (yes) yes.disabled = true;
+  if (no) no.disabled = true;
+  try {
+    await api(`/api/ozon-fbo/runs/${run.id}/answer`, { method: 'POST', body: JSON.stringify({ answer, question_seq: run.question_seq ?? null }) });
+    closeOzonFboDecision();
+    scheduleOzonFboPoll(200);
+  } catch (err) {
+    ozonFboSetStatus('ozonFboFormStatus', `Ответ не принят: ${ozonFboErrorText(err)}`, 'error');
+    if (yes) yes.disabled = false;
+    if (no) no.disabled = false;
+    scheduleOzonFboPoll(200);
+  }
+}
+
+async function stopOzonFboRun() {
+  const run = ozonFbo.run;
+  if (!run || !run.is_active) return;
+  if (!window.confirm('Остановить после текущего артикула? Созданные заявки останутся.')) return;
+  try {
+    await api(`/api/ozon-fbo/runs/${run.id}/stop`, { method: 'POST', body: '{}' });
+    scheduleOzonFboPoll(200);
+  } catch (err) {
+    ozonFboSetStatus('ozonFboFormStatus', `Не удалось остановить: ${ozonFboErrorText(err)}`, 'error');
+  }
+}
+
+async function releaseOzonFboRun() {
+  const run = ozonFbo.run;
+  if (!run || !run.is_active) return;
+  if (!window.confirm('Пометить поставку прерванной? Только если процесс действительно перестал отвечать.')) return;
+  try {
+    await api(`/api/ozon-fbo/runs/${run.id}/release`, { method: 'POST', body: '{}' });
+    scheduleOzonFboPoll(200);
+    loadOzonFboStatus().catch(() => {});
+  } catch (err) {
+    ozonFboSetStatus('ozonFboFormStatus', `Не удалось снять: ${ozonFboErrorText(err)}`, 'error');
+  }
+}
+
+function ozonFboSummaryText(run) {
+  const s = run?.summary || {};
+  if (run?.status === 'failed' || run?.status === 'interrupted') return run.error_text || '';
+  if (!Object.keys(s).length) return '';
+  const parts = [];
+  if (run.mode === 'cargo') {
+    parts.push(`заявок ${Number(s.articles || 0)}`, `грузомест ${Number(s.cargoes || 0)}`);
+  } else {
+    parts.push(`артикулов ${Number(s.articles || 0)}`);
+    if (run.mode !== 'trial') parts.push(`заявок ${Number(s.created || 0)}`, `грузомест ${Number(s.cargoes || 0)}`);
+  }
+  if (Number(s.manual || 0)) parts.push(`ручная проверка ${Number(s.manual)}`);
+  return parts.join(', ');
+}
+
+async function loadOzonFboHistory() {
+  const runs = await api('/api/ozon-fbo/runs?limit=30');
+  renderOzonFboHistory(Array.isArray(runs) ? runs : []);
+}
+
+function renderOzonFboHistory(runs) {
+  const tbody = $('ozonFboHistoryRows');
+  if (!tbody) return;
+  if (!runs.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="muted">Поставок ещё не было.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = runs.map(run => `<tr>
+    <td>${escapeHtml(ozonFboFormatTime(run.created_at))}</td>
+    <td>${escapeHtml(OZON_FBO_MODE_LABELS[run.mode] || run.mode)}</td>
+    <td class="ozon-fbo-note">${escapeHtml(run.sheet_name || '')}</td>
+    <td>${ozonFboStatusBadge(run.status)}</td>
+    <td class="ozon-fbo-note">${escapeHtml(ozonFboSummaryText(run))}</td>
+    <td class="ozon-fbo-history-actions"><button class="secondary small" type="button" data-ozon-fbo-open="${escapeHtml(String(run.id))}">Открыть</button></td>
+  </tr>`).join('');
+}
+
+function bindOzonFboControls() {
+  const form = $('ozonFboRunForm');
+  if (form && !form.dataset.boundOzonFbo) {
+    form.dataset.boundOzonFbo = '1';
+    form.addEventListener('submit', submitOzonFboRun);
+    form.addEventListener('change', (event) => {
+      if (event.target?.matches?.('input[name="ozonFboMode"], input[name="ozonFboSource"]')) ozonFboApplyModeVisibility();
+      if (event.target?.matches?.('[data-ozon-fbo-order]')) {
+        const number = event.target.dataset.ozonFboOrder;
+        if (event.target.checked) ozonFbo.selectedOrders.add(number); else ozonFbo.selectedOrders.delete(number);
+      }
+    });
+  }
+  bind('ozonFboFile', 'change', handleOzonFboFileChange);
+  bind('ozonFboLoadOrdersBtn', 'click', loadOzonFboOrders);
+  bind('ozonFboSelectAllOrdersBtn', 'click', () => {
+    ozonFbo.selectedOrders = new Set(ozonFbo.orders.map(o => String(o.number)));
+    renderOzonFboOrders();
+  });
+  bind('ozonFboCheckBtn', 'click', checkOzonFboConnection);
+  bind('ozonFboStopBtn', 'click', stopOzonFboRun);
+  bind('ozonFboReleaseBtn', 'click', releaseOzonFboRun);
+  bind('ozonFboOpenQuestionBtn', 'click', () => { if (ozonFbo.run) openOzonFboDecision(ozonFbo.run); });
+  bind('ozonFboHistoryRefreshBtn', 'click', () => loadOzonFboHistory().catch(err => ozonFboSetStatus('ozonFboFormStatus', ozonFboErrorText(err), 'error')));
+  $('ozonFboHistoryRows')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-ozon-fbo-open]');
+    if (!button) return;
+    watchOzonFboRun(button.dataset.ozonFboOpen, { reset: true });
+    $('ozonFboRunTitle')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  });
+  const settingsForm = $('ozonFboSettingsForm');
+  if (settingsForm && !settingsForm.dataset.boundOzonFbo) {
+    settingsForm.dataset.boundOzonFbo = '1';
+    settingsForm.addEventListener('submit', saveOzonFboSettings);
+  }
+  bind('ozonFboDecisionYesBtn', 'click', () => answerOzonFboDecision('yes'));
+  bind('ozonFboDecisionNoBtn', 'click', () => answerOzonFboDecision('no'));
+  bind('ozonFboDecisionCloseBtn', 'click', closeOzonFboDecision);
+  $('ozonFboDecisionModal')?.addEventListener('click', (event) => {
+    if (event.target?.matches?.('[data-ozon-fbo-decision-close]')) closeOzonFboDecision();
+  });
+  ozonFboApplyModeVisibility();
+}
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !$('ozonFboDecisionModal')?.classList.contains('hidden')) closeOzonFboDecision();
+  else if (event.key === 'Tab') trapOzonFboDecisionFocus(event);
 });

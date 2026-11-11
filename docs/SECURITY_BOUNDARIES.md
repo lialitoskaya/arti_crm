@@ -108,7 +108,7 @@ Repeated deactivation is safe and does not affect other users' sessions.
 
 Knowledge articles and their images require a normal authenticated CRM session.
 Images are read only through `GET /api/knowledge/articles/{article_id}/image`, with
-the same viewer-and-admin permission semantics as article reads. The endpoint first
+the same knowledge section read permission as article reads. The endpoint first
 loads the article and uses its server-stored image reference; anonymous requests
 return `401`, while unknown articles, invalid references, and missing files return a
 generic `404` without filesystem details.
@@ -119,10 +119,7 @@ derives `/api/knowledge/articles/{article_id}/image`. Text create/update DTOs re
 raw `image_url` and `clear_image` fields. Text updates do not write `image_url`, so a
 stale client cannot restore or replace an image reference.
 
-Knowledge mutation endpoints require the admin role. The shared frontend
-`admin-only hidden` mechanism hides article creation/editing, image upload/removal,
-and category management controls from viewers, but backend RBAC remains the source
-of truth. Viewers retain article and image read access.
+Knowledge mutation endpoints require knowledge write access. The server checks the effective permissions on every request, including image and category operations.
 
 New files are attached with
 `POST /api/knowledge/articles/{article_id}/image`. The server chooses the filename,
@@ -188,3 +185,26 @@ migration, and generalized orphan cleanup are intentionally outside this change.
 
 Regression coverage is in `tests/test_knowledge_image_security.py` and uses only a
 temporary SQLite database and synthetic files under the test temporary directory.
+
+## Ozon FBO supplies
+
+FBO operations require the corresponding section read or write permission. Settings, API logs and connection checks require an administrator. The inventory test in `tests/test_ozon_fbo_router.py` verifies each route. The employee permission model and deployment steps are described in [Employee section permissions](EMPLOYEE_SECTION_PERMISSIONS.md).
+
+Ozon credentials are read only from the process environment inside
+`app/integrations/ozon_fbo/client.py`. They are never accepted from the browser,
+written to SQLite, returned by any route or included in journal lines, error texts
+or raw request dumps; dumps contain method path, request body, HTTP status and
+response only. `GET /api/ozon-fbo/status` exposes a boolean `keys_configured`, nothing
+else about the keys. The client uses `trust_env=False`, so system proxies are ignored.
+
+Uploaded plans must be `.xlsx`, are capped at 20 MiB, are parsed with `openpyxl`
+before a run is registered and are stored as a BLOB on the run row; the result
+workbook is served only to administrators with an attachment header. Raw Ozon dumps
+are written under `OZON_FBO_LOG_DIR` (default `logs/ozon_fbo/`, git-ignored) and
+downloaded through the admin-only `api-log` route as a zip (the path itself carries no archive extension, which the global sensitive-extension filter would reject); a non-writable directory disables
+dumps without stopping the run.
+
+Live order and cargo creation have exactly one code path each (`orders.create_order`
+and `cargo.send_cargoes`), both guarded by the safeguards above. Tests use fake API
+objects and an in-memory or temporary SQLite store under the regression foundation,
+which blocks non-loopback sockets; no test contacts the Ozon API.

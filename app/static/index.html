@@ -10,12 +10,12 @@
   <meta name="apple-mobile-web-app-title" content="Arti CRM" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <link rel="apple-touch-icon" href="/static/icons/app-icon-180.png?v=v57-mobile-questions-inline-and-dark-analytics-20260701" />
-  <meta name="arti-build-version" content="v95-19-notifications-today-20260927" />
+  <meta name="arti-build-version" content="v97-employee-permissions-20261109" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <script src="/static/theme-init.js?v=v79-strict-csp-secure-cookie-20260708"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=v95-19-notifications-today-20260927" />
+  <link rel="stylesheet" href="/static/styles.css?v=v97-employee-permissions-20261109" />
 
 </head>
 <body class="auth-pending">
@@ -35,8 +35,8 @@
       <div class="login-mark">A</div>
       <h1>Arti Crm</h1>
       <p>Войдите, чтобы открыть CRM</p>
-      <input id="loginUsername" autocomplete="username" placeholder="Логин" required />
-      <input id="loginPassword" autocomplete="current-password" type="password" placeholder="Пароль" required />
+      <label>Логин<input id="loginUsername" autocomplete="username" required /></label>
+      <label>Пароль<input id="loginPassword" autocomplete="current-password" type="password" required /></label>
       <button id="loginSubmitBtn" type="submit">Войти</button>
       <button id="yandexLoginBtn" class="hidden" type="button">Войти через Яндекс</button>
       <div id="loginError" class="login-error"></div>
@@ -61,6 +61,7 @@
         <button id="navTasks" class="nav-btn" type="button" aria-label="Задачи"><span class="btn-icon nav-image-icon" aria-hidden="true"><img src="/static/icons/nav-tasks.svg" alt="" loading="eager" decoding="async" /></span><span class="btn-label">Задачи</span></button>
         <button id="navKnowledge" class="nav-btn" type="button" aria-label="База знаний"><span class="btn-icon nav-image-icon" aria-hidden="true"><img src="/static/icons/nav-knowledge.svg" alt="" loading="eager" decoding="async" /></span><span class="btn-label">База знаний</span></button>
         <button id="navSupplyPlanning" class="nav-btn" type="button" aria-label="Планирование поставок"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7h10v10H4z"/><path d="M14 10h3.5l2.5 3v4h-6z"/><circle cx="8" cy="18" r="1.5"/><circle cx="18" cy="18" r="1.5"/><path d="M6.5 5h5"/></svg></span><span class="btn-label">Поставки (beta)</span></button>
+        <button id="navOzonFbo" class="nav-btn admin-only hidden" type="button" aria-label="Поставки FBO Ozon"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 9h16v10H4z"/><path d="M5.5 9l1.3-4h10.4l1.3 4"/><path d="M9 13h6"/></svg></span><span class="btn-label">Поставки FBO</span></button>
         <button id="mobileMoreBtn" class="nav-btn mobile-more-btn" type="button" aria-label="Ещё"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="5" cy="5" r="1.5"/><circle cx="12" cy="5" r="1.5"/><circle cx="19" cy="5" r="1.5"/><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/><circle cx="5" cy="19" r="1.5"/><circle cx="12" cy="19" r="1.5"/><circle cx="19" cy="19" r="1.5"/></svg></span><span class="btn-label">Ещё</span><span id="mobileMoreBadge" class="notification-badge hidden">0</span></button>
         <button id="mobileLogoutBtn" class="nav-btn mobile-logout-btn legacy-logout-btn" type="button" aria-label="Выйти"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg></span><span class="btn-label">Выйти</span></button>
       </nav>
@@ -110,6 +111,7 @@
           <button class="mobile-more-item admin-only hidden" type="button" data-mobile-view="techSettings"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-4"/><path d="M12 10V3"/><path d="M20 21v-9"/><path d="M20 8V3"/><path d="M2 10h4"/><path d="M10 17h4"/><path d="M18 8h4"/></svg></span><span class="mobile-more-copy"><strong>Настройки</strong><small>Статусы, системные параметры</small></span><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></button>
           <button class="mobile-more-item" type="button" data-mobile-view="profile"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M5 20a7 7 0 0 1 14 0"/></svg></span><span class="mobile-more-copy"><strong>Профиль</strong><small>Личные данные и аккаунт</small></span><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></button>
           <button class="mobile-more-item" type="button" data-mobile-view="supplyPlanning"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7h10v10H4z"/><path d="M14 10h3.5l2.5 3v4h-6z"/><circle cx="8" cy="18" r="1.5"/><circle cx="18" cy="18" r="1.5"/><path d="M6.5 5h5"/></svg></span><span class="mobile-more-copy"><strong>Поставки (beta)</strong><small>Расчёт потребности по складам</small></span><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></button>
+          <button class="mobile-more-item admin-only hidden" type="button" data-mobile-view="ozonFbo"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 9h16v10H4z"/><path d="M5.5 9l1.3-4h10.4l1.3 4"/><path d="M9 13h6"/></svg></span><span class="mobile-more-copy"><strong>Поставки FBO</strong><small>Заявки на поставку в Ozon по плану</small></span><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></button>
           <button class="mobile-more-item" type="button" data-mobile-action="theme"><span class="btn-icon theme-toggle-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path class="theme-sun" d="M12 4V2m0 20v-2m8-8h2M2 12h2m13.7-5.7 1.4-1.4M4.9 19.1l1.4-1.4m0-11.4L4.9 4.9m14.2 14.2-1.4-1.4"/><circle class="theme-core" cx="12" cy="12" r="4"/></svg></span><span class="mobile-more-copy"><strong data-theme-label>Тема</strong><small data-theme-description>Светлая / тёмная CRM</small></span></button>
           <button class="mobile-more-item mobile-more-item-danger" type="button" data-mobile-action="logout"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg></span><span class="mobile-more-copy"><strong>Выйти из аккаунта</strong><small>Завершить текущую сессию</small></span></button>
         </div>
@@ -199,16 +201,16 @@
                 </div>
               </div>
               <div class="chat-controls">
-                <select id="chatStatus" aria-label="Статус чата">
+                <select id="chatStatus" data-permission-write="chats" aria-label="Статус чата">
                   <option value="new">Новый</option>
                 </select>
-                <select id="assignedUserSelect" aria-label="Ответственный за чат"><option value="">Не назначен</option></select>
+                <select id="assignedUserSelect" data-permission-write="chats" aria-label="Ответственный за чат"><option value="">Не назначен</option></select>
                 <button id="extraMenuBtn" class="icon-btn" type="button" aria-label="Дополнительные функции" title="Дополнительные функции">⋯</button>
                   <div id="extraMenu" class="extra-menu hidden" role="menu">
                     <button type="button" data-extra="tasks">Задачи по чату</button>
                     <button type="button" data-extra="note">Внутренняя заметка</button>
                     <button type="button" data-extra="customer">Имя клиента</button>
-                    <button id="aiGenerateMenuBtn" type="button">✨ ИИ ответ на выбранное</button>
+                    <button id="aiGenerateMenuBtn" data-permission-write="chats" type="button">✨ ИИ ответ на выбранное</button>
                 </div>
               </div>
             </div>
@@ -220,7 +222,7 @@
                   <button class="link-btn" type="button" data-view="tasks">Открыть все задачи</button>
                 </div>
                 <div id="taskList" class="task-list"></div>
-                <form id="taskForm" class="task-form task-form-grid task-create-form-v2">
+                <form id="taskForm" data-permission-write="tasks chats" class="task-form task-form-grid task-create-form-v2">
                   <label class="task-create-field" for="taskTypeSelect">
                     <span>Тип</span>
                     <select id="taskTypeSelect" aria-label="Тип задачи"><option value="">Тип задачи</option></select>
@@ -245,7 +247,7 @@
 
               <section id="noteSection" class="extra-section hidden">
                 <div class="section-head"><h3>Внутренняя заметка</h3></div>
-                <form id="noteForm" class="note-form">
+                <form id="noteForm" data-permission-write="chats" class="note-form">
                   <textarea id="noteText" placeholder="Эта заметка видна только внутри CRM и не уйдёт клиенту"></textarea>
                   <button type="submit">Добавить заметку</button>
                 </form>
@@ -253,7 +255,7 @@
 
               <section id="customerSection" class="extra-section hidden">
                 <div class="section-head"><h3>Имя клиента</h3></div>
-                <form id="customerForm" class="customer-form">
+                <form id="customerForm" data-permission-write="chats" class="customer-form">
                   <input id="customerNameInput" placeholder="Например: Анна" />
                   <button type="submit">Сохранить имя</button>
                 </form>
@@ -270,12 +272,12 @@
                 <span id="aiNotice" class="ai-notice"></span>
               </div>
               <div class="ai-selection-actions">
-                <button id="aiGenerateBtn" type="button">✨ ИИ ответ</button>
+                <button id="aiGenerateBtn" data-permission-write="chats" type="button">✨ ИИ ответ</button>
                 <button id="aiClearSelectionBtn" class="secondary" type="button">Снять выбор</button>
               </div>
             </div>
 
-            <form id="messageForm" class="composer">
+            <form id="messageForm" data-permission-write="chats" class="composer">
               <section id="replyTemplatesPanel" class="reply-templates-panel hidden" aria-label="Шаблоны ответа">
                 <div class="reply-templates-head">
                   <div>
@@ -283,7 +285,7 @@
                     <div class="reply-templates-subtitle">Выберите шаблон — он вставится в поле сообщения.</div>
                   </div>
                   <div class="reply-templates-head-actions">
-                    <button id="replyTemplateAddBtn" class="reply-template-add-icon" type="button" aria-label="Добавить шаблон" title="Добавить шаблон">＋</button>
+                    <button id="replyTemplateAddBtn" data-permission-write="techSettings" class="reply-template-add-icon" type="button" aria-label="Добавить шаблон" title="Добавить шаблон">＋</button>
                     <button id="replyTemplatesCloseBtn" class="reply-templates-close" type="button" aria-label="Скрыть шаблоны" title="Скрыть">×</button>
                   </div>
                 </div>
@@ -291,7 +293,7 @@
                   <input id="replyTemplateTitle" type="text" maxlength="160" placeholder="Название шаблона" />
                   <textarea id="replyTemplateContent" rows="4" maxlength="8000" placeholder="Текст шаблона"></textarea>
                   <div class="reply-template-create-actions">
-                    <button id="replyTemplateSaveBtn" type="button">Сохранить</button>
+                    <button id="replyTemplateSaveBtn" data-permission-write="techSettings" type="button">Сохранить</button>
                     <button id="replyTemplateCancelBtn" class="secondary" type="button">Отмена</button>
                   </div>
                 </div>
@@ -317,10 +319,10 @@
         <section class="tasks-toolbar panel-card analytics-toolbar">
           <div>
             <h2>Аналитика</h2>
-            <p>Первые обращения клиентов по дням, скорость ответа, закрытия и пиковые часы.</p>
+            <p id="analyticsLoadStatus" class="muted" role="status" aria-live="polite"></p>
           </div>
           <div class="analytics-toolbar-actions">
-            <button id="analyticsRefreshBtn" class="analytics-refresh-btn" type="button" aria-label="Обновить аналитику">
+            <button id="analyticsRefreshBtn" class="secondary small analytics-refresh-btn" type="button" aria-label="Обновить аналитику">
               <span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M18.5 9.2A7 7 0 1 0 19 13"/><path d="M18.5 4.5v4.7h-4.7"/></svg></span>
               <span class="btn-label">Обновить</span>
             </button>
@@ -394,7 +396,6 @@
           <article class="panel-card analytics-panel">
             <div class="analytics-panel-head">
               <h3>Пиковые часы обращений</h3>
-              <p>Распределение первых обращений клиента за день по часам.</p>
             </div>
             <div id="analyticsHourlyChart" class="analytics-hourly-chart"></div>
           </article>
@@ -402,7 +403,6 @@
           <article class="panel-card analytics-panel">
             <div class="analytics-panel-head">
               <h3>Обращения по дням</h3>
-              <p>Сколько входящих сообщений и закрытых чатов было в день.</p>
             </div>
             <div id="analyticsDailyTable" class="analytics-table"></div>
           </article>
@@ -411,53 +411,45 @@
         <section class="panel-card analytics-panel">
           <div class="analytics-panel-head">
             <h3>Разбивка по маркетплейсам</h3>
-            <p>Помогает понять, откуда идёт основная нагрузка.</p>
           </div>
           <div id="analyticsMarketplaceBreakdown" class="analytics-marketplace-breakdown"></div>
         </section>
 
-        <section class="panel-card analytics-panel analytics-drilldown-panel">
+        <details id="analyticsDrilldownDetails" class="panel-card analytics-panel analytics-drilldown-panel">
+          <summary>Проверка расчёта по часам — сообщения</summary>
           <div class="analytics-panel-head">
-            <div>
-              <h3>Проверка расчёта по часам</h3>
-              <p>Здесь видны конкретные чаты и сообщения, которые попали в отчёт как первые обращения клиента за день.</p>
-            </div>
             <div class="analytics-drilldown-actions">
               <button id="analyticsDrilldownRefreshBtn" class="secondary small" type="button">Обновить строки</button>
             </div>
           </div>
-          <div id="analyticsDrilldownSummary" class="analytics-drilldown-summary">—</div>
+          <div id="analyticsDrilldownSummary" class="analytics-drilldown-summary" role="status" aria-live="polite">Раскройте раздел, чтобы загрузить сообщения по выбранным фильтрам.</div>
           <div id="analyticsDrilldownTable" class="analytics-table analytics-drilldown-table"></div>
           <details class="analytics-excluded-details">
             <summary>Служебные сообщения, исключённые из аналитики</summary>
             <div id="analyticsExcludedTable" class="analytics-table"></div>
           </details>
-        </section>
+        </details>
       </main>
 
 
       <main id="supplyPlanningView" class="tasks-page supply-planning-page view hidden">
         <section class="tasks-toolbar panel-card supply-planning-hero">
           <div>
-            <span class="eyebrow">Планирование поставок</span>
             <h2>Расчёт потребности по товарам и складам</h2>
-            <p>Склады, остатки и продажи загружаются из API. Вручную редактируются только параметры расчёта: доставка до склада, товар в пути и общий неснижаемый остаток.</p>
           </div>
           <div class="supply-planning-actions">
-            <button id="supplyPlanningApiSyncBtn" type="button">Обновить из API</button>
-            <button id="supplyPlanningResetBtn" class="secondary" type="button">Очистить</button>
+            <button id="supplyPlanningApiSyncBtn" data-permission-write="supplyPlanning" type="button">Обновить из API</button>
+            <button id="supplyPlanningResetBtn" data-permission-write="supplyPlanning" class="secondary" type="button">Очистить</button>
           </div>
         </section>
 
         <section class="panel-card supply-planning-formula-card">
           <div>
-            <span class="eyebrow">Формула</span>
             <strong>К поставке = MAX(0; неснижаемый остаток × продажи/день − текущий остаток + доставка × продажи/день − товар в пути)</strong>
-            <p>Неснижаемый остаток задаётся один раз на высоком уровне и применяется ко всем строкам текущего расчёта.</p>
           </div>
           <label class="supply-planning-default-target">
             <span>Неснижаемый остаток, дней</span>
-            <input id="supplyPlanningDefaultTargetDays" type="number" min="1" step="1" value="45" />
+            <input id="supplyPlanningDefaultTargetDays" data-permission-write="supplyPlanning" type="number" min="1" step="1" value="45" />
           </label>
         </section>
 
@@ -520,11 +512,185 @@
           <div class="analytics-panel-head supply-planning-panel-head">
             <div>
               <h3>Строки расчёта</h3>
-              <p>Список строится из API по выбранной площадке. Без фильтра показываются все склады и кластеры, которые вернул маркетплейс.</p>
             </div>
           </div>
           <div id="supplyPlanningRows" class="supply-planning-rows" aria-live="polite"></div>
         </section>
+      </main>
+
+      <main id="ozonFboView" class="tasks-page ozon-fbo-page view hidden" aria-hidden="true">
+        <section class="tasks-toolbar panel-card ozon-fbo-hero">
+          <div>
+            <h2>Поставки FBO Ozon</h2>
+            <p id="ozonFboKeysStatus">Проверяю ключи Ozon…</p>
+          </div>
+          <div class="ozon-fbo-hero-actions">
+            <button id="ozonFboCheckBtn" data-permission-admin class="secondary small" type="button">Проверить связь с Ozon</button>
+            <a id="ozonFboLkLink" class="button-like secondary small" href="https://seller.ozon.ru/app/supply/orders?filter=SupplyPreparation" target="_blank" rel="noopener noreferrer">Заявки в кабинете Ozon</a>
+          </div>
+        </section>
+
+        <div class="ozon-fbo-grid">
+          <section class="settings-card panel-card ozon-fbo-form-card" aria-labelledby="ozonFboFormTitle">
+            <div class="settings-card-head">
+              <div>
+                <h3 id="ozonFboFormTitle">Новая поставка</h3>
+              </div>
+            </div>
+            <form id="ozonFboRunForm" data-permission-write="ozonFbo" class="settings-form ozon-fbo-form" novalidate>
+              <fieldset class="ozon-fbo-fieldset">
+                <legend>Режим</legend>
+                <label class="ozon-fbo-choice"><input type="radio" name="ozonFboMode" value="trial" checked /><span>Пробная поставка и проверка слотов (заявки не создаются)</span></label>
+                <label class="ozon-fbo-choice"><input type="radio" name="ozonFboMode" value="live" /><span>Создать поставку и заполнить грузоместа</span></label>
+                <label class="ozon-fbo-choice"><input type="radio" name="ozonFboMode" value="live_nocargo" /><span>Создать поставку без грузомест</span></label>
+                <label class="ozon-fbo-choice"><input type="radio" name="ozonFboMode" value="cargo" /><span>Заполнить грузоместа по созданным поставкам</span></label>
+              </fieldset>
+
+              <div id="ozonFboPlanSource" class="ozon-fbo-source">
+                <fieldset class="ozon-fbo-fieldset ozon-fbo-fieldset-row">
+                  <legend>План</legend>
+                  <label class="ozon-fbo-choice"><input type="radio" name="ozonFboSource" value="file" checked /><span>Таблица .xlsx</span></label>
+                  <label class="ozon-fbo-choice"><input type="radio" name="ozonFboSource" value="manual" /><span>Ручной ввод</span></label>
+                </fieldset>
+                <div id="ozonFboFileSource" class="ozon-fbo-source">
+                  <label>Файл .xlsx
+                    <input id="ozonFboFile" type="file" accept=".xlsx" />
+                  </label>
+                  <label>Лист
+                    <select id="ozonFboSheet" disabled><option value="">Сначала выберите файл</option></select>
+                  </label>
+                </div>
+                <div id="ozonFboManualSource" class="ozon-fbo-source hidden">
+                  <label>Строки «артикул; кластер; количество»
+                    <textarea id="ozonFboManualText" rows="7" spellcheck="false" placeholder="AT-L-A3; Пермь; 10&#10;AT-P-P3; все; 20"></textarea>
+                  </label>
+                  <label>Название списка
+                    <input id="ozonFboListName" value="ручной ввод" maxlength="120" />
+                  </label>
+                </div>
+                <label>Артикулы через запятую (пусто — все)
+                  <input id="ozonFboArticles" autocomplete="off" placeholder="AT-L-A3, AT-P-P3" />
+                </label>
+              </div>
+
+              <div id="ozonFboOrdersSource" class="ozon-fbo-source hidden">
+                <p class="muted">Заявки Ozon, ожидающие грузомест. Загрузите список и оставьте выделенными нужные.</p>
+                <div class="ozon-fbo-orders-toolbar">
+                  <button id="ozonFboLoadOrdersBtn" class="secondary" type="button">Загрузить заявки из Ozon</button>
+                  <button id="ozonFboSelectAllOrdersBtn" class="secondary" type="button" disabled>Выделить все</button>
+                  <span id="ozonFboOrdersStatus" class="muted">Заявки ещё не загружены.</span>
+                </div>
+                <div class="analytics-table ozon-fbo-orders">
+                  <table>
+                    <thead><tr><th class="ozon-fbo-col-check" aria-label="Выбор"></th><th>Заявка</th><th>Слот и срок</th><th>Склад и товары, коробы по вместимости</th></tr></thead>
+                    <tbody id="ozonFboOrdersRows"><tr><td colspan="4" class="muted">Список пуст.</td></tr></tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="ozon-fbo-flags">
+                <label class="ozon-fbo-choice"><input id="ozonFboForce" type="checkbox" /><span>Повторить по артикулам, у которых заявка уже есть</span></label>
+                <label class="ozon-fbo-choice"><input id="ozonFboConfirmEach" type="checkbox" /><span>Подтверждать каждый артикул отдельно</span></label>
+                <label class="ozon-fbo-choice"><input id="ozonFboAutoConfirm" type="checkbox" /><span>Без подтверждения</span></label>
+              </div>
+
+              <div class="ozon-fbo-form-actions">
+                <p id="ozonFboFormStatus" class="ozon-fbo-status" role="status" aria-live="polite"></p>
+                <button id="ozonFboStartBtn" type="submit">Запустить</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="panel-card ozon-fbo-run-card" aria-labelledby="ozonFboRunTitle">
+            <div class="analytics-panel-head ozon-fbo-run-head">
+              <div>
+                <h3 id="ozonFboRunTitle">Поставка</h3>
+                <p id="ozonFboRunMeta" class="muted">Поставок ещё не было.</p>
+              </div>
+              <div class="ozon-fbo-run-actions">
+                <button id="ozonFboStopBtn" data-permission-write="ozonFbo" class="secondary" type="button" disabled>Остановить</button>
+                <button id="ozonFboReleaseBtn" data-permission-write="ozonFbo" class="secondary hidden" type="button">Снять зависшую поставку</button>
+              </div>
+            </div>
+            <div id="ozonFboQuestionBar" class="ozon-fbo-question-bar hidden" role="status">
+              <span id="ozonFboQuestionBarText">Нужен ваш ответ.</span>
+              <button id="ozonFboOpenQuestionBtn" type="button">Открыть вопрос</button>
+            </div>
+            <div id="ozonFboRunFiles" class="ozon-fbo-run-files hidden">
+              <a id="ozonFboResultLink" class="link-btn hidden" href="#">Скачать результат .xlsx</a>
+              <a id="ozonFboReportLink" class="link-btn" href="#">Отчёт</a>
+              <a id="ozonFboApiLogLink" class="link-btn" href="#">Логи запросов Ozon</a>
+            </div>
+            <pre id="ozonFboLog" class="ozon-fbo-log" tabindex="0" aria-label="Журнал"></pre>
+            <div class="analytics-table ozon-fbo-results">
+              <table>
+                <thead><tr><th>Артикул</th><th>Кластер</th><th class="ozon-fbo-num">План</th><th class="ozon-fbo-num">Факт</th><th>Статус</th><th>Примечание</th></tr></thead>
+                <tbody id="ozonFboRows"><tr><td colspan="6" class="muted">Результатов пока нет.</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <div class="settings-grid ozon-fbo-bottom">
+          <section class="settings-card panel-card" aria-labelledby="ozonFboHistoryTitle">
+            <div class="settings-card-head">
+              <div>
+                <h3 id="ozonFboHistoryTitle">История</h3>
+              </div>
+              <button id="ozonFboHistoryRefreshBtn" class="secondary small" type="button">Обновить</button>
+            </div>
+            <div class="analytics-table ozon-fbo-history">
+              <table>
+                <thead><tr><th>Дата</th><th>Режим</th><th>Список</th><th>Статус</th><th>Итог</th><th aria-label="Действия"></th></tr></thead>
+                <tbody id="ozonFboHistoryRows"><tr><td colspan="6" class="muted">Поставок ещё не было.</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="settings-card panel-card" aria-labelledby="ozonFboSettingsTitle">
+            <div class="settings-card-head">
+              <div>
+                <h3 id="ozonFboSettingsTitle">Настройки</h3>
+              </div>
+            </div>
+            <form id="ozonFboSettingsForm" data-permission-admin class="settings-form ozon-fbo-settings" novalidate>
+              <div class="ozon-fbo-settings-grid">
+                <label>Вместимость грузоместа по умолчанию, шт.<input id="ozonFboSetting_default_cargo_capacity" type="number" min="1" step="1" /></label>
+                <label>Тип грузоместа (BOX — короб)<input id="ozonFboSetting_cargo_type" /></label>
+                <label>Точка сдачи<input id="ozonFboSetting_drop_off_name" /></label>
+                <label>Слот не раньше чем через, дней<input id="ozonFboSetting_min_slot_offset_days" type="number" min="0" step="1" /></label>
+                <label>Окон по 28 дней при выборе слота<input id="ozonFboSetting_slot_max_windows" type="number" min="1" step="1" /></label>
+                <label>Минимум штук в кластер<input id="ozonFboSetting_min_qty" type="number" min="1" step="1" /></label>
+                <label>Кратность количества<input id="ozonFboSetting_step" type="number" min="1" step="1" /></label>
+                <label>Пауза при «кластер недоступен», сек<input id="ozonFboSetting_unavailable_retry_sec" type="number" min="1" step="1" /></label>
+              </div>
+              <label>Вместимость по артикулам (артикул = штук, по строке)<textarea id="ozonFboSetting_cargo_capacity" rows="4" spellcheck="false" placeholder="AT-L-AM-S = 5"></textarea></label>
+              <label>Кластеры для «все» (по одному на строку)<textarea id="ozonFboSetting_all_clusters" rows="4" spellcheck="false"></textarea></label>
+              <div class="ozon-fbo-form-actions">
+                <p id="ozonFboSettingsStatus" class="ozon-fbo-status" role="status" aria-live="polite"></p>
+                <button id="ozonFboSaveSettingsBtn" class="secondary" type="submit">Сохранить настройки</button>
+              </div>
+            </form>
+          </section>
+        </div>
+
+        <div id="ozonFboDecisionModal" class="user-create-modal hidden" aria-hidden="true">
+          <div class="user-create-modal-backdrop" data-ozon-fbo-decision-close></div>
+          <div class="user-create-modal-dialog ozon-fbo-decision-dialog" role="dialog" aria-modal="true" aria-labelledby="ozonFboDecisionTitle">
+            <div class="user-create-modal-topbar">
+              <div>
+                <strong id="ozonFboDecisionTitle">Подтверждение</strong>
+                <p id="ozonFboDecisionHint" class="muted">Данные уйдут в Ozon только после подтверждения.</p>
+              </div>
+              <button id="ozonFboDecisionCloseBtn" class="icon-btn" type="button" aria-label="Закрыть">×</button>
+            </div>
+            <pre id="ozonFboDecisionText" class="ozon-fbo-log ozon-fbo-decision-text" tabindex="0"></pre>
+            <div class="user-create-form-actions">
+              <button id="ozonFboDecisionNoBtn" data-permission-write="ozonFbo" class="secondary" type="button">Нет</button>
+              <button id="ozonFboDecisionYesBtn" data-permission-write="ozonFbo" type="button">Да</button>
+            </div>
+          </div>
+        </div>
       </main>
 
       <main id="reviewsView" class="reviews-page view hidden">
@@ -532,9 +698,8 @@
           <div class="section-title-row">
             <div>
               <h2>Отзывы Ozon</h2>
-              <p>Список отзывов и ответы продавца</p>
             </div>
-            <button id="syncReviewsBtn" class="secondary small" type="button">Обновить</button>
+            <button id="syncReviewsBtn" data-permission-write="reviews" class="secondary small" type="button">Обновить</button>
           </div>
           <div class="filters review-filters">
             <select id="reviewStatusFilter" aria-label="Фильтр отзывов">
@@ -548,7 +713,7 @@
         </section>
 
         <section class="review-detail-panel panel-card">
-          <div id="reviewEmptyState" class="empty-state">Выберите отзыв слева. Ozon-отзывы обновляются фоново, если включены в .env.</div>
+          <div id="reviewEmptyState" class="empty-state">Выберите отзыв слева.</div>
           <div id="reviewPanel" class="review-panel hidden">
             <div class="review-header">
               <div>
@@ -566,14 +731,14 @@
             <section class="review-reply-card">
               <h3>Ответ на отзыв</h3>
               <div id="reviewExistingReply" class="existing-reply hidden"></div>
-              <form id="reviewReplyForm" class="review-reply-form">
-                <textarea id="reviewReplyText" placeholder="Напишите ответ на отзыв..."></textarea>
+              <form id="reviewReplyForm" data-permission-write="reviews" class="review-reply-form">
+                <label>Текст ответа<textarea id="reviewReplyText" placeholder="Напишите ответ на отзыв..." required></textarea></label>
                 <div class="review-actions">
                   <label class="check-filter"><input id="reviewMarkProcessed" type="checkbox" checked /> отметить как обработанный</label>
                   <button type="submit">Ответить</button>
                 </div>
               </form>
-              <button id="startChatFromReviewBtn" class="ghost" type="button">Создать чат по отзыву</button>
+              <button id="startChatFromReviewBtn" data-permission-write="reviews chats" class="ghost" type="button">Создать чат по отзыву</button>
               <p class="muted">Чат можно создать только если Ozon передал в отзыве номер отправления.</p>
             </section>
           </div>
@@ -585,9 +750,8 @@
           <div class="section-title-row">
             <div>
               <h2>Вопросы Ozon</h2>
-              <p>Вопросы покупателей по товарам и ответы продавца</p>
             </div>
-            <button id="syncQuestionsBtn" class="secondary small" type="button">Обновить</button>
+            <button id="syncQuestionsBtn" data-permission-write="questions" class="secondary small" type="button">Обновить</button>
           </div>
           <div class="filters review-filters">
             <select id="questionStatusFilter" aria-label="Фильтр вопросов">
@@ -601,7 +765,7 @@
         </section>
 
         <section class="review-detail-panel panel-card">
-          <div id="questionEmptyState" class="empty-state">Выберите вопрос слева. Ozon-вопросы обновляются фоново, если включены в .env.</div>
+          <div id="questionEmptyState" class="empty-state">Выберите вопрос слева.</div>
           <div id="questionPanel" class="review-panel hidden">
             <div class="review-header">
               <div>
@@ -619,14 +783,13 @@
             <section class="review-reply-card">
               <h3>Ответ на вопрос</h3>
               <div id="questionExistingAnswer" class="existing-reply hidden"></div>
-              <form id="questionAnswerForm" class="review-reply-form">
-                <textarea id="questionAnswerText" placeholder="Напишите ответ на вопрос покупателя..."></textarea>
+              <form id="questionAnswerForm" data-permission-write="questions" class="review-reply-form">
+                <label>Текст ответа<textarea id="questionAnswerText" placeholder="Напишите ответ на вопрос покупателя..." required></textarea></label>
                 <div class="review-actions">
                   <label class="check-filter"><input id="questionMarkProcessed" type="checkbox" checked /> отметить как обработанный</label>
                   <button type="submit">Ответить</button>
                 </div>
               </form>
-              <p class="muted">Ответ отправляется в Ozon Seller через API. После отправки CRM сохранит текст ответа локально.</p>
             </section>
           </div>
         </section>
@@ -636,7 +799,7 @@
         <section class="tasks-ref-toolbar" aria-label="Фильтры задач">
           <div class="tasks-ref-title-row">
             <h2>Задачи</h2>
-            <button id="taskStandaloneNewBtn" class="tasks-ref-new-btn" type="button">Новая задача</button>
+            <button id="taskStandaloneNewBtn" data-permission-write="tasks" class="tasks-ref-new-btn" type="button">Новая задача</button>
           </div>
           <div class="tasks-ref-search" role="search">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
@@ -676,11 +839,10 @@
           <input id="taskBucketFilter" type="hidden" value="active" />
         </section>
         <section id="taskStandaloneCreatePanel" class="panel-card tasks-standalone-create-panel hidden" aria-label="Создание задачи без чата">
-          <form id="taskStandaloneForm" class="tasks-standalone-form">
+          <form id="taskStandaloneForm" data-permission-write="tasks" class="tasks-standalone-form">
             <div class="tasks-standalone-form-head">
               <div>
                 <h3>Новая задача</h3>
-                <p>Создаётся без привязки к чату. В списке у неё не будет кнопки «в чат».</p>
               </div>
               <button id="taskStandaloneCancelBtn" class="icon-btn" type="button" aria-label="Закрыть форму">×</button>
             </div>
@@ -717,11 +879,10 @@
           <div class="tasks-toolbar knowledge-toolbar">
             <div>
               <h2>База знаний</h2>
-              <p>Инструкции, шаблоны ответов, правила возвратов и информация по товарам.</p>
             </div>
             <div class="knowledge-search-row">
-              <input id="knowledgeSearch" placeholder="Поиск по названию, тегам и содержанию" />
-              <button id="knowledgeNewArticleBtn" class="admin-only hidden" type="button">Добавить статью</button>
+              <input id="knowledgeSearch" placeholder="Поиск по названию, тегам и содержанию" aria-label="Поиск по базе знаний" />
+              <button id="knowledgeNewArticleBtn" data-permission-write="knowledge" class="hidden" type="button" data-permission-display="knowledge">Добавить статью</button>
             </div>
           </div>
           <div class="knowledge-layout knowledge-layout-v51">
@@ -729,13 +890,12 @@
               <div class="knowledge-left-head">
                 <div>
                   <div class="knowledge-mini-head">Разделы и статьи</div>
-                  <p class="knowledge-hint">Выберите раздел, затем откройте статью.</p>
                 </div>
               </div>
               <div id="knowledgeCategories" class="knowledge-category-list knowledge-tree"></div>
-              <form id="knowledgeCategoryForm" class="knowledge-category-form admin-only hidden">
+              <form id="knowledgeCategoryForm" data-permission-write="knowledge" class="knowledge-category-form hidden" data-permission-display="knowledge">
                 <div class="knowledge-form-caption">Быстрое добавление раздела</div>
-                <input id="knowledgeCategoryTitle" placeholder="Новый раздел" />
+                <input id="knowledgeCategoryTitle" placeholder="Новый раздел" aria-label="Название нового раздела" />
                 <button class="small secondary" type="submit">Добавить раздел</button>
               </form>
               <div id="knowledgeArticlesList" class="knowledge-articles-list hidden"></div>
@@ -743,7 +903,7 @@
             <section class="knowledge-editor knowledge-reader-panel">
               <div id="knowledgeEmpty" class="knowledge-empty-state">
                 <h3>Выберите статью</h3>
-                <p class="muted">Слева откройте раздел и выберите инструкцию для чтения. Новую статью можно создать кнопкой сверху.</p>
+                <p class="muted">Выберите статью слева.</p>
               </div>
 
               <article id="knowledgeReader" class="knowledge-reader hidden">
@@ -755,14 +915,14 @@
                   </div>
                   <div class="knowledge-reader-actions">
                     <button id="knowledgeBackToListBtn" class="secondary small knowledge-mobile-back hidden" type="button">← К списку</button>
-                    <button id="knowledgeEditArticleBtn" class="icon-btn knowledge-edit-icon admin-only hidden" type="button" title="Редактировать статью" aria-label="Редактировать статью">✎</button>
+                    <button id="knowledgeEditArticleBtn" data-permission-write="knowledge" class="icon-btn knowledge-edit-icon hidden" type="button" title="Редактировать статью" aria-label="Редактировать статью" data-permission-display="knowledge">✎</button>
                   </div>
                 </div>
                 <img id="knowledgeReaderImage" class="knowledge-reader-image hidden" alt="Изображение статьи" />
                 <div id="knowledgeReaderContent" class="knowledge-reader-content"></div>
               </article>
 
-              <form id="knowledgeArticleForm" class="knowledge-article-form admin-only hidden">
+              <form id="knowledgeArticleForm" data-permission-write="knowledge" class="knowledge-article-form hidden">
                 <div class="knowledge-form-head">
                   <h3 id="knowledgeFormTitle">Новая статья</h3>
                   <div class="knowledge-form-actions">
@@ -770,18 +930,17 @@
                     <button id="knowledgeCancelEditBtn" class="secondary small" type="button">Отмена</button>
                   </div>
                 </div>
-                <input id="knowledgeArticleTitle" placeholder="Название статьи" />
-                <select id="knowledgeArticleCategory"><option value="">Без раздела</option></select>
-                <input id="knowledgeArticleTags" placeholder="Теги: возврат, доставка, гарантия" />
+                <label>Название<input id="knowledgeArticleTitle" placeholder="Название статьи" required /></label>
+                <label>Раздел<select id="knowledgeArticleCategory"><option value="">Без раздела</option></select></label>
+                <label>Теги<input id="knowledgeArticleTags" placeholder="Теги: возврат, доставка, гарантия" /></label>
                 <label class="knowledge-image-field">
                   <span>Изображение к статье</span>
                   <input id="knowledgeArticleImageFile" type="file" accept="image/*" />
                 </label>
                 <div id="knowledgeImagePreview" class="knowledge-image-preview hidden"></div>
                 <label class="knowledge-clear-image hidden" id="knowledgeClearImageLabel"><input id="knowledgeClearImage" type="checkbox" /> Удалить изображение из статьи</label>
-                <textarea id="knowledgeArticleContent" placeholder="Текст инструкции, шаблон ответа, важные нюансы..."></textarea>
+                <label>Текст статьи<textarea id="knowledgeArticleContent" placeholder="Текст инструкции, шаблон ответа, важные нюансы..."></textarea></label>
                 <button type="submit">Сохранить статью</button>
-                <p class="muted">Рекомендуемые разделы: возвраты, доставка, гарантия, размеры, карточки товаров, конфликтные ситуации, шаблоны ответов.</p>
               </form>
             </section>
           </div>
@@ -792,7 +951,6 @@
         <section class="tasks-toolbar panel-card">
           <div>
             <h2>Сотрудники</h2>
-            <p>Создание сотрудников и управление доступом.</p>
           </div>
         </section>
         <section class="settings-grid one-col users-settings-grid">
@@ -800,12 +958,11 @@
             <div class="users-manage-head">
               <div>
                 <h3>Список сотрудников</h3>
-                <p class="muted">Управляйте ролями, доступом и паролями сотрудников.</p>
               </div>
             </div>
             <div id="usersList" class="users-list"></div>
             <div class="users-manage-footer">
-              <button id="openUserCreateModalBtn" class="user-light-btn user-create-open-btn" type="button">Добавить сотрудника</button>
+              <button id="openUserCreateModalBtn" type="button">Добавить сотрудника</button>
             </div>
           </div>
         </section>
@@ -816,22 +973,24 @@
             <div class="user-create-modal-topbar">
               <div>
                 <strong id="userCreateModalTitle">Новый сотрудник</strong>
-                <p>Заполните данные для создания нового пользователя CRM.</p>
               </div>
-              <button id="userCreateModalCloseBtn" class="user-create-modal-close" type="button" aria-label="Закрыть">×</button>
+              <button id="userCreateModalCloseBtn" class="icon-btn" type="button" aria-label="Закрыть">×</button>
             </div>
             <form id="userCreateForm" class="settings-form user-create-form">
-              <input id="newUserUsername" autocomplete="off" placeholder="Логин" minlength="2" required />
-              <input id="newUserDisplayName" autocomplete="off" placeholder="Имя сотрудника" />
-              <input id="newUserPassword" autocomplete="new-password" type="password" placeholder="Пароль, минимум 6 символов" minlength="6" required />
-              <select id="newUserRole">
-                <option value="manager">Менеджер</option>
-                <option value="viewer">Наблюдатель</option>
-                <option value="admin">Администратор</option>
-              </select>
+              <label>Логин<input id="newUserUsername" autocomplete="off" placeholder="Логин" minlength="2" required /></label>
+              <label>Имя сотрудника<input id="newUserDisplayName" autocomplete="off" placeholder="Имя сотрудника" /></label>
+              <label>Пароль<input id="newUserPassword" autocomplete="new-password" type="password" placeholder="Минимум 6 символов" minlength="6" required /></label>
+              <label>Роль
+                <select id="newUserRole">
+                  <option value="manager">Менеджер</option>
+                  <option value="viewer">Наблюдатель</option>
+                  <option value="admin">Администратор</option>
+                </select>
+              </label>
+              <fieldset class="employee-permissions"><legend>Доступ к разделам</legend><p id="newUserPermissionsNote" class="muted"></p><div id="newUserPermissions" class="employee-permissions-list"></div></fieldset>
               <div class="user-create-form-actions">
-                <button id="cancelUserCreateBtn" class="user-light-btn" type="button">Отмена</button>
-                <button class="user-light-btn user-light-btn-primary" type="submit">Создать сотрудника</button>
+                <button id="cancelUserCreateBtn" class="secondary" type="button">Отмена</button>
+                <button type="submit">Создать сотрудника</button>
               </div>
             </form>
           </div>
@@ -845,7 +1004,7 @@
                 <strong id="userEditModalTitle">Редактировать сотрудника</strong>
                 <p id="userEditModalSubtitle">Измените роль, активность или пароль сотрудника.</p>
               </div>
-              <button id="userEditModalCloseBtn" class="user-create-modal-close" type="button" aria-label="Закрыть">×</button>
+              <button id="userEditModalCloseBtn" class="icon-btn" type="button" aria-label="Закрыть">×</button>
             </div>
             <form id="userEditForm" class="settings-form user-create-form">
               <label>Логин<input id="editUserUsername" autocomplete="off" readonly /></label>
@@ -862,9 +1021,10 @@
                 <input id="editUserActive" type="checkbox" />
                 <span>Сотрудник активен</span>
               </label>
+              <fieldset class="employee-permissions"><legend>Доступ к разделам</legend><p id="editUserPermissionsNote" class="muted"></p><div id="editUserPermissions" class="employee-permissions-list"></div></fieldset>
               <div class="user-create-form-actions">
-                <button id="cancelUserEditBtn" class="user-light-btn" type="button">Отмена</button>
-                <button class="user-light-btn user-light-btn-primary" type="submit">Сохранить</button>
+                <button id="cancelUserEditBtn" class="secondary" type="button">Отмена</button>
+                <button type="submit">Сохранить</button>
               </div>
             </form>
           </div>
@@ -876,7 +1036,6 @@
         <section class="tasks-toolbar panel-card tech-settings-hero">
           <div>
             <h2>Технические настройки</h2>
-            <p>Статусы чатов для фильтрации и работы менеджеров.</p>
           </div>
         </section>
 
@@ -885,22 +1044,23 @@
             <div class="settings-card-head">
               <div>
                 <h3>Статусы чатов</h3>
-                <p class="muted">Добавляйте свои статусы, меняйте порядок, цвет и активность. Воронки временно скрыты.</p>
               </div>
             </div>
 
-            <form id="chatStatusForm" class="chat-status-create-form">
-              <input id="chatStatusTitle" placeholder="Новый статус, например: Ожидает видео" required />
-              <select id="chatStatusColor" aria-label="Цвет статуса">
-                <option value="orange">🟠</option>
-                <option value="blue">🔵</option>
-                <option value="purple">🟣</option>
-                <option value="green">🟢</option>
-                <option value="red">🔴</option>
-                <option value="gray">⚪</option>
-              </select>
-              <input id="chatStatusSort" type="number" placeholder="Порядок" value="0" />
-              <button class="crm-light-btn" type="submit">Добавить статус</button>
+            <form id="chatStatusForm" data-permission-write="techSettings" class="chat-status-create-form">
+              <label>Название<input id="chatStatusTitle" placeholder="Например: Ожидает видео" required /></label>
+              <label>Цвет
+                <select id="chatStatusColor" aria-label="Цвет статуса">
+                  <option value="orange">🟠</option>
+                  <option value="blue">🔵</option>
+                  <option value="purple">🟣</option>
+                  <option value="green">🟢</option>
+                  <option value="red">🔴</option>
+                  <option value="gray">⚪</option>
+                </select>
+              </label>
+              <label>Порядок<input id="chatStatusSort" type="number" value="0" /></label>
+              <button class="secondary" type="submit">Добавить статус</button>
             </form>
 
             <div class="status-settings-header status-settings-header-compact" aria-hidden="true">
@@ -909,11 +1069,10 @@
               <span>Активность</span>
               <span>Действия</span>
             </div>
-            <div id="chatStatusesList" class="status-settings-list"></div>
+            <div id="chatStatusesList" data-permission-write="techSettings" class="status-settings-list"></div>
 
             <div class="settings-actions-bottom settings-actions-bottom-compact">
-              <button id="saveChatSettingsBottomBtn" class="crm-light-btn hidden" type="button">Сохранить</button>
-              <p class="muted">Редактирование и удаление доступны по иконкам рядом со статусом.</p>
+              <button id="saveChatSettingsBottomBtn" class="secondary hidden" type="button">Сохранить</button>
             </div>
           </div>
 
@@ -921,18 +1080,19 @@
             <div class="settings-card-head">
               <div>
                 <h3>Типы задач</h3>
-                <p class="muted">Для типа задачи можно задать поле комментария и активный статус, который применяется к связанному чату.</p>
               </div>
             </div>
 
-            <form id="taskTypeForm" class="task-type-create-form">
-              <input id="taskTypeTitle" placeholder="Тип задачи, например: Доставки" required />
-              <input id="taskTypeCommentLabel" placeholder="Название поля, например: Адрес" value="Комментарий" />
-              <select id="taskTypeChatStatus" aria-label="Статус чата для нового типа задачи">
-                <option value="">Не менять статус чата</option>
-              </select>
-              <input id="taskTypeSort" type="number" placeholder="Порядок" value="0" />
-              <button id="taskTypeCreateBtn" class="crm-light-btn" type="submit">Добавить тип</button>
+            <form id="taskTypeForm" data-permission-write="techSettings" class="task-type-create-form">
+              <label>Тип задачи<input id="taskTypeTitle" placeholder="Например: Доставки" required /></label>
+              <label>Поле в карточке<input id="taskTypeCommentLabel" placeholder="Например: Адрес" value="Комментарий" /></label>
+              <label>Статус чата
+                <select id="taskTypeChatStatus" aria-label="Статус чата для нового типа задачи">
+                  <option value="">Не менять статус чата</option>
+                </select>
+              </label>
+              <label>Порядок<input id="taskTypeSort" type="number" value="0" /></label>
+              <button id="taskTypeCreateBtn" class="secondary" type="submit">Добавить тип</button>
             </form>
 
             <div class="task-type-settings-header" aria-hidden="true">
@@ -943,14 +1103,13 @@
               <span>Активен</span>
               <span></span>
             </div>
-            <div id="taskTypesSettingsList" class="task-type-settings-list"></div>
+            <div id="taskTypesSettingsList" data-permission-write="techSettings" class="task-type-settings-list"></div>
           </div>
 
           <section id="yandexOAuthLinksCard" class="settings-card panel-card admin-only hidden">
             <div class="settings-card-head">
               <div>
                 <h3>Авторизация через Яндекс</h3>
-                <p class="muted">Свяжите логин или email Яндекса с существующим сотрудником CRM. Настройки OAuth и пароли здесь не хранятся.</p>
                 <p class="muted">Отключение запрещает только новые входы через Яндекс. Открытая CRM-сессия действует до выхода или истечения срока; для немедленного полного отключения деактивируйте сотрудника.</p>
               </div>
             </div>
@@ -967,7 +1126,7 @@
               <label>Сотрудник CRM
                 <select id="yandexOAuthCrmUser" required></select>
               </label>
-              <button class="crm-light-btn" type="submit">Добавить связь</button>
+              <button class="secondary" type="submit">Добавить связь</button>
             </form>
             <div id="yandexOAuthLinksList" class="users-list"></div>
           </section>
@@ -978,7 +1137,6 @@
         <section class="tasks-toolbar panel-card">
           <div>
             <h2>Профиль</h2>
-            <p>Изменение вашего логина, имени и пароля.</p>
           </div>
         </section>
         <section class="settings-grid one-col">
@@ -1009,7 +1167,7 @@
       <div class="knowledge-modal-topbar">
         <button id="knowledgeModalBackBtn" class="knowledge-modal-nav" type="button" aria-label="Назад к списку">←</button>
         <div class="knowledge-modal-toolbar-actions">
-          <button id="knowledgeModalEditBtn" class="secondary small admin-only hidden" type="button">Редактировать</button>
+          <button id="knowledgeModalEditBtn" class="secondary small" data-permission-write="knowledge" type="button">Редактировать</button>
           <button id="knowledgeModalCloseBtn" class="knowledge-modal-close" type="button" aria-label="Закрыть">✕</button>
         </div>
       </div>
@@ -1025,6 +1183,7 @@
 
   <div id="notificationToasts" class="notification-toast-stack" aria-live="polite"></div>
 
-  <script src="/static/app.js?v=v95-19-notifications-today-20260927"></script>
+  <script src="/static/permissions.js?v=v97-employee-permissions-20261109"></script>
+  <script src="/static/app.js?v=v97-employee-permissions-20261109"></script>
 </body>
 </html>

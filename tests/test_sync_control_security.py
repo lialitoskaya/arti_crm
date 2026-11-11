@@ -188,7 +188,7 @@ class SyncControlSecurityTests(unittest.TestCase):
         self.assertEqual(403, no_csrf.status_code)
         self.assertIn("CSRF", str(no_csrf.json().get("detail")))
         self.assertEqual(403, viewer.status_code)
-        self.assertEqual("Нужны права администратора", viewer.json().get("detail"))
+        self.assertEqual("Нет доступа к этому действию или разделу", viewer.json().get("detail"))
         self.assertEqual(401, anonymous.status_code)
         self.assertEqual("Требуется авторизация", anonymous.json().get("detail"))
         fetch.assert_not_awaited()

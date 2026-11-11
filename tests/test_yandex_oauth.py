@@ -405,6 +405,7 @@ class YandexOAuthTests(unittest.TestCase):
                 sessions_before = _session_count()
 
                 if scenario == "inactive":
+                    repo.create_user("remaining-admin", _PASSWORD, role="admin")
                     repo.update_user(int(linked_user["id"]), is_active=False)
                     expected_code = "account_inactive"
                 else:
@@ -541,7 +542,10 @@ class YandexOAuthTests(unittest.TestCase):
         for index, (environment, profile, error_code) in enumerate(scenarios):
             with self.subTest(index=index):
                 if index == 1:
+                    repo.create_user("remaining-admin", _PASSWORD, role="admin")
                     repo.update_user(int(self.user["id"]), is_active=False)
+
+                initial_users = repo.list_users()
 
                 async def exercise() -> httpx.Response:
                     async with await _client() as client:
@@ -561,7 +565,7 @@ class YandexOAuthTests(unittest.TestCase):
                 self.assertEqual(303, callback.status_code)
                 self.assertEqual(f"/?yandex_oauth={error_code}", callback.headers["location"])
                 self.assertEqual(0, _session_count())
-                self.assertEqual(1, len(repo.list_users()))
+                self.assertEqual(initial_users, repo.list_users())
 
     def test_provider_cancel_redirects_with_only_the_cancelled_code(self) -> None:
         environment = _oauth_environment({"id:yandex-user-1": "oauth-admin"})

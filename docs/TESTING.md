@@ -72,6 +72,16 @@ python -m unittest discover -s tests -p "test_*.py" -v
 5. сохранение исходного `PATH` в изолированном environment: `shutil.which("node")`
    после bootstrap даёт тот же результат, что и до него.
 
+Раздел «Поставки FBO» покрыт отдельными модулями: `tests/test_ozon_fbo_core.py`
+(правила, предохранители, расчёт артикула, боевой поток, httpx-клиент через
+`MockTransport`), `tests/test_ozon_fbo_pipeline.py` (конвейер, общий план, грузоместа,
+кластер «все», дубли — на подменённом Ozon и хранилище в памяти),
+`tests/test_ozon_fbo_repository.py` (таблицы, настройки, единственный активный прогон,
+вопрос/ответ, forward recovery), `tests/test_ozon_fbo_runner.py` (поток прогона с
+состоянием в SQLite), `tests/test_ozon_fbo_router.py` (HTTP-контракт и RBAC через
+in-memory ASGI-клиент) и `tests/test_ozon_fbo_ui.py` (характеризация разметки,
+скриптов, стилей и версии кэша).
+
 ## Осознанные ограничения
 
 Foundation пока не проверяет:

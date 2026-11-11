@@ -47,6 +47,10 @@ def _rows() -> list[tuple]:
 
 @pytest.mark.parametrize("kind", ["new_message", "new_question", "task_assigned", "task_updated", "event"])
 def test_day_scope_all_types_bounds_offsets_and_full_count(notification_db, kind):
+    if kind == "event":
+        # Unclassified legacy events are visible only to an administrator.
+        with db.get_connection() as conn:
+            conn.execute("UPDATE users SET role='admin' WHERE id IN (101, 102)")
     included = {
         _insert("2026-09-26T21:00:00Z", kind=kind),
         _insert("2026-09-27T00:00:00+03:00", kind=kind),

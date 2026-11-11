@@ -1,4 +1,4 @@
-const ARTI_CRM_SW_VERSION = 'v95-19-notifications-today-20260927';
+const ARTI_CRM_SW_VERSION = 'v97-employee-permissions-20261109';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();

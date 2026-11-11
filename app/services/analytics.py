@@ -241,6 +241,21 @@ def _closed_filter_sql(*, modifier: str, start: str, end: str, marketplace: str 
     return sql, params
 
 
+def _coarse_created_at_bounds(start: str, end: str) -> tuple[str, str]:
+    """Sargable pre-filter on the stored created_at text (all formats start with YYYY-MM-DD).
+
+    Two days of margin on each side cover any timezone modifier, so the exact
+    date(datetime(created_at, tz)) BETWEEN predicate still decides membership;
+    this only lets SQLite use idx_messages_direction_created_at instead of
+    evaluating the raw_json LIKE filter on every message in the table.
+    """
+    try:
+        from datetime import date, timedelta
+        return (date.fromisoformat(start) - timedelta(days=2)).isoformat(), (date.fromisoformat(end) + timedelta(days=3)).isoformat()
+    except Exception:
+        return "0000-00-00", "9999-12-31"
+
+
 def _daily_requests_cte_sql(
     *,
     modifier: str,
@@ -256,7 +271,8 @@ def _daily_requests_cte_sql(
     A request is the first inbound message in a chat on a local calendar day.
     The timezone is applied through SQLite's datetime modifier.
     """
-    params: list[Any] = [modifier, modifier, modifier, modifier, start, end]
+    coarse_from, coarse_to = _coarse_created_at_bounds(start, end)
+    params: list[Any] = [modifier, modifier, modifier, coarse_from, coarse_to, modifier, start, end]
     marketplace_sql = _marketplace_filter_sql("c", marketplace, params)
     hour_sql = _hour_filter_sql("local_hour", hour_from, hour_to, params) if include_hour_filter else ""
 
@@ -279,6 +295,7 @@ def _daily_requests_cte_sql(
             FROM messages m
             JOIN chats c ON c.id = m.chat_id
             WHERE m.direction='inbound'
+              AND m.created_at >= ? AND m.created_at < ?
               AND {_analytics_client_message_sql('m')}
               AND date(datetime(m.created_at, ?)) BETWEEN ? AND ?
               {marketplace_sql}
@@ -301,8 +318,9 @@ def _raw_inbound_where_sql(
     hour_from: int | None,
     hour_to: int | None,
 ) -> tuple[str, list[Any]]:
-    params: list[Any] = [modifier, start, end]
-    sql = f"m.direction='inbound' AND {_analytics_client_message_sql('m')} AND date(datetime(m.created_at, ?)) BETWEEN ? AND ?"
+    coarse_from, coarse_to = _coarse_created_at_bounds(start, end)
+    params: list[Any] = [coarse_from, coarse_to, modifier, start, end]
+    sql = f"m.direction='inbound' AND m.created_at >= ? AND m.created_at < ? AND {_analytics_client_message_sql('m')} AND date(datetime(m.created_at, ?)) BETWEEN ? AND ?"
     sql += _marketplace_filter_sql("c", marketplace, params)
     if hour_from is not None or hour_to is not None:
         params.append(modifier)
@@ -335,7 +353,8 @@ def _fetch_excluded_service_message_count(
     hour_to: int | None,
 ) -> int:
     """Count inbound-looking messages excluded from analytics as service/bot/system."""
-    params: list[Any] = [modifier, start, end]
+    coarse_from, coarse_to = _coarse_created_at_bounds(start, end)
+    params: list[Any] = [coarse_from, coarse_to, modifier, start, end]
     marketplace_sql = _marketplace_filter_sql("c", marketplace, params)
     hour_sql = ""
     if hour_from is not None or hour_to is not None:
@@ -347,6 +366,7 @@ def _fetch_excluded_service_message_count(
         FROM messages m
         JOIN chats c ON c.id = m.chat_id
         WHERE m.direction='inbound'
+          AND m.created_at >= ? AND m.created_at < ?
           AND NOT {_analytics_client_message_sql('m')}
           AND date(datetime(m.created_at, ?)) BETWEEN ? AND ?
           {marketplace_sql}
@@ -543,12 +563,17 @@ def _response_blocks_cte_sql(
     for peak hours (first inbound per chat per day). Response time must include
     every manager response cycle, not only the first daily request.
     """
-    params: list[Any] = [modifier, modifier, modifier, start, end]
+    coarse_from, coarse_to = _coarse_created_at_bounds(start, end)
+    params: list[Any] = [coarse_from, coarse_to, modifier, modifier, modifier, start, end]
     marketplace_sql = _marketplace_filter_sql("c", marketplace, params)
     hour_sql = _hour_filter_sql("request_hour", hour_from, hour_to, params) if include_hour_filter else ""
 
     return f"""
-        WITH ordered_messages AS (
+        WITH candidate_chats AS (
+            SELECT DISTINCT chat_id
+            FROM messages
+            WHERE direction='inbound' AND created_at >= ? AND created_at < ?
+        ), ordered_messages AS (
             SELECT
                 m.id,
                 m.chat_id,
@@ -569,6 +594,7 @@ def _response_blocks_cte_sql(
             FROM messages m
             JOIN chats c ON c.id = m.chat_id
             WHERE m.direction IN ('inbound', 'outbound')
+              AND m.chat_id IN (SELECT chat_id FROM candidate_chats)
               AND (m.direction != 'inbound' OR {_analytics_client_message_sql('m')})
         ),
         inbound_blocks_all AS (
@@ -741,7 +767,8 @@ def build_chat_analytics_drilldown(
     modifier = _tz_modifier(offset)
     safe_limit = max(1, min(int(limit or 1000), 5000))
 
-    params: list[Any] = [modifier, modifier, modifier, modifier, modifier, start, end]
+    coarse_from, coarse_to = _coarse_created_at_bounds(start, end)
+    params: list[Any] = [modifier, modifier, modifier, modifier, coarse_from, coarse_to, modifier, start, end]
     marketplace_sql = _marketplace_filter_sql("c", market, params)
     hour_sql = _hour_filter_sql("local_hour", h_from, h_to, params)
 
@@ -773,6 +800,7 @@ def build_chat_analytics_drilldown(
             FROM messages m
             JOIN chats c ON c.id = m.chat_id
             WHERE m.direction='inbound'
+              AND m.created_at >= ? AND m.created_at < ?
               AND {_analytics_client_message_sql('m')}
               AND date(datetime(m.created_at, ?)) BETWEEN ? AND ?
               {marketplace_sql}
@@ -811,7 +839,7 @@ def build_chat_analytics_drilldown(
 
         excluded_items: list[dict[str, Any]] = []
         if include_excluded:
-            excluded_params: list[Any] = [modifier, modifier, modifier, start, end]
+            excluded_params: list[Any] = [modifier, modifier, coarse_from, coarse_to, modifier, start, end]
             excluded_market_sql = _marketplace_filter_sql("c", market, excluded_params)
             excluded_hour_sql = ""
             if h_from is not None or h_to is not None:
@@ -837,6 +865,7 @@ def build_chat_analytics_drilldown(
                 FROM messages m
                 JOIN chats c ON c.id = m.chat_id
                 WHERE m.direction='inbound'
+                  AND m.created_at >= ? AND m.created_at < ?
                   AND NOT {_analytics_client_message_sql('m')}
                   AND date(datetime(m.created_at, ?)) BETWEEN ? AND ?
                   {excluded_market_sql}

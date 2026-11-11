@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import asyncio
 import ipaddress
 import os
@@ -28,12 +29,15 @@ _SAFE_ENV = {
     "WB_EVENTS_CURSOR_STATE_FILE": str(_TEMP_ROOT / "wb-cursor.json"),
     "WB_EVENTS_AUTO_IMPORT_PLAN_FILE": str(_TEMP_ROOT / "wb-plan.json"),
     "SUPPLY_PLANNING_CACHE_FILE": str(_TEMP_ROOT / "supply-cache.json"),
+    "OZON_FBO_LOG_DIR": str(_TEMP_ROOT / "ozon-fbo-logs"),
     "BOOTSTRAP_ADMIN_USERNAME": "test-bootstrap-admin",
     "BOOTSTRAP_ADMIN_PASSWORD": "test-bootstrap-password-2026",
     "ALLOW_INSECURE_DEV_AUTH": "false",
     "PYTHON_DOTENV_DISABLED": "1",
     "OZON_CLIENT_ID": "",
     "OZON_API_KEY": "",
+    "OZON_FBO_CLIENT_ID": "",
+    "OZON_FBO_API_KEY": "",
     "WB_BUYERS_CHAT_TOKEN": "",
     "WB_API_TOKEN": "",
     "WB_ANALYTICS_TOKEN": "",
@@ -131,6 +135,8 @@ _REAL_SQLITE_CONNECT = db.sqlite3.connect
 
 
 def _guarded_sqlite_connect(database, *args, **kwargs):
+    if database == ":memory:":
+        return _REAL_SQLITE_CONNECT(database, *args, **kwargs)
     try:
         candidate = Path(os.fspath(database)).resolve()
     except TypeError as exc:
@@ -168,7 +174,9 @@ def _remove_test_runtime_files() -> None:
         shutil.rmtree(_ATTACHMENTS_PATH)
 
 
-def tearDownModule() -> None:
+# Other test modules import and use these process-wide guards after this module runs.
+@atexit.register
+def _close_test_runtime() -> None:
     pytest_current_test = os.environ.get("PYTEST_CURRENT_TEST")
     _remove_test_runtime_files()
     _TEST_EVENT_LOOP.close()
