@@ -177,7 +177,7 @@ def _complete_partial_table(conn: sqlite3.Connection) -> None:
 
 
 def _create_indexes(conn: sqlite3.Connection) -> None:
-    conn.executescript(
+    statements = (
         f"""
         CREATE UNIQUE INDEX IF NOT EXISTS ux_message_send_operation_identity
             ON {MESSAGE_SEND_OPERATION_TABLE}(chat_id, client_operation_id);
@@ -211,6 +211,11 @@ def _create_indexes(conn: sqlite3.Connection) -> None:
             );
         """
     )
+    # executescript commits an open SQLite transaction. Keep the migration in
+    # its caller's transaction, including the coherent hosting conversion.
+    for statement in statements.split(";"):
+        if statement.strip():
+            conn.execute(statement)
 
 
 def assert_message_send_operation_schema(conn: sqlite3.Connection) -> None:

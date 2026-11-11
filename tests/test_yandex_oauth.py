@@ -297,7 +297,7 @@ class YandexOAuthTests(unittest.TestCase):
         self.assertEqual({int(self.user["id"])}, session_user_ids)
         self.assertEqual(2, _session_count())
 
-    def test_wsgi_entrypoints_initialize_schema_before_serving(self) -> None:
+    def test_wsgi_entrypoints_initialize_schema_and_admin_before_serving(self) -> None:
         project_root = Path(__file__).resolve().parents[1]
         for relative_path in ("server.py", "passenger_wsgi.py"):
             with self.subTest(entrypoint=relative_path):
@@ -317,9 +317,18 @@ class YandexOAuthTests(unittest.TestCase):
                     and isinstance(node.func, ast.Name)
                     and node.func.id == "ASGIMiddleware"
                 ]
+                bootstrap_lines = [
+                    node.lineno
+                    for node in ast.walk(tree)
+                    if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "ensure_initial_admin"
+                ]
                 self.assertTrue(init_lines, f"{relative_path} must initialize the database")
+                self.assertTrue(bootstrap_lines, f"{relative_path} must bootstrap the first administrator")
                 self.assertTrue(serve_lines, f"{relative_path} must construct the WSGI adapter")
-                self.assertLess(min(init_lines), min(serve_lines))
+                self.assertLess(min(init_lines), min(bootstrap_lines))
+                self.assertLess(min(bootstrap_lines), min(serve_lines))
 
     def test_persisted_link_survives_username_rename_and_reuse(self) -> None:
         yandex_user_id = "stable-yandex-user"

@@ -6,6 +6,9 @@ import uuid
 from typing import Any
 
 from app.db import get_connection
+from app.legacy_hosting_upgrade import (
+    get_legacy_review_conn, guard_legacy_registration_conn, list_legacy_reviews_conn,
+)
 from app.message_send_models import (
     MESSAGE_SEND_ECHO_MATCH_EARLY_SECONDS,
     MESSAGE_SEND_ECHO_MATCH_LATE_SECONDS,
@@ -21,6 +24,26 @@ from app.message_send_models import (
 
 class MessageSendOperationConflict(RuntimeError):
     pass
+
+
+def check_legacy_registration(
+    chat_id: int, client_operation_id: str, original_text: str,
+) -> dict[str, Any] | None:
+    """Resolve immutable history before connector-specific text normalization.
+
+    Registration repeats the same boundary guard under its write lock. This
+    preflight is not an alternate registration or send path.
+    """
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            return guard_legacy_registration_conn(
+                conn, chat_id=chat_id,
+                client_operation_id=str(client_operation_id or "").strip(),
+                original_text=original_text,
+            )
+        except ValueError as exc:
+            raise MessageSendOperationConflict(str(exc)) from None
 
 
 def _db_time(conn: sqlite3.Connection, modifier: str | None = None) -> str:
@@ -54,7 +77,7 @@ def _fetch_operation_conn(
             "SELECT * FROM message_send_operations WHERE id=?",
             (int(operation_id),),
         ).fetchone()
-    )
+    ) or get_legacy_review_conn(conn, operation_id=operation_id)
 
 
 def get_operation(operation_id: int) -> dict[str, Any] | None:
@@ -74,7 +97,9 @@ def get_operation_by_client_id(
             """,
             (int(chat_id), str(client_operation_id or "").strip()),
         ).fetchone()
-        return _operation_dict(row)
+        return _operation_dict(row) or get_legacy_review_conn(
+            conn, chat_id=chat_id, client_operation_id=str(client_operation_id or "").strip()
+        )
 
 
 def register_operation(
@@ -85,6 +110,7 @@ def register_operation(
     intent_origin: str,
     author_user_id: int | None,
     author_label: str,
+    original_text: str | None = None,
 ) -> tuple[dict[str, Any], bool]:
     operation_key = str(client_operation_id or "").strip()
     if not operation_key:
@@ -101,6 +127,15 @@ def register_operation(
         ).fetchone()
         if not chat:
             raise LookupError("Chat not found")
+        try:
+            legacy = guard_legacy_registration_conn(
+                conn, chat_id=chat_id, client_operation_id=operation_key,
+                original_text=text if original_text is None else original_text,
+            )
+        except ValueError as exc:
+            raise MessageSendOperationConflict(str(exc)) from None
+        if legacy:
+            return legacy, True
         existing = conn.execute(
             """
             SELECT * FROM message_send_operations
@@ -407,7 +442,7 @@ def list_chat_operations(chat_id: int) -> list[dict[str, Any]]:
             """,
             (int(chat_id),),
         ).fetchall()
-        return [_operation_dict(row) or {} for row in rows]
+        return [_operation_dict(row) or {} for row in rows] + list_legacy_reviews_conn(conn, chat_id)
 
 
 def count_operations() -> int:

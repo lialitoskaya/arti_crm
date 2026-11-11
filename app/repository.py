@@ -4654,6 +4654,9 @@ def users_exist() -> bool:
 def ensure_initial_admin(username: str, password: str, display_name: str | None = None) -> dict[str, Any] | None:
     """Create first admin user if the users table is empty."""
     with get_connection() as conn:
+        # Serialize the emptiness check and insert across startup workers, even
+        # when their configured usernames differ. Existing users are never reset.
+        conn.execute("BEGIN IMMEDIATE")
         count = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
         if int(count or 0) > 0:
             return None

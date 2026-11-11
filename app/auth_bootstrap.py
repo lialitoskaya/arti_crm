@@ -16,6 +16,10 @@ _FORWARDED_HEADERS = frozenset(
 )
 _PREVIOUS_DEFAULT_USERNAMES = frozenset({"admin"})
 _PREVIOUS_DEFAULT_PASSWORDS = frozenset({"admin123", "change_me_please"})
+_BOOTSTRAP_CREDENTIALS_ERROR = (
+    "Bootstrap credentials are missing or invalid; configure BOOTSTRAP_ADMIN_USERNAME "
+    "and BOOTSTRAP_ADMIN_PASSWORD (see docs/HOSTING_UPGRADE.md)."
+)
 
 
 class AuthBootstrapError(RuntimeError):
@@ -68,19 +72,19 @@ def resolve_bootstrap_admin_credentials(
     normalized_display_name = str(display_name or "").strip() or normalized_username
 
     if not normalized_username or not raw_password.strip():
-        raise AuthBootstrapError("Explicit bootstrap credentials are required")
+        raise AuthBootstrapError(_BOOTSTRAP_CREDENTIALS_ERROR)
     if not 2 <= len(normalized_username) <= 120:
-        raise AuthBootstrapError("Bootstrap credentials are invalid")
+        raise AuthBootstrapError(_BOOTSTRAP_CREDENTIALS_ERROR)
     if any(character.isspace() or not character.isprintable() for character in normalized_username):
-        raise AuthBootstrapError("Bootstrap credentials are invalid")
+        raise AuthBootstrapError(_BOOTSTRAP_CREDENTIALS_ERROR)
     if normalized_username.casefold() in _PREVIOUS_DEFAULT_USERNAMES:
-        raise AuthBootstrapError("Bootstrap credentials are invalid")
+        raise AuthBootstrapError(_BOOTSTRAP_CREDENTIALS_ERROR)
     if not 12 <= len(raw_password) <= 500:
-        raise AuthBootstrapError("Bootstrap credentials are invalid")
+        raise AuthBootstrapError(_BOOTSTRAP_CREDENTIALS_ERROR)
     if raw_password.strip().casefold() in _PREVIOUS_DEFAULT_PASSWORDS:
-        raise AuthBootstrapError("Bootstrap credentials are invalid")
+        raise AuthBootstrapError(_BOOTSTRAP_CREDENTIALS_ERROR)
     if not normalized_display_name or len(normalized_display_name) > 160:
-        raise AuthBootstrapError("Bootstrap credentials are invalid")
+        raise AuthBootstrapError(_BOOTSTRAP_CREDENTIALS_ERROR)
 
     return BootstrapAdminCredentials(
         username=normalized_username,

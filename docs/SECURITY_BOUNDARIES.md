@@ -1,5 +1,39 @@
 # Security boundaries
 
+## Startup configuration and diagnostics
+
+`app.runtime_config` loads the installation-root configuration before environment
+consumers. Hosting/process environment has priority (`override=False`); SQLite
+paths resolve from the project root, not the current working directory. Ambiguous
+historical defaults and a missing configured file beside a known existing database
+fail closed; startup never silently chooses or copies another database.
+
+Both WSGI entry points return a fixed, non-cacheable HTTP 500 on startup failure.
+The shared diagnostics logger emits only exception type, frame locations and fixed
+allowlisted hints, never raw exception messages, source lines, locals or configured
+values. Deployment must keep process logs private and block old site-root
+`startup_error.log` copies; this code no longer writes that public file and does not
+delete historical copies. `docs/HOSTING_UPGRADE.md` defines operator rollout and
+rollback precautions. Schema compatibility checks and message-send semantics are
+unchanged.
+
+## First-administrator bootstrap
+
+ASGI startup and both hosted WSGI entry points use the same
+`app.main.ensure_initial_admin()` after `init_db()`. An empty `users` table requires
+explicit, validated `BOOTSTRAP_ADMIN_USERNAME` and `BOOTSTRAP_ADMIN_PASSWORD`;
+there are no default credentials or authentication bypass. Errors name the
+required settings without disclosing values. The repository serializes its
+empty-table check and insert under `BEGIN IMMEDIATE`, including workers configured
+with different usernames.
+
+Any existing user makes bootstrap a no-op before configuration validation. It never
+resets a password, reactivates a user, changes a role, or rebinds an account. WSGI
+performs this bounded bootstrap only, not the ASGI lifecycle or its cleanup and
+background tasks. One-time owner configuration and recovery boundaries are in
+`docs/HOSTING_UPGRADE.md`; regression tests use only isolated temporary SQLite,
+synthetic credentials, disabled dotenv, and blocked external networking.
+
 ## Yandex OAuth login
 
 Yandex OAuth is an optional login path for existing CRM users. The password endpoint
