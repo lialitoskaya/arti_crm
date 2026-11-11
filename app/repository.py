@@ -855,6 +855,20 @@ def delete_ozon_support_chats() -> int:
         return delete_chats_by_ids(to_hide)
     return hidden
 
+def _stored_chat_metadata(row: sqlite3.Row) -> dict[str, Any]:
+    try:
+        return json.loads(row["metadata_json"] or "{}")
+    except Exception:
+        return {}
+
+
+def _preserve_crm_markers(incoming: dict[str, Any], stored: dict[str, Any]) -> None:
+    # Marketplace refreshes replace provider fields while CRM workflow markers survive.
+    for key, value in stored.items():
+        if str(key).startswith("_crm_"):
+            incoming[key] = value
+
+
 def upsert_chat(chat: ChatCreate) -> int:
     with get_connection() as conn:
         incoming_metadata = dict(chat.metadata or {})
@@ -867,16 +881,7 @@ def upsert_chat(chat: ChatCreate) -> int:
             (chat.marketplace, chat.external_chat_id),
         ).fetchone()
         if existing:
-            try:
-                existing_metadata = json.loads(existing["metadata_json"] or "{}")
-            except Exception:
-                existing_metadata = {}
-            # Marketplace sync brings fresh raw metadata, but must not erase CRM
-            # workflow markers. Losing _crm_status_manual caused closed chats to
-            # return to the active inbox after the next background sync.
-            for key, value in existing_metadata.items():
-                if str(key).startswith("_crm_"):
-                    incoming_metadata[key] = value
+            _preserve_crm_markers(incoming_metadata, _stored_chat_metadata(existing))
         conn.execute(
             """
             INSERT INTO chats (
@@ -933,14 +938,9 @@ def materialize_yandex_chat_with_messages(chat: ChatCreate, messages: list[Any])
         ).fetchone()
         if existing:
             chat_id = int(existing["id"])
-            try:
-                existing_metadata = json.loads(existing["metadata_json"] or "{}")
-            except Exception:
-                existing_metadata = {}
+            existing_metadata = _stored_chat_metadata(existing)
             incoming_metadata = dict(chat.metadata or {})
-            for key, value in existing_metadata.items():
-                if str(key).startswith("_crm_"):
-                    incoming_metadata[key] = value
+            _preserve_crm_markers(incoming_metadata, existing_metadata)
             metadata_json = json.dumps(incoming_metadata, ensure_ascii=False)
             customer_name = existing["customer_name"]
             if chat.customer_name and not _chat_has_manual_customer_name(existing_metadata):
