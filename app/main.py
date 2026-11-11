@@ -1969,6 +1969,24 @@ def _frontend_sync_enabled_for_marketplace(marketplace: str) -> bool:
     return _env_bool(f"{marketplace.upper()}_FRONTEND_SYNC", True)
 
 
+def _wb_sync_cooldown_status(connector: Any) -> dict[str, Any] | None:
+    cooldown_remaining = 0
+    if hasattr(connector, "_cooldown_remaining"):
+        try:
+            cooldown_remaining = int(connector._cooldown_remaining())
+        except Exception:
+            cooldown_remaining = 0
+    if cooldown_remaining > 0:
+        return {
+            "enabled": True,
+            "configured": True,
+            "status": "cooldown",
+            "retry_after_seconds": cooldown_remaining,
+            "reason": "WB 429 Too Many Requests",
+        }
+    return None
+
+
 async def _sync_operator_frontend_unlocked() -> dict[str, Any]:
     """Lightweight operator-triggered sync for shared hosting.
 
@@ -2003,20 +2021,9 @@ async def _sync_operator_frontend_unlocked() -> dict[str, Any]:
             continue
 
         if marketplace == "wildberries":
-            cooldown_remaining = 0
-            if hasattr(connector, "_cooldown_remaining"):
-                try:
-                    cooldown_remaining = int(connector._cooldown_remaining())
-                except Exception:
-                    cooldown_remaining = 0
-            if cooldown_remaining > 0:
-                per_marketplace[marketplace] = {
-                    "enabled": True,
-                    "configured": True,
-                    "status": "cooldown",
-                    "retry_after_seconds": cooldown_remaining,
-                    "reason": "WB 429 Too Many Requests",
-                }
+            cooldown = _wb_sync_cooldown_status(connector)
+            if cooldown:
+                per_marketplace[marketplace] = cooldown
                 continue
 
         min_interval = _background_min_interval_for_marketplace(marketplace)
@@ -2174,20 +2181,9 @@ async def _background_sync_loop() -> None:
             wait_seconds = int(max(0.0, min_interval - (loop_started_at - last_poll)))
 
             if marketplace == "wildberries":
-                cooldown_remaining = 0
-                if hasattr(connector, "_cooldown_remaining"):
-                    try:
-                        cooldown_remaining = int(connector._cooldown_remaining())
-                    except Exception:
-                        cooldown_remaining = 0
-                if cooldown_remaining > 0:
-                    per_marketplace[marketplace] = {
-                        "enabled": True,
-                        "configured": True,
-                        "status": "cooldown",
-                        "retry_after_seconds": cooldown_remaining,
-                        "reason": "WB 429 Too Many Requests",
-                    }
+                cooldown = _wb_sync_cooldown_status(connector)
+                if cooldown:
+                    per_marketplace[marketplace] = cooldown
                     continue
 
             if wait_seconds > 0:
