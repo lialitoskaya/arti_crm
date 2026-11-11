@@ -876,25 +876,6 @@ class MessageSendOutboxTests(unittest.TestCase):
         self.assertNotIn("await message_send_service.drain_once", startup_source)
         self.assertIn("create_task(_message_send_outbox_loop())", startup_source)
 
-    def test_frontend_contract_has_one_transient_or_canonical_row(self) -> None:
-        source = Path(main.STATIC_DIR / "app.js").read_text(encoding="utf-8")
-        self.assertIn("mergeMessagesWithSendOperations", source)
-        self.assertIn("if (operation?.canonical_message_id) return false", source)
-        self.assertIn("canonicalOperationIds.has", source)
-        self.assertIn("pending: 'В очереди'", source)
-        self.assertIn("uncertain: 'Результат отправки неизвестен'", source)
-        self.assertNotIn("JSON.stringify({ text, author: 'manager', operation_id", source)
-        self.assertNotIn("sendCurrentChatMessageWithRetry", source)
-
-    def test_frontend_caption_waits_before_upload_and_does_not_post_caption_multipart(self) -> None:
-        source = Path(main.STATIC_DIR / "app.js").read_text(encoding="utf-8")
-        caption_call = source.index("intentOrigin: imageFiles.length ? 'attachment_caption' : 'message'")
-        upload_call = source.index("await uploadCurrentChatImages", caption_call)
-        self.assertLess(caption_call, upload_call)
-        self.assertIn("assertMessageOperationAllowsAttachmentUpload(messageOperation)", source[caption_call:upload_call])
-        self.assertNotIn("formData.append('caption'", source)
-        self.assertIn("Подпись отправлена; вложения не загружены. Выберите файлы повторно.", source)
-
     def test_only_canonical_service_calls_connector_send_message(self) -> None:
         app_root = Path(main.BASE_DIR)
         call_sites: list[str] = []

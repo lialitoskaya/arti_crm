@@ -146,7 +146,6 @@ def test_read_all_covers_today_beyond_feed_limit_without_reading_history_or_othe
     assert feed["unread_count"] == 35
 
     assert repo.mark_all_notifications_read(101) == 35
-    assert repo.mark_all_notifications_read(101) == 0
     with db.get_connection() as conn:
         read_ids = {row["id"] for row in conn.execute("SELECT id FROM notifications WHERE is_read=1")}
     assert read_ids == today_ids

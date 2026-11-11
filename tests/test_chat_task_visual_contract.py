@@ -78,6 +78,7 @@ assert.match(unread.innerHTML, /&lt;script&gt;/);
 assert.match(unread.innerHTML, /&quot;long&quot;/);
 assert.match(unread.innerHTML, /data-chat-read-state[^>]*tabindex="-1"[^>]*aria-pressed="true"/);
 assert.match(unread.innerHTML, /data-chat-pin-state[^>]*aria-label="Открепить чат"[^>]*aria-pressed="true"/);
+assert.match(unread.innerHTML, /data-chat-pin-state[\s\S]*?<span class="badge/);
 assert.match(list.children[1].innerHTML, /data-chat-read-state[^>]*tabindex="0"[^>]*aria-pressed="false"/);
 assert.match(list.children[1].innerHTML, /aria-label="Закрепить чат"/);
 assert.equal(unread.listeners.length, 0);

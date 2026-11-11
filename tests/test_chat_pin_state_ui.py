@@ -8,14 +8,12 @@ from test_chat_read_state_ui import _extract_function, _run_node
 
 ROOT = Path(__file__).resolve().parents[1]
 APP_JS_PATH = ROOT / "app" / "static" / "app.js"
-STYLES_PATH = ROOT / "app" / "static" / "styles.css"
 
 
 class ChatPinStateUiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.source = APP_JS_PATH.read_text(encoding="utf-8")
-        cls.styles = STYLES_PATH.read_text(encoding="utf-8")
         cls.controller = "\n".join((
             _extract_function(cls.source, "createPersonalChatStateController"),
             _extract_function(cls.source, "createChatPinStateController"),
@@ -165,36 +163,6 @@ class ChatPinStateUiTests(unittest.TestCase):
               assert.equal(row.is_marked_unread, true);
             })().catch(error => { console.error(error); process.exit(1); });
         """)
-
-    def test_pin_error_rolls_back_previous_state(self) -> None:
-        _run_node(
-            f"""
-            {self.controller}
-            let row = {{ id: 7, is_pinned: false, pinned_at: null }};
-            const controller = createChatPinStateController({{
-              request() {{ return Promise.reject(new Error('failed')); }},
-              read() {{ return row; }},
-              apply(chatId, state) {{ row = {{ ...row, ...state }}; }},
-            }});
-
-            controller.set(7, true).then(
-              () => {{ throw new Error('failed request was accepted'); }},
-              () => {{
-                if (row.is_pinned) throw new Error('pin error did not roll back');
-              }},
-            ).catch((error) => {{ console.error(error); process.exit(1); }});
-            """
-        )
-
-    def test_pin_is_before_marketplace_badge_and_uses_delegated_events(self) -> None:
-        render = _extract_function(self.source, "renderChatList")
-        bind = _extract_function(self.source, "bindChatListInfiniteScroll")
-
-        self.assertLess(render.index("data-chat-pin-state"), render.index('<span class="badge'))
-        self.assertIn("list.addEventListener('click', handleChatListClick)", bind)
-        self.assertNotIn("addEventListener", render)
-        self.assertIn("#chatsView .chat-pin-control", self.styles)
-        self.assertIn("#chatsView .chat-item.is-pinned .chat-pin-control", self.styles)
 
 
 if __name__ == "__main__":

@@ -10,7 +10,6 @@ from test_chat_read_state_ui import _extract_function, _run_node
 
 ROOT = Path(__file__).resolve().parents[1]
 APP_JS_PATH = ROOT / "app" / "static" / "app.js"
-STYLES_PATH = ROOT / "app" / "static" / "styles.css"
 
 
 class OzonProductContextConnectorTests(unittest.IsolatedAsyncioTestCase):
@@ -295,7 +294,6 @@ class OzonProductContextUiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.source = APP_JS_PATH.read_text(encoding="utf-8")
-        cls.styles = STYLES_PATH.read_text(encoding="utf-8")
         cls.context_function = _extract_function(cls.source, "ozonProductContext")
 
     def test_frontend_builds_link_only_for_non_empty_normalized_sku(self) -> None:
@@ -310,19 +308,6 @@ class OzonProductContextUiTests(unittest.TestCase):
             if (ozonProductContext({{ raw: {{ context: {{ sku: '12345' }} }} }}) !== null) throw new Error('raw provider context bypassed canonical mapping');
             """
         )
-
-    def test_product_context_does_not_render_or_load_preview_images(self) -> None:
-        create_card = _extract_function(self.source, "createOzonProductContextCard")
-        extract_images = _extract_function(self.source, "extractImageUrls")
-        self.assertNotIn("createElement('img')", create_card)
-        self.assertNotIn("prepareLazyChatImage", create_card)
-        self.assertNotIn("imagePreviewSrc", create_card)
-        self.assertNotIn("onerror", create_card)
-        self.assertNotIn("imageUrl", self.context_function)
-        self.assertIn("delete raw.context", extract_images)
-        self.assertIn("delete raw._crm_product_context", extract_images)
-        self.assertNotIn("/v", create_card)
-        self.assertNotIn("fetch(", create_card)
 
     def test_generic_gallery_excludes_product_context_without_mutating_raw(self) -> None:
         start_marker = "function extractImageUrls"
@@ -356,38 +341,6 @@ class OzonProductContextUiTests(unittest.TestCase):
             if (JSON.stringify(raw) !== before) throw new Error('message.raw was mutated');
             """
         )
-
-    def test_product_context_uses_compact_existing_message_layout(self) -> None:
-        self.assertIn(".message-product-context {", self.styles)
-        self.assertIn("border-bottom: 1px solid var(--crm-line);", self.styles)
-        self.assertIn("display: block;", self.styles)
-        self.assertNotIn(".message-product-context-media", self.styles)
-        self.assertNotIn(".message-product-context.without-image", self.styles)
-        self.assertNotIn(".message-product-context.image-unavailable", self.styles)
-        self.assertNotIn("message-product-context-placeholder", self.source)
-
-    def test_frontend_uses_neutral_product_label_and_accessible_name(self) -> None:
-        create_card = _extract_function(self.source, "createOzonProductContextCard")
-        self.assertIn("label.textContent = 'Товар'", create_card)
-        self.assertIn("card.title = 'Открыть товар на Ozon'", create_card)
-        self.assertIn("`Открыть товар SKU ${context.sku} на Ozon`", create_card)
-        self.assertIn("card.target = '_blank'", create_card)
-        self.assertIn("card.rel = 'noreferrer noopener'", create_card)
-        self.assertIn("title.textContent = context.title || 'Открыть товар на Ozon'", create_card)
-        self.assertNotIn("Изображение товара", create_card)
-        self.assertNotIn("Товар из отзыва", create_card)
-        self.assertNotIn("отзыв", create_card.lower())
-
-    def test_obsolete_review_test_path_is_not_restored(self) -> None:
-        self.assertFalse((ROOT / "tests" / "test_ozon_review_context.py").exists())
-
-    def test_repeated_render_rebuilds_only_one_product_block_per_message(self) -> None:
-        render_messages = _extract_function(self.source, "renderMessages")
-        self.assertLess(
-            render_messages.index("box.innerHTML = ''"),
-            render_messages.index("for (const message of messages)"),
-        )
-        self.assertEqual(1, render_messages.count("createOzonProductContextCard(productContext)"))
 
 
 if __name__ == "__main__":

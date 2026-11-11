@@ -28,8 +28,29 @@ python -m venv .venv
 
 Эта команда запускает и классы `unittest`, и тесты с фикстурами `pytest`.
 Правила доступа по разделам проверяют `tests/test_section_permissions.py` и
-`tests/test_route_rbac.py`. Браузерный сценарий назначения прав находится в
-`tests/test_section_permissions_browser.cjs` и использует Playwright с Microsoft Edge.
+`tests/test_route_rbac.py`.
+
+### Проверки интерфейса
+
+Полная проверка перед публикацией включает pytest и JavaScript-сценарии ниже.
+Для браузерных сценариев нужны Node.js, доступный для `require('playwright')` пакет Playwright и установленный Microsoft Edge. Запускайте из корня репозитория.
+
+```powershell
+node tests/test_analytics_lazy_loading.cjs
+node tests/test_analytics_lazy_browser.cjs
+node tests/test_chat_search_layout.cjs
+node tests/test_section_permissions_browser.cjs
+node tests/test_operator_views_browser.cjs
+```
+
+| Если меняется | Где проверять регрессию |
+| --- | --- |
+| Версия статических файлов | `test_chat_task_visual_contract.py` читает версионные ссылки из HTML и сверяет их с исполняемым service worker. Этой проверки достаточно для всех разделов. |
+| Отправка подписи и вложений | `test_message_send_outbox_ui.py` проверяет ожидание подтверждения и блокировку отправки файла после неудачи. `test_operator_views_browser.cjs` отправляет форму, имитирует потерянный ответ и проверяет единственный POST, поиск исходной операции и содержимое второй, отдельной отправки. |
+| Шаблоны, отзывы и карточка товара в чате | `test_operator_views_browser.cjs` применяет шаблон, открывает отзыв из списка и проверяет ссылку на товар после обновления переписки. |
+| Персональные отметки чата | `test_chat_pin_state_ui.py` проверяет откат после ошибки, в том числе при одновременной смене отметки прочтения. `test_chat_task_visual_contract.py` проверяет результат рендера и зарегистрированные обработчики. |
+| Доступ к FBO | `test_operator_views_browser.cjs` открывает раздел с правом просмотра. `test_section_permissions_browser.cjs` проверяет отказ для сотрудника без этого права. Серверные ограничения отдельно проверяют `test_ozon_fbo_router.py` и `test_section_permissions.py`. |
+| Ошибки входа | `test_auth_login_errors.py` проверяет сообщения для кодов входа по паролю и через Яндекс. `test_yandex_oauth.py` проверяет ответ сервера, а браузерный сценарий проверяет, что форма показывает безопасный текст при неизвестной ошибке. |
 
 ## Границы безопасности
 

@@ -14,36 +14,7 @@ class CrmMessageIdentityUiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.source = APP_JS_PATH.read_text(encoding="utf-8")
-        cls.create_operation_id = _extract_function(cls.source, "createClientOperationId")
         cls.author_label = _extract_function(cls.source, "crmMessageAuthorLabel")
-
-    def test_text_and_attachment_requests_use_separate_stable_operation_ids(self) -> None:
-        self.assertIn(
-            "operation_id: operationId,\n        intent_origin: intentOrigin",
-            self.source,
-        )
-        self.assertIn(
-            "formData.append('operation_id', operationId);",
-            self.source,
-        )
-        self.assertNotIn("formData.append('caption'", self.source)
-        caption_position = self.source.index(
-            "intentOrigin: imageFiles.length ? 'attachment_caption' : 'message'"
-        )
-        upload_position = self.source.index("await uploadCurrentChatImages", caption_position)
-        self.assertLess(caption_position, upload_position)
-
-    def test_submit_creates_stable_command_and_attachment_ids_without_client_retry(self) -> None:
-        self.assertIn(
-            "const messageOperationId = text ? createClientOperationId() : null;",
-            self.source,
-        )
-        self.assertIn(
-            "const attachmentOperationId = imageFiles.length ? createClientOperationId() : null;",
-            self.source,
-        )
-        self.assertNotIn("sendCurrentChatMessageWithRetry", self.source)
-        self.assertIn("waitForMessageSendOperation", self.source)
 
     def test_employee_label_requires_canonical_crm_provenance(self) -> None:
         _run_node(

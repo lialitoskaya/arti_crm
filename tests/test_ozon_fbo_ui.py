@@ -1,6 +1,4 @@
-"""Поставки FBO: характеризация фронтенда — раздел подключён к навигации и маршрутам, admin-only,
-состояния прогона и диалог решения есть в разметке, стили на токенах без override-слоёв,
-версия кэша согласована."""
+"""FBO form, run states, settings and layout contracts."""
 from __future__ import annotations
 
 import re
@@ -21,7 +19,6 @@ ROOT = Path(__file__).resolve().parents[1]
 APP_JS = (ROOT / "app" / "static" / "app.js").read_text(encoding="utf-8")
 STYLES = (ROOT / "app" / "static" / "styles.css").read_text(encoding="utf-8")
 INDEX = (ROOT / "app" / "static" / "index.html").read_text(encoding="utf-8")
-SERVICE_WORKER = (ROOT / "app" / "static" / "sw.js").read_text(encoding="utf-8")
 
 
 def _block(text: str, start_marker: str, end_marker: str | None = None) -> str:
@@ -31,17 +28,6 @@ def _block(text: str, start_marker: str, end_marker: str | None = None) -> str:
 
 
 class OzonFboMarkupTests(unittest.TestCase):
-    def test_section_and_navigation_are_admin_only(self) -> None:
-        self.assertIn('<main id="ozonFboView" class="tasks-page ozon-fbo-page view hidden" aria-hidden="true">', INDEX)
-        nav = _block(INDEX, '<button id="navOzonFbo"', "</button>")
-        self.assertIn("admin-only hidden", nav)
-        self.assertIn('<span class="btn-label">Поставки FBO</span>', nav)
-        self.assertIn('<svg viewBox="0 0 24 24">', nav, "иконка из общего SVG-набора, не emoji")
-        mobile = _block(INDEX, 'data-mobile-view="ozonFbo"', "</button>")
-        self.assertIn("Поставки FBO", mobile)
-        self.assertIn('class="mobile-more-item admin-only hidden"', _block(INDEX, '<button class="mobile-more-item admin-only hidden" type="button" data-mobile-view="ozonFbo"', "</button>"))
-        self.assertIn('<button id="navSupplyPlanning"', INDEX, "раздел beta остаётся на месте")
-
     def test_run_form_covers_every_desktop_feature(self) -> None:
         view = _block(INDEX, '<main id="ozonFboView"', '<main id="reviewsView"')
         for mode in ("trial", "live", "live_nocargo", "cargo"):
@@ -85,19 +71,6 @@ class OzonFboMarkupTests(unittest.TestCase):
 
 
 class OzonFboScriptTests(unittest.TestCase):
-    def test_view_is_wired_into_routing_and_navigation(self) -> None:
-        self.assertIn("'supplyPlanning', 'ozonFbo', 'tasks'", APP_JS)
-        self.assertIn("ozonFbo: 'fbo',", APP_JS)
-        self.assertIn("fbo: 'ozonFbo',", APP_JS)
-        self.assertIn("ozonFbo: $('ozonFboView'),", APP_JS)
-        self.assertIn("ozonFbo: $('navOzonFbo'),", APP_JS)
-        self.assertIn("if (normalizedView === 'ozonFbo') loadOzonFbo();", APP_JS)
-        self.assertIn("bind('navOzonFbo', 'click', () => showView('ozonFbo'));", APP_JS)
-        self.assertIn("navOzonFbo: 'ozonFbo'", APP_JS)
-        self.assertIn("#navOzonFbo", APP_JS)
-        self.assertIn("'supplyPlanning', 'ozonFbo', 'questions'", APP_JS, "мобильный пункт «Ещё» подсвечивается")
-        self.assertIn("bindOzonFboControls();", _block(APP_JS, "bindSupplyPlanningControls();", "bind('navChats'"))
-
     def test_polling_stops_when_leaving_the_view(self) -> None:
         show_view = _block(APP_JS, "function showView(view, options = {}) {", "function escapeHtml(value)")
         self.assertIn("if (normalizedView !== 'ozonFbo') {\n    stopOzonFboPolling();\n    closeOzonFboDecision();\n  }", show_view)
@@ -107,11 +80,7 @@ class OzonFboScriptTests(unittest.TestCase):
         self.assertIn("if (activeView === 'ozonFbo') scheduleOzonFboPoll(", poll)
         self.assertIn("stopOzonFboPolling();", poll)
 
-    def test_rendering_escapes_server_text_and_uses_delegation(self) -> None:
-        rows = _block(APP_JS, "function renderOzonFboRows(rows)", "function ozonFboHeartbeatAge")
-        self.assertEqual(rows.count("escapeHtml("), 5)
-        self.assertIn("ozonFboToneBadge(row.tone)", rows, "состояние строки — текстовый бейдж, а не только цвет")
-        self.assertIn("zero: 'исключён', manual: 'ручная проверка', ok: 'принято'", APP_JS)
+    def test_history_and_order_selection_use_delegated_events(self) -> None:
         history = _block(APP_JS, "function renderOzonFboHistory(runs)", "function bindOzonFboControls")
         self.assertIn("data-ozon-fbo-open=", history)
         binding = _block(APP_JS, "function bindOzonFboControls()", "document.addEventListener('keydown'")
@@ -195,6 +164,7 @@ renderOzonFboRows([{ article: 'AT-<b>', cluster: 'Тверь', plan: 40, fact: 0
                    { article: 'AT-3', cluster: 'Уфа', plan: 10, fact: null, note: 'x', tone: 'manual' }]);
 assert.match(elements.ozonFboRows.markup, /AT-&lt;b&gt;/);
 assert.doesNotMatch(elements.ozonFboRows.markup, /<script>/);
+assert.match(elements.ozonFboRows.markup, /ozon-fbo-tone-ok/);
 assert.match(elements.ozonFboRows.markup, /ozon-fbo-tone-zero">исключён/);
 assert.match(elements.ozonFboRows.markup, /ozon-fbo-tone-manual">ручная проверка/);
 assert.equal((elements.ozonFboRows.markup.match(/<tr>/g) || []).length, 3);
@@ -219,14 +189,6 @@ assert.match(elements.ozonFboRows.markup, /Результатов пока не�
         self.assertIn("if (ozonFbo.submitInFlight) return;", submit, "защита от двойной отправки")
         self.assertIn("window.confirm(", submit, "боевой режим требует подтверждения до запуска")
         self.assertIn("apiForm('/api/ozon-fbo/runs', form)", submit)
-
-    def test_frontend_cache_version_bumped_and_consistent(self) -> None:
-        match = re.search(r"ARTI_CRM_SW_VERSION = '([^']+)'", SERVICE_WORKER)
-        self.assertIsNotNone(match)
-        version = match.group(1)
-        self.assertGreaterEqual(int(version.split("-", 1)[0].removeprefix("v")), 96)
-        self.assertIn(f"styles.css?v={version}", INDEX)
-        self.assertIn(f"app.js?v={version}", INDEX)
 
 
 class OzonFboStyleTests(unittest.TestCase):

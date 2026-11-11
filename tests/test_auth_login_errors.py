@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import unittest
 from pathlib import Path
 from unittest import mock
 
 import httpx
+
+from test_chat_read_state_ui import _run_node
 
 import test_regression_foundation as foundation  # noqa: E402
 
@@ -151,32 +154,36 @@ class AuthLoginErrorTests(unittest.TestCase):
     def test_frontend_maps_auth_codes_to_safe_messages_with_generic_fallbacks(self) -> None:
         source = Path(main.STATIC_DIR / "app.js").read_text(encoding="utf-8")
 
-        for text in (
-            "Неверный логин или пароль",
-            "Учетная запись отключена. Обратитесь к администратору",
-            "Слишком много попыток входа. Повторите позже",
-            "Не удалось выполнить вход. Повторите попытку позже",
-            "Вход через Яндекс отменён",
-            "Этот аккаунт Яндекса не имеет доступа к CRM. Выберите другой аккаунт или обратитесь к администратору",
-            "Доступ к CRM для этого аккаунта отключён",
-            "Сессия входа истекла. Повторите вход через Яндекс",
-            "Слишком много попыток входа через Яндекс. Повторите позже",
-            "Яндекс временно недоступен. Повторите попытку позже или войдите по логину и паролю",
-            "Не удалось войти через Яндекс",
-        ):
-            self.assertIn(text, source)
-        self.assertIn("|| PASSWORD_LOGIN_ERROR_MESSAGES.login_failed;", source)
-        self.assertIn("|| YANDEX_OAUTH_ERROR_MESSAGES.failed;", source)
-        auth_messages = source[
-            source.index("const PASSWORD_LOGIN_ERROR_MESSAGES"):
-            source.index("async function refreshYandexOAuthStatus")
-        ]
-        login_handlers = source[
-            source.index("function setupAuthUi()"):
-            source.index("const doLogout = async")
-        ]
-        self.assertNotIn("alert(", auth_messages)
-        self.assertNotIn("alert(", login_handlers)
+        messages = source[source.index("const PASSWORD_LOGIN_ERROR_MESSAGES"):source.index("function consumeYandexOAuthErrorCode")]
+        password = {
+            "invalid_credentials": "Неверный логин или пароль",
+            "password_account_inactive": "Учетная запись отключена. Обратитесь к администратору",
+            "login_rate_limited": "Слишком много попыток входа. Повторите позже",
+            "login_failed": "Не удалось выполнить вход. Повторите попытку позже",
+        }
+        yandex = {
+            "cancelled": "Вход через Яндекс отменён",
+            "account_not_allowed": "Этот аккаунт Яндекса не имеет доступа к CRM. Выберите другой аккаунт или обратитесь к администратору",
+            "account_inactive": "Доступ к CRM для этого аккаунта отключён",
+            "flow_expired": "Сессия входа истекла. Повторите вход через Яндекс",
+            "oauth_rate_limited": "Слишком много попыток входа через Яндекс. Повторите позже",
+            "provider_unavailable": "Яндекс временно недоступен. Повторите попытку позже или войдите по логину и паролю",
+            "failed": "Не удалось войти через Яндекс",
+        }
+        _run_node(messages + f"""
+            const assert = require('node:assert/strict');
+            const password = {json.dumps(password, ensure_ascii=False)};
+            const yandex = {json.dumps(yandex, ensure_ascii=False)};
+            for (const [code, expected] of Object.entries(password)) {{
+                assert.equal(passwordLoginErrorMessage(code), expected);
+            }}
+            for (const [code, expected] of Object.entries(yandex)) {{
+                assert.equal(yandexOAuthErrorMessage(code), expected);
+            }}
+            const unknown = 'synthetic internal detail';
+            assert.equal(passwordLoginErrorMessage(unknown), password.login_failed);
+            assert.equal(yandexOAuthErrorMessage(unknown), yandex.failed);
+        """)
 
 
 if __name__ == "__main__":

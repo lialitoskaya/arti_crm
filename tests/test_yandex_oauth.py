@@ -775,7 +775,7 @@ class YandexOAuthTests(unittest.TestCase):
                 for detail in internal_details:
                     self.assertNotIn(detail, logged)
 
-    def test_unknown_oauth_error_is_reduced_to_generic_code_with_frontend_fallback(self) -> None:
+    def test_unknown_oauth_error_redirects_with_only_the_generic_code(self) -> None:
         request = Request(
             {
                 "type": "http",
@@ -792,14 +792,10 @@ class YandexOAuthTests(unittest.TestCase):
             request,
             "provider email=private@example.test token=internal",
         )
-        frontend_source = Path(main.STATIC_DIR / "app.js").read_text(encoding="utf-8")
 
         self.assertEqual("/?yandex_oauth=failed", response.headers["location"])
         self.assertNotIn("private@example.test", response.headers["location"])
         self.assertNotIn("internal", response.headers["location"])
-        self.assertIn("function yandexOAuthErrorMessage(code)", frontend_source)
-        self.assertIn("|| YANDEX_OAUTH_ERROR_MESSAGES.failed;", frontend_source)
-        self.assertIn("Не удалось войти через Яндекс", frontend_source)
 
     def test_mapping_priority_is_id_then_login_then_email_with_casefolding(self) -> None:
         environment = _oauth_environment(
