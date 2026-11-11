@@ -146,12 +146,12 @@ def test_html_asset_versions_match_the_executed_service_worker() -> None:
                 assert "build" not in versions
                 versions["build"] = values.get("content") or ""
             url = urlsplit(values.get("href") or values.get("src") or "")
-            if url.path in {"/static/app.js", "/static/styles.css", "/static/permissions.js"}:
+            if url.path in {"/static/app.js", "/static/styles.css", "/static/permissions.js", "/static/yandex-oauth-links.js"}:
                 assert url.path not in versions
                 versions[url.path] = parse_qs(url.query)["v"][0]
 
     AssetParser().feed((ROOT / "app/static/index.html").read_text(encoding="utf-8"))
-    assert set(versions) == {"build", "/static/app.js", "/static/styles.css", "/static/permissions.js"}
+    assert set(versions) == {"build", "/static/app.js", "/static/styles.css", "/static/permissions.js", "/static/yandex-oauth-links.js"}
     assert len(set(versions.values())) == 1
     assert versions["build"]
     worker = (ROOT / "app/static/sw.js").read_text(encoding="utf-8")

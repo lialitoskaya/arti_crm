@@ -20,7 +20,7 @@ async function setup(browser, width, theme, user = admin) {
     if (url.hostname !== 'crm.test') return route.abort();
     const pathname = url.pathname;
     if (pathname === '/') return route.fulfill({contentType: 'text/html', body: read('app/static/index.html')});
-    if (pathname === '/static/app.js' || pathname === '/static/styles.css' || (!baseline && pathname === '/static/permissions.js')) {
+    if (pathname === '/static/app.js' || pathname === '/static/styles.css' || (!baseline && ['/static/permissions.js', '/static/yandex-oauth-links.js'].includes(pathname))) {
       return route.fulfill({contentType: pathname.endsWith('.css') ? 'text/css' : 'text/javascript', body: read(`app${pathname}`)});
     }
     if (!pathname.startsWith('/api/')) return route.fulfill({status: 404, body: ''});
@@ -48,6 +48,49 @@ async function screenshot(page, name) {
   if (!process.env.UI_SCREENSHOT_DIR) return;
   fs.mkdirSync(process.env.UI_SCREENSHOT_DIR, {recursive: true});
   await page.screenshot({path: path.join(process.env.UI_SCREENSHOT_DIR, name), fullPage: true});
+}
+
+async function exerciseYandexLinks(page, width, theme) {
+  const endpoint = '/api/admin/yandex-oauth-links';
+  const writes = [];
+  const links = [];
+  await page.route('**' + endpoint + '**', async route => {
+    const request = route.request();
+    const method = request.method();
+    const payload = request.postDataJSON();
+    if (method !== 'GET') writes.push([method, new URL(request.url()).pathname, payload]);
+    if (method === 'POST') links.push({...payload, id: 7, is_active: true, confirmed: false});
+    if (method === 'PATCH') links[0].is_active = payload.is_active;
+    if (method === 'DELETE') links[0].is_active = false;
+    await route.fulfill({json: method === 'GET' ? {links, users: [employee]} : {ok: true}});
+  });
+  await page.evaluate(() => showView('techSettings'));
+  const list = page.locator('#yandexOAuthLinksList');
+  await list.getByText('Связей пока нет.').waitFor();
+  const email = 'synthetic-user@example.test';
+  await page.locator('#yandexOAuthIdentifierType').selectOption('email');
+  await page.locator('#yandexOAuthIdentifier').fill(email);
+  await page.locator('#yandexOAuthLinkForm button[type=submit]').press('Enter');
+  const row = list.locator('[data-yandex-oauth-link-id="7"]');
+  await row.getByText('Email: ' + email).waitFor();
+  await row.getByRole('button', {name: 'Отключить'}).click();
+  await row.getByRole('button', {name: 'Включить'}).click();
+  await row.getByRole('button', {name: 'Отключить'}).waitFor();
+  page.once('dialog', dialog => dialog.accept());
+  await row.getByRole('button', {name: 'Запретить вход'}).click();
+  await row.getByText('Отключена', {exact: true}).waitFor();
+  assert.deepEqual(writes, [
+    ['POST', endpoint, {identifier_type: 'email', identifier: email, crm_user_id: employee.id}],
+    ['PATCH', endpoint + '/7', {is_active: false}],
+    ['PATCH', endpoint + '/7', {is_active: true}],
+    ['DELETE', endpoint + '/7', null],
+  ]);
+  if (process.env.UI_SCREENSHOT_DIR) {
+    await page.locator('#yandexOAuthLinksCard').screenshot({
+      path: path.join(process.env.UI_SCREENSHOT_DIR, `yandex-links-${width}-${theme}.png`),
+      animations: 'disabled',
+    });
+  }
 }
 
 (async () => {
@@ -81,6 +124,7 @@ async function screenshot(page, name) {
         assert.equal(await page.locator('#newUserPermissions select').count(), 9);
         assert.equal(await page.locator('#newUserPermissions [data-section="chats"]').inputValue(), 'none');
         await page.locator('#cancelUserCreateBtn').click();
+        await exerciseYandexLinks(page, width, theme);
       }
       await page.close();
     }

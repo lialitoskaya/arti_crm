@@ -1,4 +1,4 @@
-const ARTI_CRM_SW_VERSION = 'v98-personal-chat-state-20261111';
+const ARTI_CRM_SW_VERSION = 'v99-yandex-account-links-20261111';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();

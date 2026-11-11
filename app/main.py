@@ -51,6 +51,7 @@ from app.marketplace_sender import (
     normalize_system_sender as _shared_normalize_system_sender,
     system_sender_matches as _shared_system_sender_matches,
 )
+from app.yandex_oauth_links_router import create_yandex_oauth_links_router
 from app.chat_state_router import create_chat_state_router
 from app.notifications_router import create_notifications_router
 from app.reply_templates_router import create_reply_templates_router
@@ -80,7 +81,7 @@ from app.message_send_service import (
     MessageSendService,
     public_operation,
 )
-from app.schemas import AiReplyCreate, ChatCreate, ChatUpdate, InternalNoteCreate, InternalNoteUpdate, LoginCreate, MessageCreate, ReviewReplyCreate, QuestionAnswerCreate, TaskCreate, TaskUpdate, UserCreate, UserPasswordUpdate, UserUpdate, ProfileUpdate, KnowledgeCategoryCreate, KnowledgeArticleCreate, KnowledgeArticleUpdate, YandexOAuthManagedLinkCreate, YandexOAuthManagedLinkUpdate
+from app.schemas import AiReplyCreate, ChatCreate, ChatUpdate, InternalNoteCreate, InternalNoteUpdate, LoginCreate, MessageCreate, ReviewReplyCreate, QuestionAnswerCreate, TaskCreate, TaskUpdate, UserCreate, UserPasswordUpdate, UserUpdate, ProfileUpdate, KnowledgeCategoryCreate, KnowledgeArticleCreate, KnowledgeArticleUpdate
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -2788,62 +2789,7 @@ def api_permission_catalog(request: Request) -> dict[str, Any]:
     return {"sections": [{"key": key, "label": label} for key, label in SECTIONS.items()]}
 
 
-@app.get("/api/admin/yandex-oauth-links")
-def api_list_yandex_oauth_managed_links(request: Request) -> dict[str, Any]:
-    _require_admin(request)
-    users = [
-        {
-            "id": user["id"],
-            "username": user["username"],
-            "display_name": user.get("display_name"),
-            "is_active": bool(user.get("is_active")),
-        }
-        for user in repo.list_users()
-    ]
-    return {"links": repo.list_yandex_oauth_managed_links(), "users": users}
-
-
-@app.post("/api/admin/yandex-oauth-links")
-def api_create_yandex_oauth_managed_link(
-    payload: YandexOAuthManagedLinkCreate,
-    request: Request,
-) -> dict[str, Any]:
-    _require_admin(request)
-    try:
-        return repo.create_yandex_oauth_managed_link(
-            identifier_type=payload.identifier_type,
-            identifier=payload.identifier,
-            crm_user_id=payload.crm_user_id,
-        )
-    except repo.YandexOAuthManagedLinkUserNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Сотрудник не найден") from exc
-    except repo.YandexOAuthManagedLinkConflictError as exc:
-        raise HTTPException(status_code=409, detail="Такой логин или email уже добавлен") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Некорректный логин или email") from exc
-
-
-@app.patch("/api/admin/yandex-oauth-links/{link_id}")
-def api_update_yandex_oauth_managed_link(
-    link_id: int,
-    payload: YandexOAuthManagedLinkUpdate,
-    request: Request,
-) -> dict[str, Any]:
-    _require_admin(request)
-    updated = repo.update_yandex_oauth_managed_link(link_id, is_active=payload.is_active)
-    if not updated:
-        raise HTTPException(status_code=404, detail="Связь не найдена")
-    return updated
-
-
-@app.delete("/api/admin/yandex-oauth-links/{link_id}")
-def api_delete_yandex_oauth_managed_link(link_id: int, request: Request) -> dict[str, bool]:
-    _require_admin(request)
-    if not repo.delete_yandex_oauth_managed_link(link_id):
-        raise HTTPException(status_code=404, detail="Связь не найдена")
-    return {"ok": True}
-
-
+app.include_router(create_yandex_oauth_links_router(_require_admin, repo.list_users))
 
 
 @app.get("/api/users/assignees")

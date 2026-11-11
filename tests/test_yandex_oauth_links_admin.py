@@ -29,24 +29,6 @@ _OAUTH_ENVIRONMENT = {
 }
 
 
-def _javascript_function(source: str, name: str) -> str:
-    signature = f"function {name}("
-    start = source.index(signature)
-    async_start = start - len("async ")
-    if async_start >= 0 and source[async_start:start] == "async ":
-        start = async_start
-    brace = source.index("{", start)
-    depth = 0
-    for index in range(brace, len(source)):
-        if source[index] == "{":
-            depth += 1
-        elif source[index] == "}":
-            depth -= 1
-            if depth == 0:
-                return source[start : index + 1]
-    raise AssertionError(f"unterminated JavaScript function: {name}")
-
-
 def _run(coroutine):
     shared_loop = foundation._TEST_EVENT_LOOP
     if not shared_loop.is_closed():
@@ -709,40 +691,19 @@ class YandexOAuthManagedLinksAdminTests(unittest.TestCase):
         self.assertIn('id="yandexOAuthCrmUser"', section)
         self.assertIn("новые входы через Яндекс", section)
         self.assertIn("деактивируйте сотрудника", section)
-        self.assertIn("loadYandexOAuthManagedLinks", script)
-        self.assertIn("Запретить вход", script)
-        self.assertNotIn("Удалить эту связь для входа через Яндекс?", script)
-        reset_start = script.index("function resetYandexOAuthManagedLinksState()")
-        reset_section = script[reset_start : script.index("\n}\n", reset_start) + 3]
-        self.assertIn("yandexOAuthManagedLinksCache = [];", reset_section)
-        self.assertIn("yandexOAuthManagedUsersCache = [];", reset_section)
-        self.assertIn("list.innerHTML = '';", reset_section)
-        self.assertIn("userSelect.innerHTML = '';", reset_section)
-        self.assertIn("identifierInput.value = '';", reset_section)
+        self.assertLess(html.index('src="/static/yandex-oauth-links.js'), html.index('src="/static/app.js'))
+        self.assertIn("yandexOAuthLinks.load()", script)
         show_login = script[script.index("function showLogin(") : script.index("function showApp(")]
         show_app = script[script.index("function showApp(") : script.index("async function checkAuth(")]
-        self.assertIn("resetYandexOAuthManagedLinksState();", show_login)
+        self.assertIn("yandexOAuthLinks.reset();", show_login)
         self.assertIn("currentUser?.role !== 'admin'", show_app)
-        self.assertIn("resetYandexOAuthManagedLinksState();", show_app)
+        self.assertIn("yandexOAuthLinks.reset();", show_app)
         for forbidden in ("client secret", "client_secret", "redirect uri", "redirect_uri"):
             self.assertNotIn(forbidden, section.lower())
 
     def test_frontend_ignores_managed_link_responses_after_reset_or_newer_load(self) -> None:
         root = Path(__file__).resolve().parents[1]
-        source = (root / "app" / "static" / "app.js").read_text(encoding="utf-8")
-        declarations = "\n".join(
-            line
-            for line in source.splitlines()
-            if line.startswith("let yandexOAuthManaged")
-        )
-        production_code = "\n\n".join(
-            (
-                declarations,
-                _javascript_function(source, "resetYandexOAuthManagedLinksState"),
-                _javascript_function(source, "renderYandexOAuthManagedLinks"),
-                _javascript_function(source, "loadYandexOAuthManagedLinks"),
-            )
-        )
+        production_code = (root / "app" / "static" / "yandex-oauth-links.js").read_text(encoding="utf-8")
         harness = f"""
 const assert = require('node:assert/strict');
 const elements = {{
@@ -760,23 +721,23 @@ function api() {{ return new Promise((resolve) => pending.push(resolve)); }}
 {production_code}
 
 (async () => {{
-  const loggedOutLoad = loadYandexOAuthManagedLinks();
+  const loggedOutLoad = yandexOAuthLinks.load();
   assert.equal(pending.length, 1);
-  resetYandexOAuthManagedLinksState();
+  yandexOAuthLinks.reset();
   currentUser = {{ role: 'manager' }};
   pending.shift()({{
     links: [{{ id: 1, identifier_type: 'login', identifier: 'late-after-reset', crm_user_id: 1 }}],
     users: [{{ id: 1, username: 'late-after-reset', display_name: 'Late', is_active: true }}],
   }});
   await loggedOutLoad;
-  assert.deepEqual(yandexOAuthManagedLinksCache, []);
-  assert.deepEqual(yandexOAuthManagedUsersCache, []);
+  assert.equal(elements.yandexOAuthIdentifier.value, '');
+  assert.equal(elements.yandexOAuthIdentifierType.value, 'login');
   assert.equal(elements.yandexOAuthLinksList.innerHTML, '');
   assert.equal(elements.yandexOAuthCrmUser.innerHTML, '');
 
   currentUser = {{ role: 'admin' }};
-  const oldLoad = loadYandexOAuthManagedLinks();
-  const newLoad = loadYandexOAuthManagedLinks();
+  const oldLoad = yandexOAuthLinks.load();
+  const newLoad = yandexOAuthLinks.load();
   assert.equal(pending.length, 2);
   pending[1]({{
     links: [{{ id: 2, identifier_type: 'login', identifier: 'new-response', crm_user_id: 2, is_active: true }}],
@@ -788,7 +749,8 @@ function api() {{ return new Promise((resolve) => pending.push(resolve)); }}
     users: [{{ id: 3, username: 'old-user', display_name: 'Old', is_active: true }}],
   }});
   await oldLoad;
-  assert.equal(yandexOAuthManagedLinksCache[0].identifier, 'new-response');
+  assert.match(elements.yandexOAuthCrmUser.innerHTML, /new-user/);
+  assert.doesNotMatch(elements.yandexOAuthCrmUser.innerHTML, /Old/);
   assert.match(elements.yandexOAuthLinksList.innerHTML, /new-response/);
   assert.doesNotMatch(elements.yandexOAuthLinksList.innerHTML, /old-response/);
 }})().catch((error) => {{

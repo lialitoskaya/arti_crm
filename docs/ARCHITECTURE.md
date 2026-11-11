@@ -8,6 +8,8 @@ app/
   repository.py           SQLite repository layer
   chat_state_repository.py  per-user read and pin queries and mutations
   chat_state_router.py    PATCH routes for personal chat marks
+  yandex_oauth_links_router.py      administrator API for Yandex account links
+  yandex_oauth_links_repository.py  managed link storage and provider identity matching
   task_chat_status_automation.py  Transaction-local chat-status arbiter
   db.py                   schema/migrations/init
   schemas.py              Pydantic DTO
@@ -29,6 +31,7 @@ app/
     index.html            single-page UI markup
     app.js                frontend logic
     permissions.js        employee access controls and navigation
+    yandex-oauth-links.js administrator form for managing Yandex account links
     styles.css            frontend styles
 ```
 
