@@ -12,6 +12,11 @@ SECTIONS = {
     "techSettings": "Технические настройки",
 }
 LEVELS = {"none": 0, "read": 1, "write": 2}
+SHARED_SECTION_ACCESS = {
+    "@work": ("chats", "tasks"),
+    "@chatSettings": ("chats", "techSettings"),
+    "@taskTypes": ("chats", "tasks", "techSettings"),
+}
 
 
 def effective_permissions(role: str, stored: str | dict | None) -> dict[str, str]:
@@ -27,8 +32,12 @@ def effective_permissions(role: str, stored: str | dict | None) -> dict[str, str
         values = {}
     if not isinstance(values, dict):
         values = {}
-    return {key: value if isinstance(value := values.get(key), str) and value in LEVELS else "none"
-            for key in SECTIONS}
+    permissions = dict.fromkeys(SECTIONS, "none")
+    for key in SECTIONS:
+        value = values.get(key)
+        if isinstance(value, str) and value in LEVELS:
+            permissions[key] = value
+    return permissions
 
 
 def public_user(row: Any) -> dict[str, Any] | None:
@@ -82,12 +91,10 @@ def route_requirements(method: str, path: str) -> list[tuple[str, str]] | None:
         if not read:
             return None
         return [("analytics", "read")] + ([("chats", "read")] if path.endswith("/drilldown") else [])
-    if path == "/api/chat-settings" and read:
+    if path in {"/api/chat-settings", "/api/reply-templates"} and read:
         return [("@chatSettings", "read")]
     if path == "/api/task-types" and read:
         return [("@taskTypes", "read")]
-    if path == "/api/reply-templates" and read:
-        return [("@chatSettings", "read")]
     if path.startswith(("/api/chat-settings/", "/api/task-types", "/api/reply-templates")):
         return [("techSettings", level)]
     if path.startswith("/api/ozon-fbo/"):
@@ -98,9 +105,8 @@ def route_requirements(method: str, path: str) -> list[tuple[str, str]] | None:
         return [("supplyPlanning", level)]
     if path.startswith("/api/chat-uploads/"):
         return [("chats", "read")] if read else None
-    for prefix, section in (("chats", "chats"), ("tasks", "tasks"),
-                            ("reviews", "reviews"), ("questions", "questions"), ("knowledge", "knowledge")):
-        if path == f"/api/{prefix}" or path.startswith(f"/api/{prefix}/"):
+    for section in ("chats", "tasks", "reviews", "questions", "knowledge"):
+        if path == f"/api/{section}" or path.startswith(f"/api/{section}/"):
             if section == "chats" and re.fullmatch(r"/api/chats/\d+/(read-state|pin-state)", path):
                 return [("chats", "read")]
             requirements = [(section, level)]
@@ -111,18 +117,19 @@ def route_requirements(method: str, path: str) -> list[tuple[str, str]] | None:
 
 
 def route_allowed(user: dict[str, Any], method: str, path: str) -> bool:
+    return allows_requirements(user, route_requirements(method, path))
+
+
+def allows_requirements(user: dict[str, Any], requirements: list[tuple[str, str]] | None) -> bool:
     if user.get("role") == "admin":
         return True
-    requirements = route_requirements(method, path)
     if requirements is None:
         return False
-    alternatives = {
-        "@work": ("chats", "tasks"),
-        "@chatSettings": ("chats", "techSettings"),
-        "@taskTypes": ("chats", "tasks", "techSettings"),
-    }
-    return all(any(can(user, key, level) for key in alternatives.get(section, (section,)))
-               for section, level in requirements)
+    for section, level in requirements:
+        alternatives = SHARED_SECTION_ACCESS.get(section, (section,))
+        if not any(can(user, key, level) for key in alternatives):
+            return False
+    return True
 
 
 def notification_allowed(user: dict[str, Any], item: dict[str, Any]) -> bool:

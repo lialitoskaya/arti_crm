@@ -26,7 +26,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app import repository as repo
 from app import yandex_oauth
-from app.permissions import SECTIONS, can, notification_allowed, route_allowed, route_requirements
+from app.permissions import SECTIONS, allows_requirements, can, notification_allowed, route_allowed, route_requirements
 from app.asset_proxy_policy import (
     asset_url_resolves_globally,
     asset_url_allowed,
@@ -452,8 +452,9 @@ async def require_auth_for_api(request: Request, call_next):
         _apply_security_headers(request, response)
         return response
     request.state.user = user
-    if not route_allowed(user, request.method, request.url.path):
-        detail = ("Нужны права администратора" if route_requirements(request.method, request.url.path) is None
+    requirements = route_requirements(request.method, request.url.path)
+    if not allows_requirements(user, requirements):
+        detail = ("Нужны права администратора" if requirements is None
                   else "Нет доступа к этому действию или разделу")
         response = JSONResponse(status_code=403, content={"detail": detail})
         _apply_security_headers(request, response)
