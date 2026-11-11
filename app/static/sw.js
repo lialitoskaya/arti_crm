@@ -1,4 +1,4 @@
-const ARTI_CRM_SW_VERSION = 'v101-task-types-20261111';
+const ARTI_CRM_SW_VERSION = 'v102-crm-refactor-20261111';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();

@@ -7267,7 +7267,7 @@ function getViewFromLocationHash() {
   return viewFromRouteValue(window.location.hash || '');
 }
 
-function getChatIdFromRouteValue(value) {
+function getRouteEntityId(value, singular, plural) {
   const raw = String(value || '').trim();
   if (!raw) return null;
   const clean = raw
@@ -7278,12 +7278,16 @@ function getChatIdFromRouteValue(value) {
 
   const parts = clean.split('/').filter(Boolean);
   const route = String(parts[0] || '').toLowerCase();
-  const rawChatId = parts[1];
+  const rawId = parts[1];
 
-  if (!rawChatId || (route !== 'chats' && route !== 'chat')) return null;
+  if (!rawId || (route !== singular && route !== plural)) return null;
 
-  const chatId = Number(decodeURIComponent(rawChatId));
-  return Number.isFinite(chatId) && chatId > 0 ? chatId : null;
+  const id = Number(decodeURIComponent(rawId));
+  return Number.isFinite(id) && id > 0 ? id : null;
+}
+
+function getChatIdFromRouteValue(value) {
+  return getRouteEntityId(value, 'chat', 'chats');
 }
 
 function getChatIdFromLocationHash() {
@@ -7291,22 +7295,7 @@ function getChatIdFromLocationHash() {
 }
 
 function getQuestionIdFromRouteValue(value) {
-  const raw = String(value || '').trim();
-  if (!raw) return null;
-  const clean = raw
-    .replace(/^#/, '')
-    .replace(/^\/?/, '')
-    .split(/[?&]/)[0]
-    .trim();
-
-  const parts = clean.split('/').filter(Boolean);
-  const route = String(parts[0] || '').toLowerCase();
-  const rawQuestionId = parts[1];
-
-  if (!rawQuestionId || (route !== 'questions' && route !== 'question')) return null;
-
-  const questionId = Number(decodeURIComponent(rawQuestionId));
-  return Number.isFinite(questionId) && questionId > 0 ? questionId : null;
+  return getRouteEntityId(value, 'question', 'questions');
 }
 
 function getQuestionIdFromLocationHash() {
@@ -7333,10 +7322,7 @@ function rememberRouteView(view) {
   } catch (_) {}
 }
 
-function syncRouteForView(view, { replace = false } = {}) {
-  const normalizedView = normalizeViewName(view);
-  rememberRouteView(normalizedView);
-  const targetHash = `#/${routeForView(normalizedView)}`;
+function writeRouteHash(targetHash, replace) {
   if (window.location.hash === targetHash) return;
   const targetUrl = `${window.location.pathname}${window.location.search}${targetHash}`;
   if (replace && window.history?.replaceState) {
@@ -7350,6 +7336,13 @@ function syncRouteForView(view, { replace = false } = {}) {
   window.location.hash = targetHash;
 }
 
+function syncRouteForView(view, { replace = false } = {}) {
+  const normalizedView = normalizeViewName(view);
+  rememberRouteView(normalizedView);
+  const targetHash = `#/${routeForView(normalizedView)}`;
+  writeRouteHash(targetHash, replace);
+}
+
 function syncRouteForChat(chatId, { replace = false } = {}) {
   const numericChatId = Number(chatId);
   if (!Number.isFinite(numericChatId) || numericChatId <= 0) return;
@@ -7357,18 +7350,7 @@ function syncRouteForChat(chatId, { replace = false } = {}) {
   rememberRouteView('chats');
 
   const targetHash = `#/chats/${encodeURIComponent(String(numericChatId))}`;
-  if (window.location.hash === targetHash) return;
-
-  const targetUrl = `${window.location.pathname}${window.location.search}${targetHash}`;
-  if (replace && window.history?.replaceState) {
-    window.history.replaceState(null, '', targetUrl);
-    return;
-  }
-  if (window.history?.pushState) {
-    window.history.pushState(null, '', targetUrl);
-    return;
-  }
-  window.location.hash = targetHash;
+  writeRouteHash(targetHash, replace);
 }
 
 function showView(view, options = {}) {
