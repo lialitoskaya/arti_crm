@@ -4457,6 +4457,23 @@ def update_user_password(user_id: int, password: str) -> bool:
         return True
 
 
+def _new_session_credentials(days: int, seconds: int | None) -> tuple[str, str]:
+    token = secrets.token_urlsafe(48)
+    ttl = timedelta(seconds=max(1800, int(seconds))) if seconds is not None else timedelta(days=days)
+    expires_at = (datetime.now(timezone.utc) + ttl).isoformat(timespec='seconds')
+    return token, expires_at
+
+
+def _insert_session(
+    conn: sqlite3.Connection, token: str, user_id: int, expires_at: str,
+    user_agent: str | None, ip: str | None,
+) -> None:
+    conn.execute(
+        "INSERT INTO sessions (session_token, user_id, expires_at, user_agent, ip) VALUES (?, ?, ?, ?, ?)",
+        (token, user_id, expires_at, user_agent, ip),
+    )
+
+
 def change_user_password_and_rotate_session(
     user_id: int,
     *,
@@ -4470,9 +4487,7 @@ def change_user_password_and_rotate_session(
     seconds: int | None = None,
 ) -> str | None:
     password_hash = _hash_password(new_password)
-    token = secrets.token_urlsafe(48)
-    ttl = timedelta(seconds=max(1800, int(seconds))) if seconds is not None else timedelta(days=days)
-    expires_at = (datetime.now(timezone.utc) + ttl).isoformat(timespec='seconds')
+    token, expires_at = _new_session_credentials(days, seconds)
 
     with get_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -4511,10 +4526,7 @@ def change_user_password_and_rotate_session(
             "UPDATE sessions SET revoked_at=CURRENT_TIMESTAMP WHERE user_id=? AND revoked_at IS NULL",
             (user_id,),
         )
-        conn.execute(
-            "INSERT INTO sessions (session_token, user_id, expires_at, user_agent, ip) VALUES (?, ?, ?, ?, ?)",
-            (token, user_id, expires_at, user_agent, ip),
-        )
+        _insert_session(conn, token, user_id, expires_at, user_agent, ip)
         return token
 
 
@@ -4544,9 +4556,7 @@ def authenticate_user_and_create_session(
     days: int = 14,
     seconds: int | None = None,
 ) -> tuple[dict[str, Any], str] | None:
-    token = secrets.token_urlsafe(48)
-    ttl = timedelta(seconds=max(1800, int(seconds))) if seconds is not None else timedelta(days=days)
-    expires_at = (datetime.now(timezone.utc) + ttl).isoformat(timespec='seconds')
+    token, expires_at = _new_session_credentials(days, seconds)
 
     with get_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -4561,10 +4571,7 @@ def authenticate_user_and_create_session(
             return None
         if not data.get('is_active'):
             raise InactiveUserAuthenticationError
-        conn.execute(
-            "INSERT INTO sessions (session_token, user_id, expires_at, user_agent, ip) VALUES (?, ?, ?, ?, ?)",
-            (token, int(data['id']), expires_at, user_agent, ip),
-        )
+        _insert_session(conn, token, int(data['id']), expires_at, user_agent, ip)
         user = {
             key: data[key]
             for key in ('id', 'username', 'display_name', 'role', 'is_active', 'created_at', 'updated_at', 'section_permissions')
@@ -4604,9 +4611,7 @@ def create_session_for_yandex_identity(
         normalized_login,
         normalized_emails,
     )
-    token = secrets.token_urlsafe(48)
-    ttl = timedelta(seconds=max(1800, int(seconds))) if seconds is not None else timedelta(days=days)
-    expires_at = (datetime.now(timezone.utc) + ttl).isoformat(timespec='seconds')
+    token, expires_at = _new_session_credentials(days, seconds)
 
     failure_stage = "database_link"
     try:
@@ -4672,10 +4677,7 @@ def create_session_for_yandex_identity(
                     (identity, int(data['id'])),
                 )
             failure_stage = "session_creation"
-            conn.execute(
-                "INSERT INTO sessions (session_token, user_id, expires_at, user_agent, ip) VALUES (?, ?, ?, ?, ?)",
-                (token, int(data['id']), expires_at, user_agent, ip),
-            )
+            _insert_session(conn, token, int(data['id']), expires_at, user_agent, ip)
             user = {
                 key: data[key]
                 for key in ('id', 'username', 'display_name', 'role', 'is_active', 'created_at', 'updated_at', 'section_permissions')
@@ -4691,14 +4693,9 @@ def create_session_for_yandex_identity(
 
 
 def create_session(user_id: int, *, user_agent: str | None = None, ip: str | None = None, days: int = 14, seconds: int | None = None) -> str:
-    token = secrets.token_urlsafe(48)
-    ttl = timedelta(seconds=max(1800, int(seconds))) if seconds is not None else timedelta(days=days)
-    expires_at = (datetime.now(timezone.utc) + ttl).isoformat(timespec='seconds')
+    token, expires_at = _new_session_credentials(days, seconds)
     with get_connection() as conn:
-        conn.execute(
-            "INSERT INTO sessions (session_token, user_id, expires_at, user_agent, ip) VALUES (?, ?, ?, ?, ?)",
-            (token, user_id, expires_at, user_agent, ip),
-        )
+        _insert_session(conn, token, user_id, expires_at, user_agent, ip)
     return token
 
 
