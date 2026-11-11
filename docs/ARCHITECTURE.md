@@ -363,6 +363,10 @@ deterministic tie breaker. Workflow status does not create a second sort group. 
 `assigned_user_id` query parameter filters by responsible employee; `mine=true`
 intentionally takes precedence and resolves to the authenticated user's id.
 
+The task list loads comments for up to 500 selected task IDs per query. Each
+task still includes its full comment history in ascending timestamp and ID
+order. Fetching the comments does not change the ordering of tasks.
+
 ## Task-type chat-status automation
 
 The task type API uses `task_types_repository.py` to list and edit the catalog.
