@@ -5604,6 +5604,30 @@ def delete_internal_note(chat_id: int, message_id: int, request: Request) -> dic
     return {"ok": True, "chat": _chat_for_user(chat_id, request)}
 
 
+def _notify_task_assignment(
+    task: dict[str, Any], task_id: int, assigned_user_id: int | None,
+    current_user: dict[str, Any], *, chat_id: int | None,
+) -> None:
+    if not assigned_user_id:
+        return
+    metadata = {"created_by_user_id": current_user.get("id")}
+    if chat_id is None:
+        metadata["standalone"] = True
+    actor = current_user.get("display_name") or current_user.get("username") or "CRM"
+    repo.create_notification(
+        user_id=int(assigned_user_id),
+        type="new_task",
+        title="Новая задача",
+        body=f"{actor}: {task.get('title') or 'Задача'}",
+        chat_id=int(chat_id) if chat_id is not None else None,
+        task_id=int(task_id),
+        entity_type="task",
+        entity_id=str(task_id),
+        dedupe_key=f"task-created:{task_id}:user:{assigned_user_id}",
+        metadata=metadata,
+    )
+
+
 @app.post("/api/tasks")
 def create_task(payload: TaskCreate, request: Request) -> dict[str, Any]:
     current_user = _current_user(request)
@@ -5615,20 +5639,9 @@ def create_task(payload: TaskCreate, request: Request) -> dict[str, Any]:
     task = repo.get_task(task_id)
     assert task is not None
     assigned_user_id = task.get("assigned_user_id")
-    if assigned_user_id:
-        actor = current_user.get("display_name") or current_user.get("username") or "CRM"
-        repo.create_notification(
-            user_id=int(assigned_user_id),
-            type="new_task",
-            title="Новая задача",
-            body=f"{actor}: {task.get('title') or 'Задача'}",
-            chat_id=int(task.get("chat_id") or payload.chat_id),
-            task_id=int(task_id),
-            entity_type="task",
-            entity_id=str(task_id),
-            dedupe_key=f"task-created:{task_id}:user:{assigned_user_id}",
-            metadata={"created_by_user_id": current_user.get("id")},
-        )
+    _notify_task_assignment(
+        task, task_id, assigned_user_id, current_user, chat_id=task.get("chat_id") or payload.chat_id,
+    )
     return task
 
 
@@ -5667,20 +5680,7 @@ def create_standalone_task(payload: dict[str, Any], request: Request) -> dict[st
     if not task:
         raise HTTPException(status_code=500, detail="Task was created but could not be loaded")
 
-    if assigned_user_id:
-        actor = current_user.get("display_name") or current_user.get("username") or "CRM"
-        repo.create_notification(
-            user_id=int(assigned_user_id),
-            type="new_task",
-            title="Новая задача",
-            body=f"{actor}: {task.get('title') or 'Задача'}",
-            chat_id=None,
-            task_id=int(task_id),
-            entity_type="task",
-            entity_id=str(task_id),
-            dedupe_key=f"task-created:{task_id}:user:{assigned_user_id}",
-            metadata={"created_by_user_id": current_user.get("id"), "standalone": True},
-        )
+    _notify_task_assignment(task, task_id, assigned_user_id, current_user, chat_id=None)
     return task
 
 
