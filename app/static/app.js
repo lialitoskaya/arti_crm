@@ -2279,6 +2279,17 @@ function renderTaskTypeSettingsList() {
   `).join('') : '<p class="muted">Типов задач пока нет. Добавьте первый тип выше.</p>';
 }
 
+function bindTaskTypeSettings() {
+  const taskTypeForm = $('taskTypeForm');
+  if (taskTypeForm && !taskTypeForm.dataset.bound) {
+    taskTypeForm.dataset.bound = '1';
+    taskTypeForm.addEventListener('submit', submitTaskTypeCreate);
+  }
+  const list = $('taskTypesSettingsList');
+  list?.addEventListener('click', handleTaskTypeSettingsClick);
+  list?.addEventListener('change', handleTaskTypeSettingsChange);
+}
+
 async function submitTaskTypeCreate(event) {
   event?.preventDefault?.();
   const titleInput = $('taskTypeTitle');
@@ -2321,21 +2332,21 @@ async function submitTaskTypeCreate(event) {
 async function saveTaskTypeRow(row) {
   const id = Number(row?.dataset?.taskTypeId || 0);
   if (!id) return;
-  const title = row.querySelector('[data-task-type-title]')?.value?.trim() || '';
+  const titleInput = row.querySelector('[data-task-type-title]');
+  const title = titleInput?.value?.trim() || '';
   const commentLabel = row.querySelector('[data-task-type-label]')?.value?.trim() || 'Комментарий';
   if (!title) {
     notify('Тип задачи', 'Название типа не может быть пустым.');
-    row.querySelector('[data-task-type-title]')?.focus?.();
+    titleInput?.focus?.();
     return;
   }
+  const statusId = row.querySelector('[data-task-type-chat-status]')?.value;
   await api(`/api/task-types/${id}`, {
     method: 'PATCH',
     body: JSON.stringify({
       title,
       comment_label: commentLabel,
-      chat_status_id: row.querySelector('[data-task-type-chat-status]')?.value
-        ? Number(row.querySelector('[data-task-type-chat-status]').value)
-        : null,
+      chat_status_id: statusId ? Number(statusId) : null,
       sort_order: Number(row.querySelector('[data-task-type-sort]')?.value || 0),
       is_active: Boolean(row.querySelector('[data-task-type-active]')?.checked),
     }),
@@ -8514,13 +8525,7 @@ function init() {
   }
   $('chatFunnelsList')?.addEventListener('click', handleChatFunnelListClick);
   $('chatStatusesList')?.addEventListener('click', handleChatStatusListClick);
-  const taskTypeForm = $('taskTypeForm');
-  if (taskTypeForm && !taskTypeForm.dataset.bound) {
-    taskTypeForm.dataset.bound = '1';
-    taskTypeForm.addEventListener('submit', submitTaskTypeCreate);
-  }
-  $('taskTypesSettingsList')?.addEventListener('click', handleTaskTypeSettingsClick);
-  $('taskTypesSettingsList')?.addEventListener('change', handleTaskTypeSettingsChange);
+  bindTaskTypeSettings();
   bind('saveChatSettingsBtn', 'click', saveAllChatStatuses);
   bind('saveChatSettingsBottomBtn', 'click', saveAllChatStatuses);
   const extraMenuBtn = $('extraMenuBtn');

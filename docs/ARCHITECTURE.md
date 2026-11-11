@@ -365,6 +365,10 @@ intentionally takes precedence and resolves to the authenticated user's id.
 
 ## Task-type chat-status automation
 
+The task type API uses `task_types_repository.py` to list and edit the catalog.
+When a type is edited or deactivated, its status mapping and any affected chat
+status changes are handled within the same SQLite transaction.
+
 `task_chat_status_automation.py` is the single transaction-local arbiter for
 changes to an existing `chats.status` caused by manual CRM edits, task lifecycle,
 or confirmed provider activity. Repository entry points acquire `BEGIN IMMEDIATE`
