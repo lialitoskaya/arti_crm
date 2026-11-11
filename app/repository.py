@@ -41,9 +41,9 @@ from app.task_types_repository import (
 )
 from app.permissions import can, effective_permissions, notification_allowed, public_user
 from app.marketplace_sender import (
-    extract_sender_designations as _shared_extract_sender_designations,
-    normalize_system_sender as _shared_normalize_system_sender,
-    system_sender_matches as _shared_system_sender_matches,
+    extract_sender_designations as _extract_sender_designations,
+    normalize_system_sender as _normalize_system_sender,
+    system_sender_matches as _system_sender_matches,
 )
 from app.schemas import ChatCreate, ChatUpdate, TaskCreate, TaskUpdate
 from app.task_chat_status_automation import (
@@ -595,18 +595,6 @@ def _ozon_notification_tokens() -> tuple[str, ...]:
         ).split(",")
         if token.strip()
     )
-
-
-def _normalize_system_sender(value: Any) -> str:
-    return _shared_normalize_system_sender(value)
-
-
-def _system_sender_matches(value: Any, markers: tuple[str, ...]) -> bool:
-    return _shared_system_sender_matches(value, markers)
-
-
-def _extract_sender_designations(value: Any, depth: int = 0) -> list[str]:
-    return _shared_extract_sender_designations(value, depth)
 
 
 def _metadata_looks_like_ozon_notification_user(metadata: dict[str, Any]) -> bool:

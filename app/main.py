@@ -47,9 +47,9 @@ from app.auth_bootstrap import (
 )
 from app.chat_settings_router import create_chat_settings_router
 from app.marketplace_sender import (
-    extract_sender_designations as _shared_extract_sender_designations,
-    normalize_system_sender as _shared_normalize_system_sender,
-    system_sender_matches as _shared_system_sender_matches,
+    extract_sender_designations as _extract_sender_designations,
+    normalize_system_sender as _normalize_system_sender,
+    system_sender_matches as _system_sender_matches,
 )
 from app.yandex_oauth_links_router import create_yandex_oauth_links_router
 from app.chat_state_router import create_chat_state_router
@@ -901,19 +901,6 @@ def _ozon_chatbot_message_markers() -> tuple[str, ...]:
         for token in os.getenv("OZON_CHATBOT_MARKERS", os.getenv("OZON_FIRST_MESSAGE_SYSTEM_USER_MARKERS", "chatbot")).split(",")
         if token.strip()
     )
-
-
-def _normalize_system_sender(value: Any) -> str:
-    return _shared_normalize_system_sender(value)
-
-
-def _system_sender_matches(value: Any, markers: tuple[str, ...]) -> bool:
-    return _shared_system_sender_matches(value, markers)
-
-
-def _extract_sender_designations(value: Any, depth: int = 0) -> list[str]:
-    """Extract sender/user names only; do not scan arbitrary raw text."""
-    return _shared_extract_sender_designations(value, depth)
 
 
 def _message_system_designations(message: Any) -> list[str]:
