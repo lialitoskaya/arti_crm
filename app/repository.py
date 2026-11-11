@@ -2425,71 +2425,7 @@ def _add_message_conn(
         if previous_latest and previous_latest["id"] is not None:
             previous_latest_message_id = int(previous_latest["id"])
 
-    existing = _find_existing_message_identity_conn(
-        conn,
-        chat_id=int(chat_id),
-        direction=direction,
-        text=text,
-        external_message_id=clean_external_id,
-        raw=raw_payload,
-        created_at=created_at,
-        is_crm_sent=incoming_is_crm_sent,
-        client_operation_id=operation_id,
-    )
-    if existing:
-        message_id = _merge_message_identity_conn(
-            conn,
-            existing=existing,
-            direction=direction,
-            author=author,
-            text=text,
-            external_message_id=clean_external_id,
-            raw=raw_payload,
-            created_at=created_at,
-            is_crm_sent=incoming_is_crm_sent,
-            crm_author_user_id=crm_author_user_id,
-            crm_author_label=crm_label,
-            client_operation_id=operation_id,
-        )
-        refresh_chat_last_message(conn, int(chat_id))
-        if matched_operation:
-            confirm_operation_from_echo_conn(
-                conn,
-                operation_id=int(matched_operation["id"]),
-                canonical_message_id=message_id,
-                provider_external_message_id=clean_external_id,
-            )
-        return message_id
-
-    raw_json = json.dumps(raw_payload, ensure_ascii=False)
-    try:
-        cur = conn.execute(
-            """
-            INSERT INTO messages (
-                chat_id, external_message_id, direction, author, text, created_at,
-                raw_json, is_crm_sent, crm_author_user_id, crm_author_label,
-                client_operation_id
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                int(chat_id),
-                clean_external_id,
-                direction,
-                crm_label or author,
-                text,
-                created_at,
-                raw_json,
-                int(incoming_is_crm_sent),
-                int(crm_author_user_id) if crm_author_user_id else None,
-                crm_label,
-                operation_id,
-            ),
-        )
-        message_id = int(cur.lastrowid)
-    except sqlite3.IntegrityError:
-        # A concurrent sync or repeated client operation won the unique identity
-        # race. Resolve the canonical row and enrich it instead of inserting again.
+    def merge_existing_message() -> int | None:
         existing = _find_existing_message_identity_conn(
             conn,
             chat_id=int(chat_id),
@@ -2502,8 +2438,8 @@ def _add_message_conn(
             client_operation_id=operation_id,
         )
         if not existing:
-            raise
-        message_id = _merge_message_identity_conn(
+            return None
+        return _merge_message_identity_conn(
             conn,
             existing=existing,
             direction=direction,
@@ -2518,6 +2454,42 @@ def _add_message_conn(
             client_operation_id=operation_id,
         )
 
+    message_id = merge_existing_message()
+    needs_insert = message_id is None
+    if needs_insert:
+        raw_json = json.dumps(raw_payload, ensure_ascii=False)
+        try:
+            cur = conn.execute(
+                """
+                INSERT INTO messages (
+                    chat_id, external_message_id, direction, author, text, created_at,
+                    raw_json, is_crm_sent, crm_author_user_id, crm_author_label,
+                    client_operation_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(chat_id),
+                    clean_external_id,
+                    direction,
+                    crm_label or author,
+                    text,
+                    created_at,
+                    raw_json,
+                    int(incoming_is_crm_sent),
+                    int(crm_author_user_id) if crm_author_user_id else None,
+                    crm_label,
+                    operation_id,
+                ),
+            )
+            message_id = int(cur.lastrowid)
+        except sqlite3.IntegrityError:
+            # A concurrent sync or repeated client operation won the unique identity
+            # race. Resolve the canonical row and enrich it instead of inserting again.
+            message_id = merge_existing_message()
+            if message_id is None:
+                raise
+
     refresh_chat_last_message(conn, int(chat_id))
     if matched_operation:
         confirm_operation_from_echo_conn(
@@ -2526,7 +2498,7 @@ def _add_message_conn(
             canonical_message_id=message_id,
             provider_external_message_id=clean_external_id,
         )
-    if direction == "inbound":
+    if needs_insert and direction == "inbound":
         _mark_chat_unread_for_active_users_conn(
             conn,
             chat_id=int(chat_id),
