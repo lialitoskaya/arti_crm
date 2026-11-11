@@ -71,6 +71,7 @@ from app.services.knowledge_images import (
     validate_knowledge_image_upload,
 )
 from app.task_types_router import create_task_types_router
+from app.connectors.base import UnifiedChat, UnifiedMessage
 from app.connectors.mock import MockConnector
 from app.connectors.ozon import OzonConnector
 from app.connectors.wildberries import WildberriesConnector
@@ -1523,6 +1524,57 @@ def _temporary_connector_overrides(connector: Any, overrides: dict[str, Any]):
 
 
 
+def _chat_from_connector(unified_chat: UnifiedChat) -> ChatCreate:
+    return ChatCreate(
+        marketplace=unified_chat.marketplace,  # type: ignore[arg-type]
+        external_chat_id=unified_chat.external_chat_id,
+        customer_name=unified_chat.customer_name,
+        customer_public_id=unified_chat.customer_public_id,
+        order_id=unified_chat.order_id,
+        status=unified_chat.status,  # type: ignore[arg-type]
+        metadata=unified_chat.metadata,
+    )
+
+
+def _store_synced_chat_history(
+    marketplace: str, chat_id: int, unified_chat: UnifiedChat,
+    existing_chat: dict[str, Any] | None, messages: list[UnifiedMessage],
+) -> tuple[int, bool]:
+    messages_to_store = _filter_ozon_chatbot_messages(messages) if marketplace == "ozon" else messages
+
+    # Если список чатов не содержит имени покупателя, пробуем взять его из истории.
+    if not _is_real_customer_name(unified_chat.customer_name):
+        fallback_name, fallback_public_id = _customer_info_from_messages(messages)
+        if fallback_name:
+            repo.update_chat_customer_info(chat_id, fallback_name, fallback_public_id)
+
+    previous_last_at = (existing_chat or {}).get("last_message_at")
+    stored_count = 0
+    for message in messages_to_store:
+        direction = message.direction
+        author = message.author
+        raw = message.raw
+        if marketplace == "wildberries":
+            direction, author, raw = _normalize_wb_synced_message_for_local_outbound(chat_id, message)
+        repo.add_message(
+            chat_id=chat_id,
+            direction=direction,
+            text=message.text,
+            author=author,
+            external_message_id=message.external_message_id,
+            raw=raw,
+            created_at=message.created_at,
+        )
+        stored_count += 1
+
+    latest_local = repo.get_latest_message_for_chat(chat_id)
+    latest_at = (latest_local or {}).get("created_at")
+    reopened = False
+    if (existing_chat or {}).get("status") == "closed" and latest_at and latest_at != previous_last_at:
+        reopened = repo.reopen_closed_chat_for_new_activity(chat_id, (latest_local or {}).get("direction"))
+    return stored_count, reopened
+
+
 async def _sync_ozon_fast_inbox_unlocked(*, background: bool = True) -> dict[str, Any]:
     """Fast Ozon inbox sync for new/recent chats.
 
@@ -1561,17 +1613,7 @@ async def _sync_ozon_fast_inbox_unlocked(*, background: bool = True) -> dict[str
     for unified_chat in unified_chats:
         existing_chat = repo.get_chat_by_external(unified_chat.marketplace, unified_chat.external_chat_id)
         should_fetch = _should_fetch_messages("ozon", existing_chat, unified_chat, background=background)
-        chat_id = repo.upsert_chat(
-            ChatCreate(
-                marketplace=unified_chat.marketplace,  # type: ignore[arg-type]
-                external_chat_id=unified_chat.external_chat_id,
-                customer_name=unified_chat.customer_name,
-                customer_public_id=unified_chat.customer_public_id,
-                order_id=unified_chat.order_id,
-                status=unified_chat.status,  # type: ignore[arg-type]
-                metadata=unified_chat.metadata,
-            )
-        )
+        chat_id = repo.upsert_chat(_chat_from_connector(unified_chat))
         synced.append(chat_id)
         if should_fetch:
             chat_refs.append((chat_id, unified_chat, existing_chat))
@@ -1604,31 +1646,11 @@ async def _sync_ozon_fast_inbox_unlocked(*, background: bool = True) -> dict[str
                 repo.delete_chats_by_ids([chat_id])
             continue
 
-        messages_to_store = _filter_ozon_chatbot_messages(messages)
-
-        if not _is_real_customer_name(unified_chat.customer_name):
-            fallback_name, fallback_public_id = _customer_info_from_messages(messages)
-            if fallback_name:
-                repo.update_chat_customer_info(chat_id, fallback_name, fallback_public_id)
-
-        previous_last_at = (existing_chat or {}).get("last_message_at")
-        for message in messages_to_store:
-            repo.add_message(
-                chat_id=chat_id,
-                direction=message.direction,
-                text=message.text,
-                author=message.author,
-                external_message_id=message.external_message_id,
-                raw=message.raw,
-                created_at=message.created_at,
-            )
-            messages_total += 1
-
-        latest_local = repo.get_latest_message_for_chat(chat_id)
-        latest_at = (latest_local or {}).get("created_at")
-        if (existing_chat or {}).get("status") == "closed" and latest_at and latest_at != previous_last_at:
-            if repo.reopen_closed_chat_for_new_activity(chat_id, (latest_local or {}).get("direction")):
-                reopened_count += 1
+        stored, reopened = _store_synced_chat_history(
+            "ozon", chat_id, unified_chat, existing_chat, messages,
+        )
+        messages_total += stored
+        reopened_count += int(bool(reopened))
 
     result = {
         "ok": not errors,
@@ -1733,17 +1755,7 @@ async def _sync_marketplace_unlocked(marketplace: str, *, background: bool = Fal
             else:
                 histories_skipped += 1
             continue
-        chat_id = repo.upsert_chat(
-            ChatCreate(
-                marketplace=unified_chat.marketplace,  # type: ignore[arg-type]
-                external_chat_id=unified_chat.external_chat_id,
-                customer_name=unified_chat.customer_name,
-                customer_public_id=unified_chat.customer_public_id,
-                order_id=unified_chat.order_id,
-                status=unified_chat.status,  # type: ignore[arg-type]
-                metadata=unified_chat.metadata,
-            )
-        )
+        chat_id = repo.upsert_chat(_chat_from_connector(unified_chat))
         synced.append(chat_id)
         if marketplace == "wildberries":
             try:
@@ -1813,15 +1825,7 @@ async def _sync_marketplace_unlocked(marketplace: str, *, background: bool = Fal
                 continue
             try:
                 chat_id = repo.materialize_yandex_chat_with_messages(
-                    ChatCreate(
-                        marketplace=unified_chat.marketplace,  # type: ignore[arg-type]
-                        external_chat_id=unified_chat.external_chat_id,
-                        customer_name=unified_chat.customer_name,
-                        customer_public_id=unified_chat.customer_public_id,
-                        order_id=unified_chat.order_id,
-                        status=unified_chat.status,  # type: ignore[arg-type]
-                        metadata=unified_chat.metadata,
-                    ),
+                    _chat_from_connector(unified_chat),
                     messages,
                 )
             except Exception as exc:
@@ -1846,37 +1850,11 @@ async def _sync_marketplace_unlocked(marketplace: str, *, background: bool = Fal
                 repo.delete_chats_by_ids([chat_id])
             continue
 
-        messages_to_store = _filter_ozon_chatbot_messages(messages) if marketplace == "ozon" else messages
-
-        # Если список чатов не содержит имени покупателя, пробуем взять его из истории.
-        if not _is_real_customer_name(unified_chat.customer_name):
-            fallback_name, fallback_public_id = _customer_info_from_messages(messages)
-            if fallback_name:
-                repo.update_chat_customer_info(chat_id, fallback_name, fallback_public_id)
-
-        previous_last_at = (existing_chat or {}).get("last_message_at")
-        for message in messages_to_store:
-            direction = message.direction
-            author = message.author
-            raw = message.raw
-            if marketplace == "wildberries":
-                direction, author, raw = _normalize_wb_synced_message_for_local_outbound(chat_id, message)
-            repo.add_message(
-                chat_id=chat_id,
-                direction=direction,
-                text=message.text,
-                author=author,
-                external_message_id=message.external_message_id,
-                raw=raw,
-                created_at=message.created_at,
-            )
-            messages_total += 1
-
-        latest_local = repo.get_latest_message_for_chat(chat_id)
-        latest_at = (latest_local or {}).get("created_at")
-        if (existing_chat or {}).get("status") == "closed" and latest_at and latest_at != previous_last_at:
-            if repo.reopen_closed_chat_for_new_activity(chat_id, (latest_local or {}).get("direction")):
-                reopened_count += 1
+        stored, reopened = _store_synced_chat_history(
+            marketplace, chat_id, unified_chat, existing_chat, messages,
+        )
+        messages_total += stored
+        reopened_count += int(bool(reopened))
 
     wb_lastmessage_direction_repairs = 0
     if marketplace == "wildberries":
