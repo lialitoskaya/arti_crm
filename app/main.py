@@ -2850,32 +2850,7 @@ async def debug_ozon() -> dict[str, Any]:
 
 def _local_ozon_chat_stats() -> dict[str, Any]:
     init_db()
-    with get_connection() as conn:
-        total = conn.execute("SELECT COUNT(*) AS c FROM chats WHERE marketplace='ozon'").fetchone()["c"]
-        minmax = conn.execute(
-            """
-            SELECT
-                MIN(last_message_at) AS min_last_message_at,
-                MAX(last_message_at) AS max_last_message_at,
-                MIN(created_at) AS min_created_at,
-                MAX(updated_at) AS max_updated_at
-            FROM chats
-            WHERE marketplace='ozon'
-            """
-        ).fetchone()
-        messages_count = conn.execute(
-            """
-            SELECT COUNT(*) AS c
-            FROM messages m
-            JOIN chats c ON c.id = m.chat_id
-            WHERE c.marketplace='ozon'
-            """
-        ).fetchone()["c"]
-    return {
-        "local_ozon_total_chats": total,
-        "local_ozon_messages_count": messages_count,
-        "local_range": dict(minmax) if minmax else {},
-    }
+    return repo.get_ozon_history_stats()
 
 
 @app.get("/api/debug/ozon/chats")
@@ -2885,40 +2860,9 @@ async def debug_ozon_chats() -> dict[str, Any]:
     if not connector:
         raise HTTPException(status_code=404, detail="Ozon connector not found")
     init_db()
-    with get_connection() as conn:
-        total = conn.execute("SELECT COUNT(*) AS c FROM chats WHERE marketplace='ozon'").fetchone()["c"]
-        minmax = conn.execute(
-            """
-            SELECT
-                MIN(last_message_at) AS min_last_message_at,
-                MAX(last_message_at) AS max_last_message_at,
-                MIN(created_at) AS min_created_at,
-                MAX(updated_at) AS max_updated_at
-            FROM chats
-            WHERE marketplace='ozon'
-            """
-        ).fetchone()
-        latest = [dict(row) for row in conn.execute(
-            """
-            SELECT
-                c.id,
-                c.external_chat_id,
-                c.customer_name,
-                c.status,
-                c.last_message_at,
-                c.last_message_preview,
-                (SELECT COUNT(*) FROM messages m WHERE m.chat_id=c.id) AS messages_count
-            FROM chats c
-            WHERE c.marketplace='ozon'
-            ORDER BY COALESCE(c.last_message_at, c.updated_at, c.created_at) DESC
-            LIMIT 30
-            """
-        ).fetchall()]
     return {
         "ok": True,
-        "local_ozon_total_chats": total,
-        "local_range": dict(minmax) if minmax else {},
-        "latest_local_chats": latest,
+        **repo.get_ozon_recent_chat_coverage(),
         "connector_settings": {
             "sync_max_chats": getattr(connector, "sync_max_chats", None),
             "sync_pages_per_variant": getattr(connector, "sync_pages_per_variant", None),

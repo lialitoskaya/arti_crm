@@ -2946,6 +2946,56 @@ def list_chats_page(
 
 
 
+def _ozon_chat_coverage(conn: sqlite3.Connection) -> dict[str, Any]:
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS total, MIN(last_message_at) AS min_last_message_at,
+               MAX(last_message_at) AS max_last_message_at, MIN(created_at) AS min_created_at,
+               MAX(updated_at) AS max_updated_at
+        FROM chats WHERE marketplace='ozon'
+        """
+    ).fetchone()
+    ranges = dict(row)
+    total = ranges.pop("total")
+    return {"local_ozon_total_chats": total, "local_range": ranges}
+
+
+def get_ozon_history_stats() -> dict[str, Any]:
+    with get_connection() as conn:
+        coverage = _ozon_chat_coverage(conn)
+        messages_count = conn.execute(
+            """
+            SELECT COUNT(*) AS c
+            FROM messages m
+            JOIN chats c ON c.id = m.chat_id
+            WHERE c.marketplace='ozon'
+            """
+        ).fetchone()["c"]
+    return {**coverage, "local_ozon_messages_count": messages_count}
+
+
+def get_ozon_recent_chat_coverage() -> dict[str, Any]:
+    with get_connection() as conn:
+        coverage = _ozon_chat_coverage(conn)
+        latest = [dict(row) for row in conn.execute(
+            """
+            SELECT
+                c.id,
+                c.external_chat_id,
+                c.customer_name,
+                c.status,
+                c.last_message_at,
+                c.last_message_preview,
+                (SELECT COUNT(*) FROM messages m WHERE m.chat_id=c.id) AS messages_count
+            FROM chats c
+            WHERE c.marketplace='ozon'
+            ORDER BY COALESCE(c.last_message_at, c.updated_at, c.created_at) DESC
+            LIMIT 30
+            """
+        ).fetchall()]
+    return {**coverage, "latest_local_chats": latest}
+
+
 def get_chat_by_external(marketplace: str, external_chat_id: str) -> dict[str, Any] | None:
     """Return a chat row by marketplace external id without loading full history."""
     with get_connection() as conn:
